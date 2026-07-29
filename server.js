@@ -1,24 +1,32 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const supabase = require('./config/supabase'); // ← ESTA LÍNEA ES CLAVE
+const supabase = require('./config/supabase'); // Asegúrate de que este archivo exista
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8080;
 
+// Middlewares
 app.use(cors());
 app.use(express.json());
 
+// Ruta de prueba
 app.get('/', (req, res) => {
   res.send('API de Academia Multi-tenant funcionando 🚀');
 });
 
-// TEMPORAL: endpoint de login para pruebas
+// ============================================================
+// ENDPOINT DE LOGIN (para el frontend)
+// ============================================================
 app.post('/api/login', async (req, res) => {
+  console.log('📩 Recibida petición de login');
+  console.log('📦 Body:', req.body);
+
   const { email, password } = req.body;
 
   // 1. Autenticar con Supabase
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
+    console.error('❌ Error de autenticación:', error);
     return res.status(401).json({ error: error.message });
   }
 
@@ -32,6 +40,7 @@ app.post('/api/login', async (req, res) => {
     .single();
 
   if (userError || !userData) {
+    console.error('❌ Usuario no encontrado en tabla usuarios:', userError);
     return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
   }
 
@@ -48,10 +57,15 @@ app.post('/api/login', async (req, res) => {
   });
 });
 
-// Importar rutas
+// ============================================================
+// RUTAS DE JUGADORES
+// ============================================================
 const jugadorRoutes = require('./routes/jugadores');
 app.use('/api/jugadores', jugadorRoutes);
 
-app.listen(port, '127.0.0.1', () => {
-  console.log(`Servidor escuchando en http://localhost:${port}`);
+// ============================================================
+// INICIAR SERVIDOR (escuchando en todas las interfaces)
+// ============================================================
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
 });
