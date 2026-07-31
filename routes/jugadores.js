@@ -37,20 +37,51 @@ router.post('/', authMiddleware, async (req, res) => {
       monto_matricula, abono_matricula, monto_mensualidad
     } = req.body;
 
-    // 1. Crear o actualizar el tutor
-    const { data: tutor, error: tutorError } = await supabase
+    // 1. Crear o actualizar el tutor (Permite varios alumnos por RUT)
+    let tutor;
+    
+    // Verificamos si el tutor ya está registrado en esta academia
+    const { data: existingTutor, error: findError } = await supabase
       .from('tutores')
-      .insert([{
-        academia_id,
-        nombre_completo: tutorData.nombre_completo,
-        rut: tutorData.rut,
-        telefono: tutorData.telefono,
-        email: tutorData.email
-      }])
-      .select()
-      .single();
+      .select('*')
+      .eq('rut', tutorData.rut)
+      .eq('academia_id', academia_id)
+      .maybeSingle();
 
-    if (tutorError) throw tutorError;
+    if (findError) throw findError;
+
+    if (existingTutor) {
+      // Si el tutor existe (ej. está matriculando a un segundo hijo), actualizamos sus datos de contacto
+      const { data: updatedTutor, error: updateError } = await supabase
+        .from('tutores')
+        .update({
+          nombre_completo: tutorData.nombre_completo,
+          telefono: tutorData.telefono,
+          email: tutorData.email
+        })
+        .eq('id', existingTutor.id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+      tutor = updatedTutor;
+    } else {
+      // Si no existe, lo insertamos como uno nuevo
+      const { data: newTutor, error: insertError } = await supabase
+        .from('tutores')
+        .insert([{
+          academia_id,
+          nombre_completo: tutorData.nombre_completo,
+          rut: tutorData.rut,
+          telefono: tutorData.telefono,
+          email: tutorData.email
+        }])
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+      tutor = newTutor;
+    }
 
     // 2. Subir foto a Supabase Storage
     let foto_url = null;
@@ -85,7 +116,7 @@ router.post('/', authMiddleware, async (req, res) => {
       categoria = categorias[categorias.length - 1].nombre;
     }
 
-    // 4. Crear jugador
+    // 4. Crear jugador (Usamos el tutor.id reciclado o nuevo)
     const estado_matricula = (abono_matricula >= monto_matricula) ? 'Pagada' : 'Pendiente';
     const { data: jugador, error: jugError } = await supabase
       .from('jugadores')
