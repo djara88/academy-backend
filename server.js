@@ -55,11 +55,15 @@ const jugadorRoutes = require('./routes/jugadores');
 const tutorRoutes = require('./routes/tutores');
 const evaluacionRoutes = require('./routes/evaluaciones');
 const fichaMedicaRoutes = require('./routes/ficha_medica');
+const torneoRoutes = require('./routes/torneos');
+const partidoRoutes = require('./routes/partidos');
 
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', evaluacionRoutes);
 app.use('/api/ficha-medica', fichaMedicaRoutes);
+app.use('/api/torneos', torneoRoutes);
+app.use('/api/partidos', partidoRoutes);
 
 // ============================
 // PUERTO
