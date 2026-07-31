@@ -29,10 +29,37 @@ app.post('/api/login', async (req, res) => {
     .from('usuarios')
     .select('*')
     .eq('id', data.user.id)
-    .single();
+    .maybeSingle();
 
   if (userError || !userData) {
-    return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
+    // Si no existe en public.usuarios, lo creamos automáticamente con rol por defecto
+    console.warn('⚠️ Usuario no encontrado en public.usuarios. Creando registro automático...');
+    const { data: newUser, error: insertError } = await supabase
+      .from('usuarios')
+      .insert([{
+        id: data.user.id,
+        academia_id: '11111111-1111-1111-1111-111111111111',
+        nombre_completo: data.user.email?.split('@')[0] || 'Usuario',
+        rol: 'profesor' // por defecto, pero puedes cambiar a superadmin si es el admin
+      }])
+      .select()
+      .single();
+
+    if (insertError || !newUser) {
+      console.error('❌ Error al crear usuario automáticamente:', insertError);
+      return res.status(403).json({ error: 'Usuario no registrado y no se pudo crear' });
+    }
+
+    return res.json({
+      token,
+      user: {
+        id: newUser.id,
+        email: data.user.email,
+        nombre_completo: newUser.nombre_completo,
+        rol: newUser.rol,
+        academia_id: newUser.academia_id,
+      }
+    });
   }
 
   res.json({
