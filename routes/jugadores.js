@@ -3,7 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 
-// --- GET: Listar jugadores ---
+// GET: Listar jugadores
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -23,7 +23,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// --- POST: Crear un nuevo jugador (MATRÍCULA) ---
+// POST: Crear un nuevo jugador (MATRÍCULA)
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -52,7 +52,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (tutorError) throw tutorError;
 
-    // 2. Subir foto a Supabase Storage (si se proporcionó)
+    // 2. Subir foto a Supabase Storage
     let foto_url = null;
     if (foto_base64) {
       const base64Data = foto_base64.split(';base64,').pop();
@@ -60,20 +60,18 @@ router.post('/', authMiddleware, async (req, res) => {
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('fotos_alumnos')
         .upload(fileName, Buffer.from(base64Data, 'base64'), { contentType: 'image/jpeg' });
-
       if (uploadError) throw uploadError;
       const { data: publicUrl } = supabase.storage.from('fotos_alumnos').getPublicUrl(fileName);
       foto_url = publicUrl.publicUrl;
     }
 
-    // 3. Calcular categoría automáticamente
+    // 3. Calcular categoría
     const edad = new Date().getFullYear() - new Date(fecha_nacimiento).getFullYear();
     const { data: categorias, error: catError } = await supabase
       .from('config_categorias')
       .select('nombre, edad_maxima')
       .eq('academia_id', academia_id)
       .order('edad_maxima', { ascending: true });
-
     if (catError) throw catError;
 
     let categoria = 'Sin Categoría';
@@ -87,7 +85,7 @@ router.post('/', authMiddleware, async (req, res) => {
       categoria = categorias[categorias.length - 1].nombre;
     }
 
-    // 4. Crear el jugador
+    // 4. Crear jugador
     const estado_matricula = (abono_matricula >= monto_matricula) ? 'Pagada' : 'Pendiente';
     const { data: jugador, error: jugError } = await supabase
       .from('jugadores')
@@ -117,7 +115,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (jugError) throw jugError;
 
-    // 5. Guardar evaluación inicial
+    // 5. Evaluación
     if (evaluacion && Object.keys(evaluacion).length > 0) {
       const { error: evalError } = await supabase
         .from('evaluaciones')
@@ -130,7 +128,7 @@ router.post('/', authMiddleware, async (req, res) => {
       if (evalError) throw evalError;
     }
 
-    // 6. Guardar ficha médica
+    // 6. Ficha médica
     if (ficha_medica) {
       const { error: medError } = await supabase
         .from('ficha_medica')
@@ -147,7 +145,7 @@ router.post('/', authMiddleware, async (req, res) => {
       if (medError) throw medError;
     }
 
-    // 7. Registrar el pago de matrícula en finanzas (si abono > 0)
+    // 7. Finanzas
     if (abono_matricula > 0) {
       const { error: finError } = await supabase
         .from('finanzas')
