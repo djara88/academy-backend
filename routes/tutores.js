@@ -9,10 +9,10 @@ router.post('/', authMiddleware, async (req, res) => {
     const { academia_id } = req.user;
     const { nombre_completo, rut, telefono, email } = req.body;
 
-    // Verificar si el tutor ya existe por RUT en esta academia
+    // Verificar si el tutor ya existe en ESTA academia por RUT
     const { data: existing, error: findError } = await supabase
       .from('tutores')
-      .select('*')
+      .select('id')
       .eq('rut', rut)
       .eq('academia_id', academia_id)
       .maybeSingle();
@@ -21,30 +21,20 @@ router.post('/', authMiddleware, async (req, res) => {
 
     let tutor;
     if (existing) {
-      // Actualizar datos del tutor existente
+      // Actualizar datos del tutor existente (mismo RUT en la misma academia)
       const { data, error } = await supabase
         .from('tutores')
-        .update({ 
-          nombre_completo, 
-          telefono, 
-          email 
-        })
+        .update({ nombre_completo, telefono, email })
         .eq('id', existing.id)
         .select()
         .single();
       if (error) throw error;
       tutor = data;
     } else {
-      // Insertar nuevo tutor
+      // Insertar nuevo tutor (RUT nuevo en esta academia)
       const { data, error } = await supabase
         .from('tutores')
-        .insert([{ 
-          academia_id, 
-          nombre_completo, 
-          rut, 
-          telefono, 
-          email 
-        }])
+        .insert([{ academia_id, nombre_completo, rut, telefono, email }])
         .select()
         .single();
       if (error) throw error;
