@@ -5,18 +5,14 @@ const supabase = require('./config/supabase');
 
 const app = express();
 
-// Middlewares
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Ruta de prueba
 app.get('/', (req, res) => {
   res.send('API de Academia Multi-tenant funcionando 🚀');
 });
 
-// ============================
-// LOGIN
-// ============================
+// Login con creación automática de usuario en public.usuarios si no existe
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -32,22 +28,19 @@ app.post('/api/login', async (req, res) => {
     .maybeSingle();
 
   if (userError || !userData) {
-    // Si no existe en public.usuarios, lo creamos automáticamente con rol por defecto
-    console.warn('⚠️ Usuario no encontrado en public.usuarios. Creando registro automático...');
     const { data: newUser, error: insertError } = await supabase
       .from('usuarios')
       .insert([{
         id: data.user.id,
         academia_id: '11111111-1111-1111-1111-111111111111',
         nombre_completo: data.user.email?.split('@')[0] || 'Usuario',
-        rol: 'profesor' // por defecto, pero puedes cambiar a superadmin si es el admin
+        rol: 'superadmin'
       }])
       .select()
       .single();
 
     if (insertError || !newUser) {
-      console.error('❌ Error al crear usuario automáticamente:', insertError);
-      return res.status(403).json({ error: 'Usuario no registrado y no se pudo crear' });
+      return res.status(403).json({ error: 'Error al crear usuario' });
     }
 
     return res.json({
@@ -74,9 +67,7 @@ app.post('/api/login', async (req, res) => {
   });
 });
 
-// ============================
-// RUTAS
-// ============================
+// Rutas
 const authMiddleware = require('./middleware/auth');
 const jugadorRoutes = require('./routes/jugadores');
 const tutorRoutes = require('./routes/tutores');
@@ -92,9 +83,6 @@ app.use('/api/ficha-medica', fichaMedicaRoutes);
 app.use('/api/torneos', torneoRoutes);
 app.use('/api/partidos', partidoRoutes);
 
-// ============================
-// PUERTO
-// ============================
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
