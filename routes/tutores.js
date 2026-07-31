@@ -3,13 +3,12 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 
-// Crear un nuevo tutor (o actualizar si ya existe por RUT en la misma academia)
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { nombre_completo, rut, telefono, email } = req.body;
 
-    // Verificar si el tutor ya existe en ESTA academia por RUT
+    // Buscar por academia_id + rut (índice único)
     const { data: existing, error: findError } = await supabase
       .from('tutores')
       .select('id')
@@ -21,7 +20,6 @@ router.post('/', authMiddleware, async (req, res) => {
 
     let tutor;
     if (existing) {
-      // Actualizar datos del tutor existente (mismo RUT en la misma academia)
       const { data, error } = await supabase
         .from('tutores')
         .update({ nombre_completo, telefono, email })
@@ -31,7 +29,6 @@ router.post('/', authMiddleware, async (req, res) => {
       if (error) throw error;
       tutor = data;
     } else {
-      // Insertar nuevo tutor (RUT nuevo en esta academia)
       const { data, error } = await supabase
         .from('tutores')
         .insert([{ academia_id, nombre_completo, rut, telefono, email }])
