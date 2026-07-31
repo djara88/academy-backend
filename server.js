@@ -3,21 +3,20 @@ const express = require('express');
 const cors = require('cors');
 const supabase = require('./config/supabase');
 
-// --- Crear la aplicación Express ---
 const app = express();
 
-// --- Middlewares ---
+// Middlewares
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Para fotos en base64
+app.use(express.json({ limit: '10mb' }));
 
-// --- Ruta de prueba ---
+// Ruta de prueba
 app.get('/', (req, res) => {
   res.send('API de Academia Multi-tenant funcionando 🚀');
 });
 
-// ============================================================
-// ENDPOINT DE LOGIN
-// ============================================================
+// ============================
+// LOGIN
+// ============================
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -48,9 +47,9 @@ app.post('/api/login', async (req, res) => {
   });
 });
 
-// ============================================================
-// RUTAS (IMPORTAR Y USAR)
-// ============================================================
+// ============================
+// RUTAS
+// ============================
 const authMiddleware = require('./middleware/auth');
 const jugadorRoutes = require('./routes/jugadores');
 const tutorRoutes = require('./routes/tutores');
@@ -62,9 +61,9 @@ app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', evaluacionRoutes);
 app.use('/api/ficha-medica', fichaMedicaRoutes);
 
-// ============================================================
-// PUERTO Y BINDING (para Render)
-// ============================================================
+// ============================
+// PUERTO
+// ============================
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
