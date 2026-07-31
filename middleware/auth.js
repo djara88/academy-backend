@@ -3,13 +3,10 @@ const supabase = require('../config/supabase');
 const authMiddleware = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ error: 'No autorizado' });
-    }
+    if (!token) return res.status(401).json({ error: 'No autorizado' });
 
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) {
-      console.error('❌ Error al obtener usuario desde token:', error);
       return res.status(401).json({ error: 'Token inválido' });
     }
 
@@ -20,7 +17,6 @@ const authMiddleware = async (req, res, next) => {
       .maybeSingle();
 
     if (userError || !usuario) {
-      console.error('❌ Usuario no encontrado en public.usuarios:', user.id);
       return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
     }
 
