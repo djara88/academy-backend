@@ -7,7 +7,7 @@ router.get('/', async (req, res) => {
   const { data, error } = await supabase
     .from('academias')
     .select('*')
-    .order('fecha_creacion', { ascending: false });
+    .order('created_at', { ascending: false }); // 🔥 CORREGIDO A 'created_at'
 
   if (error) {
     console.error('Error al obtener academias:', error);
