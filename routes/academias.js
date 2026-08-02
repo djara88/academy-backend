@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
+const multer = require('multer');
+
+// Configuración de Multer para guardar el archivo temporalmente en memoria
+const upload = multer({ storage: multer.memoryStorage() });
 
 // 1. OBTENER TODAS LAS ACADEMIAS
 router.get('/', async (req, res) => {
@@ -17,11 +21,11 @@ router.get('/', async (req, res) => {
   res.json(data || []);
 });
 
-// 2. CREAR NUEVA ACADEMIA COMPLETA Y ENVIAR CORREO
-router.post('/', async (req, res) => {
+// 2. CREAR NUEVA ACADEMIA (CON SUBIDA DE LOGO) Y ENVIAR CORREO
+// Usamos upload.single('logo') para interceptar el archivo que viene desde el Frontend
+router.post('/', upload.single('logo'), async (req, res) => {
   const { 
     nombre, 
-    logo, 
     direccion, 
     telefono, 
     correo_academia, 
@@ -31,12 +35,38 @@ router.post('/', async (req, res) => {
   } = req.body;
 
   try {
-    // A) Guardar en Supabase PostgreSQL
+    let logoUrl = null;
+
+    // A) Si el usuario subió un archivo, lo subimos al Storage de Supabase
+    if (req.file) {
+      // Limpiamos el nombre del archivo para evitar errores en URLs (quitamos espacios)
+      const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('logos-escuelas') // Tu bucket
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+        });
+
+      if (uploadError) {
+        console.error('Error de Storage:', uploadError);
+        throw new Error('No se pudo subir el logo al servidor.');
+      }
+
+      // Obtenemos la URL pública del archivo recién subido
+      const { data: publicUrlData } = supabase.storage
+        .from('logos-escuelas')
+        .getPublicUrl(fileName);
+
+      logoUrl = publicUrlData.publicUrl;
+    }
+
+    // B) Guardar en Supabase PostgreSQL (ahora con la URL real del bucket)
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
       .insert([{ 
         nombre, 
-        logo,
+        logo: logoUrl, // Se guarda la URL de Supabase Storage o null si no subió logo
         direccion,
         telefono,
         correo_academia,
@@ -51,7 +81,7 @@ router.post('/', async (req, res) => {
 
     if (dbError) throw dbError;
 
-    // B) Disparar correo de bienvenida con Brevo
+    // C) Disparar correo de bienvenida con Brevo
     const brevoApiKey = process.env.BREVO_API_KEY;
     
     if (brevoApiKey) {
