@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const multer = require('multer');
 
+// Configuración de Multer para guardar archivos temporalmente en memoria
 const upload = multer({ storage: multer.memoryStorage() });
 
 // 1. OBTENER TODAS LAS ACADEMIAS
@@ -20,7 +21,7 @@ router.get('/', async (req, res) => {
   res.json(data || []);
 });
 
-// 2. CREAR NUEVA ACADEMIA
+// 2. CREAR NUEVA ACADEMIA, CREAR USUARIO DIRECTOR Y ENVIAR CORREO CON BREVO
 router.post('/', upload.single('logo'), async (req, res) => {
   const { 
     nombre, direccion, telefono, correo_academia, 
@@ -30,6 +31,7 @@ router.post('/', upload.single('logo'), async (req, res) => {
   try {
     let logoUrl = null;
 
+    // A) Subir logo al bucket Storage si existe
     if (req.file) {
       const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
       const { error: uploadError } = await supabase.storage
@@ -38,27 +40,37 @@ router.post('/', upload.single('logo'), async (req, res) => {
 
       if (uploadError) throw new Error('No se pudo subir el logo al servidor.');
 
-      const { data: publicUrlData } = supabase.storage.from('logos-escuelas').getPublicUrl(fileName);
+      const { data: publicUrlData } = supabase.storage
+        .from('logos-escuelas')
+        .getPublicUrl(fileName);
+
       logoUrl = publicUrlData.publicUrl;
     }
 
+    // B) Guardar academia en la base de datos
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
       .insert([{ 
         nombre, logo: logoUrl, direccion, telefono, correo_academia,
         nombre_director, director_email, plan, estado: 'Activa', jugadores_count: 0
       }])
-      .select().single();
+      .select()
+      .single();
 
     if (dbError) throw dbError;
 
+    // C) Generar clave temporal y crear usuario en Supabase Auth
     const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!"; 
+
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: director_email,
       password: tempPassword,
     });
 
-    if (!authError && authData?.user) {
+    if (authError) {
+      console.error("❌ Error creando Auth del director:", authError);
+    } else if (authData?.user) {
+      // Vincular al director con su academia en la tabla usuarios
       await supabase.from('usuarios').insert([{
         id: authData.user.id,
         academia_id: nuevaAcademia.id,
@@ -67,27 +79,60 @@ router.post('/', upload.single('logo'), async (req, res) => {
       }]);
     }
 
+    // D) Enviar correo por Brevo usando BREVO_SENDER_EMAIL
     const brevoApiKey = process.env.BREVO_API_KEY;
-    if (brevoApiKey) {
-      await fetch('https://api.brevo.com/v3/smtp/email', {
-        method: 'POST',
-        headers: { 'accept': 'application/json', 'api-key': brevoApiKey, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sender: { name: "AcademiaPro", email: "no-reply@academiapro.com" },
-          to: [{ email: director_email }],
-          subject: "¡Bienvenido a AcademiaPro! Tus credenciales de acceso",
-          htmlContent: `
-            <h2>¡Hola ${nombre_director}!</h2>
-            <p>Tu academia <strong>${nombre}</strong> ha sido registrada.</p>
-            <p><strong>Usuario:</strong> ${director_email}<br/><strong>Contraseña:</strong> ${tempPassword}</p>
-          `
-        })
-      });
+    const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
+
+    if (brevoApiKey && brevoSenderEmail) {
+      try {
+        const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'api-key': brevoApiKey,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender: { name: "AcademiaPro", email: brevoSenderEmail },
+            to: [{ email: director_email }],
+            subject: "¡Bienvenido a AcademiaPro! Tus credenciales de acceso",
+            htmlContent: `
+              <div style="font-family: sans-serif; color: #333;">
+                <h2>¡Hola ${nombre_director}! Bienvenido a AcademiaPro</h2>
+                <p>Tu academia <strong>${nombre}</strong> ha sido registrada exitosamente con el plan <strong>${plan}</strong>.</p>
+                
+                <div style="background-color: #f4f4f4; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                  <h3 style="margin-top:0;">Tus credenciales de acceso:</h3>
+                  <p><strong>Usuario:</strong> ${director_email}</p>
+                  <p><strong>Contraseña temporal:</strong> ${tempPassword}</p>
+                </div>
+
+                <p>Te recomendamos iniciar sesión y cambiar esta contraseña lo antes posible por motivos de seguridad.</p>
+                <br/>
+                <p>Saludos,<br/>El equipo de AcademiaPro</p>
+              </div>
+            `
+          })
+        });
+
+        if (!brevoResponse.ok) {
+          const errorData = await brevoResponse.json();
+          console.error(`❌ Brevo rechazó el correo:`, errorData);
+        } else {
+          console.log(`✅ Correo y clave enviados exitosamente a ${director_email}`);
+        }
+      } catch (fetchError) {
+        console.error(`❌ Error de conexión con Brevo:`, fetchError);
+      }
+    } else {
+      console.warn("⚠️ Falta BREVO_API_KEY o BREVO_SENDER_EMAIL en las variables de entorno. No se envió el correo.");
     }
 
     res.status(201).json(nuevaAcademia);
+
   } catch (error) {
-    res.status(500).json({ error: error.message || 'Error interno' });
+    console.error('❌ Error al crear academia:', error);
+    res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
 
@@ -115,11 +160,13 @@ router.put('/:id', upload.single('logo'), async (req, res) => {
       .from('academias')
       .update(updateData)
       .eq('id', id)
-      .select().single();
+      .select()
+      .single();
 
     if (error) throw error;
     res.json(data);
   } catch (error) {
+    console.error('❌ Error al actualizar academia:', error);
     res.status(500).json({ error: error.message || 'Error al actualizar academia' });
   }
 });
@@ -128,12 +175,11 @@ router.put('/:id', upload.single('logo'), async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    // Al borrar la academia, debes asegurarte en Supabase de tener "ON DELETE CASCADE" 
-    // en tus otras tablas para que borre a los usuarios y jugadores asociados.
     const { error } = await supabase.from('academias').delete().eq('id', id);
     if (error) throw error;
     res.json({ message: 'Academia eliminada exitosamente' });
   } catch (error) {
+    console.error('❌ Error al eliminar academia:', error);
     res.status(500).json({ error: error.message || 'Error al eliminar academia' });
   }
 });
@@ -143,19 +189,22 @@ router.post('/:id/reset-password', async (req, res) => {
   const { id } = req.params;
   
   try {
-    // 1. Obtener la academia para saber el email del director
-    const { data: academia, error: acaError } = await supabase.from('academias').select('director_email, nombre, nombre_director').eq('id', id).single();
+    const { data: academia, error: acaError } = await supabase
+      .from('academias')
+      .select('director_email, nombre, nombre_director')
+      .eq('id', id)
+      .single();
+
     if (acaError || !academia) throw new Error('Academia no encontrada');
 
-    // 2. Generar nueva clave
     const newPassword = Math.random().toString(36).substring(2, 10) + "X9#"; 
 
-    // 3. Usar Supabase Admin API para forzar el cambio de clave (requiere SERVICE_ROLE key en el backend idealmente, o signUp trick si está permitido)
-    // Para simplificar y no depender del service_role, usamos el método de recuperar clave si está configurado, 
-    // pero como somos SuperAdmin, actualizamos la clave directamente llamando al auth.admin (Asegúrate de que tu supabase.js use la SERVICE_ROLE_KEY)
-    
-    // NOTA: Para que esto funcione 100%, la variable SUPABASE_KEY de tu Render debe ser la "service_role secret", no la "anon public".
-    const { data: userData, error: userError } = await supabase.from('usuarios').select('id').eq('academia_id', id).eq('rol', 'director').single();
+    const { data: userData, error: userError } = await supabase
+      .from('usuarios')
+      .select('id')
+      .eq('academia_id', id)
+      .eq('rol', 'director')
+      .single();
     
     if (userData && userData.id) {
       const { error: updateError } = await supabase.auth.admin.updateUserById(userData.id, { password: newPassword });
@@ -164,14 +213,15 @@ router.post('/:id/reset-password', async (req, res) => {
       throw new Error('No se encontró el usuario director asociado a esta academia.');
     }
 
-    // 4. Enviar correo por Brevo
     const brevoApiKey = process.env.BREVO_API_KEY;
-    if (brevoApiKey) {
-      await fetch('https://api.brevo.com/v3/smtp/email', {
+    const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
+
+    if (brevoApiKey && brevoSenderEmail) {
+      const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: { 'accept': 'application/json', 'api-key': brevoApiKey, 'content-type': 'application/json' },
         body: JSON.stringify({
-          sender: { name: "Soporte AcademiaPro", email: "no-reply@academiapro.com" },
+          sender: { name: "Soporte AcademiaPro", email: brevoSenderEmail },
           to: [{ email: academia.director_email }],
           subject: "Restablecimiento de Contraseña - AcademiaPro",
           htmlContent: `
@@ -182,10 +232,16 @@ router.post('/:id/reset-password', async (req, res) => {
           `
         })
       });
+
+      if (!brevoResponse.ok) {
+        const errorData = await brevoResponse.json();
+        console.error(`❌ Brevo rechazó el correo de restablecimiento:`, errorData);
+      }
     }
 
     res.json({ message: 'Contraseña restablecida y enviada por correo' });
   } catch (error) {
+    console.error('❌ Error al restablecer contraseña:', error);
     res.status(500).json({ error: error.message || 'Error al restablecer contraseña' });
   }
 });
