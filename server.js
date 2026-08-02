@@ -81,12 +81,18 @@ const fichaMedicaRoutes = require('./routes/ficha_medica');
 const torneoRoutes = require('./routes/torneos');
 const partidoRoutes = require('./routes/partidos');
 
+// 👇 Ruta de Academias (Administración SaaS) agregada
+const academiaRoutes = require('./routes/academias');
+
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', evaluacionRoutes);
 app.use('/api/ficha-medica', fichaMedicaRoutes);
 app.use('/api/torneos', torneoRoutes);
 app.use('/api/partidos', partidoRoutes);
+
+// 👇 Endpoints para el Panel Maestro
+app.use('/api/academias', academiaRoutes);
 
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
