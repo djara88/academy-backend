@@ -2,12 +2,12 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 
-// 1. OBTENER TODAS LAS ACADEMIAS (Para llenar la tabla del SaaSAdmin)
+// 1. OBTENER TODAS LAS ACADEMIAS
 router.get('/', async (req, res) => {
   const { data, error } = await supabase
     .from('academias')
     .select('*')
-    .order('created_at', { ascending: false }); // 🔥 CORREGIDO A 'created_at'
+    .order('created_at', { ascending: false });
 
   if (error) {
     console.error('Error al obtener academias:', error);
@@ -17,9 +17,18 @@ router.get('/', async (req, res) => {
   res.json(data || []);
 });
 
-// 2. CREAR NUEVA ACADEMIA Y ENVIAR CORREO CON BREVO
+// 2. CREAR NUEVA ACADEMIA COMPLETA Y ENVIAR CORREO
 router.post('/', async (req, res) => {
-  const { nombre, director_email, plan } = req.body;
+  const { 
+    nombre, 
+    logo, 
+    direccion, 
+    telefono, 
+    correo_academia, 
+    nombre_director, 
+    director_email, 
+    plan 
+  } = req.body;
 
   try {
     // A) Guardar en Supabase PostgreSQL
@@ -27,6 +36,11 @@ router.post('/', async (req, res) => {
       .from('academias')
       .insert([{ 
         nombre, 
+        logo,
+        direccion,
+        telefono,
+        correo_academia,
+        nombre_director,
         director_email, 
         plan, 
         estado: 'Activa',
@@ -49,11 +63,11 @@ router.post('/', async (req, res) => {
           'content-type': 'application/json'
         },
         body: JSON.stringify({
-          sender: { name: "AcademiaPro", email: "no-reply@academiapro.com" }, // Cambia por tu remitente oficial de Brevo
+          sender: { name: "AcademiaPro", email: "no-reply@academiapro.com" },
           to: [{ email: director_email }],
           subject: "¡Bienvenido a AcademiaPro! Tu plataforma está lista",
           htmlContent: `
-            <h2>¡Hola! Bienvenido a AcademiaPro</h2>
+            <h2>¡Hola ${nombre_director}! Bienvenido a AcademiaPro</h2>
             <p>Tu academia <strong>${nombre}</strong> ha sido registrada exitosamente con el plan <strong>${plan}</strong>.</p>
             <p>Ya puedes acceder a la plataforma para comenzar a gestionar tus jugadores y torneos.</p>
             <br/>
@@ -63,10 +77,9 @@ router.post('/', async (req, res) => {
       });
       console.log(`✅ Correo enviado a ${director_email} mediante Brevo.`);
     } else {
-      console.warn("⚠️ No se encontró BREVO_API_KEY en el entorno. La academia se guardó, pero no se envió el correo.");
+      console.warn("⚠️ No se encontró BREVO_API_KEY en el entorno. La academia se guardó sin enviar correo.");
     }
 
-    // Responder al Frontend que todo fue un éxito
     res.status(201).json(nuevaAcademia);
 
   } catch (error) {
