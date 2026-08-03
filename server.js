@@ -61,30 +61,47 @@ app.post('/api/login', async (req, res) => {
       nombre_completo: userData.nombre_completo,
       rol: userData.rol,
       academia_id: userData.academia_id,
-      requiere_cambio_password: userData.requiere_cambio_password // 🔥 AHORA EL FRONTEND SABE SI DEBE REDIRIGIR
+      requiere_cambio_password: userData.requiere_cambio_password // Frontend lee esto para redirigir
     }
   });
 });
 
 // ============================
-// 🔥 NUEVA RUTA: CAMBIAR CLAVE OBLIGATORIA
+// 🔥 CAMBIAR CLAVE OBLIGATORIA (BLINDADO)
 // ============================
 app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
   try {
     const { newPassword } = req.body;
-    const userId = req.user.id || req.user.sub;
+    
+    // Extraemos el ID cubriendo todos los formatos posibles de JWT
+    const userId = req.user?.id || req.user?.sub || req.user?.userId;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'No se pudo identificar el ID del usuario en el token.' });
+    }
 
     // 1. Cambiar contraseña en Auth
     const { error: authError } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
     if (authError) throw authError;
 
-    // 2. Quitar la marca en la base de datos
-    const { error: dbError } = await supabase.from('usuarios').update({ requiere_cambio_password: false }).eq('id', userId);
+    // 2. Quitar la marca en la base de datos (Fuerza la confirmación con .select)
+    const { data, error: dbError } = await supabase
+      .from('usuarios')
+      .update({ requiere_cambio_password: false })
+      .eq('id', userId)
+      .select();
+
     if (dbError) throw dbError;
+
+    if (!data || data.length === 0) {
+      console.warn(`⚠️ OJO: Se cambió la clave en Auth, pero no se encontró la fila en la tabla 'usuarios' para el ID: ${userId}`);
+    } else {
+      console.log(`✅ Marca de cambio de contraseña removida con éxito para el usuario: ${userId}`);
+    }
 
     res.json({ success: true });
   } catch (error) {
-    console.error('Error al actualizar contraseña:', error);
+    console.error('❌ Error al actualizar contraseña:', error);
     res.status(500).json({ error: 'Error interno al actualizar la contraseña' });
   }
 });
