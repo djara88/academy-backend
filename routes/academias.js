@@ -34,17 +34,17 @@ router.post('/', upload.single('logo'), async (req, res) => {
     // A) Generar clave temporal
     const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!"; 
 
-    // B) CREAR USUARIO EN SUPABASE AUTH COMO ADMIN (Valida si ya existe antes de continuar)
+    // B) CREAR USUARIO EN SUPABASE AUTH COMO ADMIN
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email: director_email,
       password: tempPassword,
-      email_confirm: true // Confirmado automáticamente
+      email_confirm: true
     });
 
     if (authError) {
       if (authError.code === 'user_already_exists' || authError.status === 422) {
         return res.status(400).json({ 
-          error: `El correo "${director_email}" ya está registrado en el sistema. Utiliza un correo distinto o elimínalo desde el panel de Supabase.` 
+          error: `El correo "${director_email}" ya está registrado en Auth. Elimínalo en Supabase para volver a usarlo.` 
         });
       }
       throw authError;
@@ -91,6 +91,8 @@ router.post('/', upload.single('logo'), async (req, res) => {
 
     if (userTableError) {
       console.error("⚠️ Error vinculando usuario en tabla 'usuarios':", userTableError);
+    } else {
+      console.log(`✅ Usuario director vinculado exitosamente en tabla 'usuarios'.`);
     }
 
     // F) Enviar correo por Brevo usando BREVO_SENDER_EMAIL
@@ -133,7 +135,7 @@ router.post('/', upload.single('logo'), async (req, res) => {
           const errorData = await brevoResponse.json();
           console.error(`❌ Brevo rechazó el correo:`, errorData);
         } else {
-          console.log(`✅ Correo y clave enviados exitosamente a ${director_email}`);
+          console.log(`✅ Correo enviado a la cola de entrega de Brevo para: ${director_email}`);
         }
       } catch (fetchError) {
         console.error(`❌ Error de conexión con Brevo:`, fetchError);
@@ -147,7 +149,7 @@ router.post('/', upload.single('logo'), async (req, res) => {
   } catch (error) {
     console.error('❌ Error al crear academia:', error);
 
-    // Si falló la creación de la academia pero alcanzamos a crear el usuario en Auth, lo limpiamos
+    // Rollback: Si falló la creación de la academia pero se alcanzó a crear el usuario en Auth, lo eliminamos
     if (createdAuthUser) {
       await supabase.auth.admin.deleteUser(createdAuthUser.id);
     }
@@ -223,7 +225,6 @@ router.post('/:id/reset-password', async (req, res) => {
       .from('usuarios')
       .select('id')
       .eq('academia_id', id)
-      .eq('rol', 'director')
       .single();
     
     if (userData && userData.id) {
