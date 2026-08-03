@@ -81,12 +81,13 @@ router.post('/', upload.single('logo'), async (req, res) => {
 
     if (dbError) throw dbError;
 
-    // E) Vincular al director con su academia en la tabla 'usuarios'
+    // E) Vincular al director con su academia en la tabla 'usuarios' Y ACTIVAR MARCA
     const { error: userTableError } = await supabase.from('usuarios').insert([{
       id: createdAuthUser.id,
       academia_id: nuevaAcademia.id,
       nombre_completo: nombre_director,
-      rol: 'director'
+      rol: 'director',
+      requiere_cambio_password: true // 🔥 AQUI FORZAMOS EL CAMBIO DE CLAVE
     }]);
 
     if (userTableError) {
@@ -148,12 +149,9 @@ router.post('/', upload.single('logo'), async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error al crear academia:', error);
-
-    // Rollback: Si falló la creación de la academia pero se alcanzó a crear el usuario en Auth, lo eliminamos
     if (createdAuthUser) {
       await supabase.auth.admin.deleteUser(createdAuthUser.id);
     }
-
     res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
@@ -230,6 +228,10 @@ router.post('/:id/reset-password', async (req, res) => {
     if (userData && userData.id) {
       const { error: updateError } = await supabase.auth.admin.updateUserById(userData.id, { password: newPassword });
       if (updateError) throw updateError;
+
+      // 🔥 VOLVEMOS A EXIGIR CAMBIO DE CLAVE CUANDO SE RESETEA
+      await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', userData.id);
+
     } else {
       throw new Error('No se encontró el usuario director asociado a esta academia.');
     }
