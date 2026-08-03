@@ -21,17 +21,39 @@ router.get('/', async (req, res) => {
   res.json(data || []);
 });
 
-// 2. CREAR NUEVA ACADEMIA, CREAR USUARIO DIRECTOR Y ENVIAR CORREO CON BREVO
+// 2. CREAR NUEVA ACADEMIA Y CREAR USUARIO DIRECTOR
 router.post('/', upload.single('logo'), async (req, res) => {
   const { 
     nombre, direccion, telefono, correo_academia, 
     nombre_director, director_email, plan 
   } = req.body;
 
-  try {
-    let logoUrl = null;
+  let createdAuthUser = null;
 
-    // A) Subir logo al bucket Storage si existe
+  try {
+    // A) Generar clave temporal
+    const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!"; 
+
+    // B) CREAR USUARIO EN SUPABASE AUTH COMO ADMIN (Valida si ya existe antes de continuar)
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email: director_email,
+      password: tempPassword,
+      email_confirm: true // Confirmado automáticamente
+    });
+
+    if (authError) {
+      if (authError.code === 'user_already_exists' || authError.status === 422) {
+        return res.status(400).json({ 
+          error: `El correo "${director_email}" ya está registrado en el sistema. Utiliza un correo distinto o elimínalo desde el panel de Supabase.` 
+        });
+      }
+      throw authError;
+    }
+
+    createdAuthUser = authData.user;
+
+    // C) Subir logo al bucket Storage si fue adjuntado
+    let logoUrl = null;
     if (req.file) {
       const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
       const { error: uploadError } = await supabase.storage
@@ -47,7 +69,7 @@ router.post('/', upload.single('logo'), async (req, res) => {
       logoUrl = publicUrlData.publicUrl;
     }
 
-    // B) Guardar academia en la base de datos
+    // D) Guardar academia en la base de datos
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
       .insert([{ 
@@ -59,27 +81,19 @@ router.post('/', upload.single('logo'), async (req, res) => {
 
     if (dbError) throw dbError;
 
-    // C) Generar clave temporal y crear usuario en Supabase Auth
-    const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!"; 
+    // E) Vincular al director con su academia en la tabla 'usuarios'
+    const { error: userTableError } = await supabase.from('usuarios').insert([{
+      id: createdAuthUser.id,
+      academia_id: nuevaAcademia.id,
+      nombre_completo: nombre_director,
+      rol: 'director'
+    }]);
 
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: director_email,
-      password: tempPassword,
-    });
-
-    if (authError) {
-      console.error("❌ Error creando Auth del director:", authError);
-    } else if (authData?.user) {
-      // Vincular al director con su academia en la tabla usuarios
-      await supabase.from('usuarios').insert([{
-        id: authData.user.id,
-        academia_id: nuevaAcademia.id,
-        nombre_completo: nombre_director,
-        rol: 'director'
-      }]);
+    if (userTableError) {
+      console.error("⚠️ Error vinculando usuario en tabla 'usuarios':", userTableError);
     }
 
-    // D) Enviar correo por Brevo usando BREVO_SENDER_EMAIL
+    // F) Enviar correo por Brevo usando BREVO_SENDER_EMAIL
     const brevoApiKey = process.env.BREVO_API_KEY;
     const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
 
@@ -125,13 +139,19 @@ router.post('/', upload.single('logo'), async (req, res) => {
         console.error(`❌ Error de conexión con Brevo:`, fetchError);
       }
     } else {
-      console.warn("⚠️ Falta BREVO_API_KEY o BREVO_SENDER_EMAIL en las variables de entorno. No se envió el correo.");
+      console.warn("⚠️ Falta BREVO_API_KEY o BREVO_SENDER_EMAIL en Render. No se envió el correo.");
     }
 
     res.status(201).json(nuevaAcademia);
 
   } catch (error) {
     console.error('❌ Error al crear academia:', error);
+
+    // Si falló la creación de la academia pero alcanzamos a crear el usuario en Auth, lo limpiamos
+    if (createdAuthUser) {
+      await supabase.auth.admin.deleteUser(createdAuthUser.id);
+    }
+
     res.status(500).json({ error: error.message || 'Error interno del servidor' });
   }
 });
