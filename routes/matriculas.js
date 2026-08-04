@@ -4,71 +4,147 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const PDFDocument = require('pdfkit');
 
-// Función auxiliar para generar el PDF en memoria (Buffer)
+// ============================================================================
+// Función auxiliar para generar el PDF en memoria (Diseño Premium SaaS)
+// ============================================================================
 const generarPDFMatricula = (academia, jugador, tutor, folio) => {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const doc = new PDFDocument({ margin: 0, size: 'A4' });
     let buffers = [];
 
     doc.on('data', buffers.push.bind(buffers));
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
 
-    // --- INICIO DEL DISEÑO DEL PDF ---
+    // ==========================================
+    // 🎨 PALETA DE COLORES Y ESTILOS
+    // ==========================================
+    const colorPrincipal = '#1a2b3c'; // Azul marino elegante
+    const colorAcento = '#289E9D'; // Verde turquesa corporativo
+    const colorGris = '#f4f4f4';
+    const colorTexto = '#333333';
     
-    // 1. Encabezado
-    doc.fontSize(24).font('Helvetica-Bold').text(academia.nombre, { align: 'center' });
-    doc.fontSize(10).font('Helvetica').text(academia.direccion || 'Sede Principal', { align: 'center' });
-    doc.moveDown(2);
+    const margenIzquierdo = 50;
+    const anchoContenido = doc.page.width - 100;
 
-    // 2. Título y Folio
-    doc.fontSize(16).font('Helvetica-Bold').text('CERTIFICADO DE MATRÍCULA', { align: 'center' });
-    doc.fontSize(10).font('Helvetica').text(`Folio: ${folio}`, { align: 'center' });
-    doc.text(`Fecha: ${new Date().toLocaleDateString('es-CL')}`, { align: 'center' });
-    doc.moveDown(2);
-
-    // 3. Datos del Jugador
-    doc.fontSize(12).font('Helvetica-Bold').text('1. ANTECEDENTES DEL JUGADOR', { underline: true });
-    doc.moveDown(0.5);
-    doc.fontSize(10).font('Helvetica');
-    doc.text(`Nombre Completo: ${jugador.nombre_completo}`);
-    doc.text(`RUT: ${jugador.rut}`);
-    doc.text(`Posición / Categoría: ${jugador.posicion_cancha || 'Por definir'}`);
-    doc.moveDown(1.5);
-
-    // 4. Datos del Apoderado/Tutor
-    doc.fontSize(12).font('Helvetica-Bold').text('2. ANTECEDENTES DEL APODERADO', { underline: true });
-    doc.moveDown(0.5);
-    doc.fontSize(10).font('Helvetica');
-    doc.text(`Nombre Completo: ${tutor.nombre_completo}`);
-    doc.text(`RUT: ${tutor.rut}`);
-    doc.text(`Teléfono: ${tutor.telefono}`);
-    doc.text(`Correo Electrónico: ${tutor.email}`);
-    doc.moveDown(2);
-
-    // 5. Términos y Condiciones
-    doc.fontSize(12).font('Helvetica-Bold').text('3. TÉRMINOS Y ACUERDOS DE LA ACADEMIA', { underline: true });
-    doc.moveDown(0.5);
-    doc.fontSize(9).font('Helvetica');
+    // ==========================================
+    // 1. ENCABEZADO (HEADER) MODERNO
+    // ==========================================
+    doc.rect(0, 0, doc.page.width, 120).fill(colorPrincipal);
     
-    // Usamos los términos personalizados del director, o un texto por defecto de seguridad
-    const terminosTexto = academia.terminos_matricula || 'El apoderado y el jugador se comprometen a respetar el reglamento interno de la institución.';
-    doc.text(terminosTexto, { align: 'justify', lineGap: 2 });
-    doc.moveDown(4);
+    doc.fillColor('#ffffff')
+       .fontSize(28)
+       .font('Helvetica-Bold')
+       .text(academia.nombre.toUpperCase(), 0, 40, { align: 'center' });
+       
+    doc.fontSize(10)
+       .font('Helvetica')
+       .text(academia.direccion || 'Sede Principal', { align: 'center' });
 
-    // 6. Firmas
-    doc.text('___________________________________', 50, doc.y);
-    doc.text('___________________________________', 300, doc.y - 12);
+    // ==========================================
+    // 2. TÍTULO Y DATOS DEL FOLIO
+    // ==========================================
+    doc.moveDown(3);
+    doc.fillColor(colorAcento)
+       .fontSize(18)
+       .font('Helvetica-Bold')
+       .text('CERTIFICADO OFICIAL DE MATRÍCULA', margenIzquierdo, 150);
     
-    doc.moveDown(0.5);
-    doc.text('Firma Apoderado', 90, doc.y);
-    doc.text('Firma Director / Academia', 330, doc.y - 12);
+    doc.fillColor(colorTexto)
+       .fontSize(10)
+       .font('Helvetica-Bold')
+       .text(`Folio: ${folio}`, margenIzquierdo, 175)
+       .font('Helvetica')
+       .text(`Fecha de emisión: ${new Date().toLocaleDateString('es-CL')}`, margenIzquierdo, 190);
 
-    // --- FIN DEL DISEÑO ---
+    // Línea separadora
+    doc.moveTo(margenIzquierdo, 215).lineTo(doc.page.width - 50, 215).lineWidth(1).strokeColor(colorAcento).stroke();
+
+    // ==========================================
+    // 3. CAJA DE DATOS DEL JUGADOR
+    // ==========================================
+    let yPos = 235;
+    
+    // Fondo gris para la sección
+    doc.rect(margenIzquierdo, yPos, anchoContenido, 25).fill(colorGris);
+    doc.fillColor(colorPrincipal).fontSize(12).font('Helvetica-Bold').text('1. ANTECEDENTES DEL JUGADOR', margenIzquierdo + 10, yPos + 7);
+    
+    yPos += 40;
+    doc.fillColor(colorTexto).fontSize(10).font('Helvetica');
+    
+    doc.text(`Nombre Completo:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(jugador.nombre || 'No registrado', margenIzquierdo + 120, yPos);
+    
+    yPos += 20;
+    doc.font('Helvetica').text(`Fecha Nacimiento:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(jugador.fecha_nacimiento || 'No registrada', margenIzquierdo + 120, yPos);
+    
+    yPos += 20;
+    doc.font('Helvetica').text(`Posición / Categoría:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(jugador.posicion_cancha || 'Por definir', margenIzquierdo + 120, yPos);
+
+    // ==========================================
+    // 4. CAJA DE DATOS DEL APODERADO
+    // ==========================================
+    yPos += 40;
+    doc.rect(margenIzquierdo, yPos, anchoContenido, 25).fill(colorGris);
+    doc.fillColor(colorPrincipal).fontSize(12).font('Helvetica-Bold').text('2. ANTECEDENTES DEL APODERADO', margenIzquierdo + 10, yPos + 7);
+    
+    yPos += 40;
+    doc.fillColor(colorTexto).fontSize(10).font('Helvetica');
+    
+    doc.text(`Nombre Completo:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(tutor.nombre_completo || 'No registrado', margenIzquierdo + 120, yPos);
+    
+    yPos += 20;
+    doc.font('Helvetica').text(`RUT Apoderado:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(tutor.rut || 'No registrado', margenIzquierdo + 120, yPos);
+    
+    yPos += 20;
+    doc.font('Helvetica').text(`Teléfono:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(tutor.telefono || 'No registrado', margenIzquierdo + 120, yPos);
+    
+    yPos += 20;
+    doc.font('Helvetica').text(`Correo Electrónico:`, margenIzquierdo, yPos).font('Helvetica-Bold').text(tutor.email || 'No registrado', margenIzquierdo + 120, yPos);
+
+    // ==========================================
+    // 5. TÉRMINOS Y CONDICIONES (LA MATRIZ)
+    // ==========================================
+    yPos += 40;
+    doc.rect(margenIzquierdo, yPos, anchoContenido, 25).fill(colorGris);
+    doc.fillColor(colorPrincipal).fontSize(12).font('Helvetica-Bold').text('3. ACUERDOS Y TÉRMINOS DE LA ACADEMIA', margenIzquierdo + 10, yPos + 7);
+    
+    yPos += 40;
+    doc.fillColor(colorTexto).fontSize(9).font('Helvetica');
+    
+    // Obtenemos los términos de la base de datos o ponemos unos por defecto
+    const terminosTexto = academia.terminos_matricula || 'El apoderado se compromete a respetar el reglamento interno de la institución.';
+    
+    // Separamos el texto por saltos de línea y limpiamos caracteres basura
+    const listaTerminos = terminosTexto.split('\n').filter(t => t.trim() !== '');
+    
+    listaTerminos.forEach((termino) => {
+      let textoLimpio = termino.trim().replace(/[A-ZĐ]$/g, '').trim(); 
+      
+      doc.circle(margenIzquierdo + 5, yPos + 4, 2).fill(colorAcento);
+      doc.fillColor(colorTexto).text(textoLimpio, margenIzquierdo + 15, yPos, { width: anchoContenido - 20, align: 'justify' });
+      
+      // Calculamos la altura que ocupó el texto para bajar a la siguiente línea correctamente
+      yPos += doc.heightOfString(textoLimpio, { width: anchoContenido - 20 }) + 10;
+    });
+
+    // ==========================================
+    // 6. ZONA DE FIRMAS
+    // ==========================================
+    yPos = 700; // Posición fija al fondo de la hoja
+    doc.moveTo(margenIzquierdo + 20, yPos).lineTo(margenIzquierdo + 200, yPos).lineWidth(1).strokeColor(colorPrincipal).stroke();
+    doc.moveTo(doc.page.width - 220, yPos).lineTo(doc.page.width - 40, yPos).lineWidth(1).strokeColor(colorPrincipal).stroke();
+    
+    doc.fillColor(colorTexto).fontSize(10).font('Helvetica-Bold');
+    doc.text('Firma Apoderado / Tutor', margenIzquierdo + 20, yPos + 10, { width: 180, align: 'center' });
+    doc.text('Firma Director / Academia', doc.page.width - 220, yPos + 10, { width: 180, align: 'center' });
+
     doc.end();
   });
 };
 
+// ============================================================================
+// RUTA PRINCIPAL: POST /api/matriculas/generar-documento
+// ============================================================================
 router.post('/generar-documento', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -88,7 +164,10 @@ router.post('/generar-documento', authMiddleware, async (req, res) => {
     const pdfBuffer = await generarPDFMatricula(academia, jugador, tutor, folio);
 
     // 3. Subir el PDF al bucket de Supabase
-    const fileName = `${academia_id}/${folio}_${jugador.rut}.pdf`;
+    // 🔥 Corrección: Usamos el rut del tutor en vez del jugador, o el folio si no hay rut.
+    const identificador = tutor.rut || folio;
+    const fileName = `${academia_id}/${folio}_${identificador}.pdf`;
+    
     const { error: uploadError } = await supabase.storage
       .from('matriculas-pdf')
       .upload(fileName, pdfBuffer, { contentType: 'application/pdf' });
@@ -116,12 +195,11 @@ router.post('/generar-documento', authMiddleware, async (req, res) => {
           subject: `Comprobante de Matrícula - ${academia.nombre}`,
           htmlContent: `
             <h2>¡Hola ${tutor.nombre_completo}!</h2>
-            <p>La matrícula de <strong>${jugador.nombre_completo}</strong> ha sido procesada exitosamente en <strong>${academia.nombre}</strong>.</p>
+            <p>La matrícula de <strong>${jugador.nombre || 'el alumno'}</strong> ha sido procesada exitosamente en <strong>${academia.nombre}</strong>.</p>
             <p>Adjunto a este correo encontrarás el comprobante oficial con el folio <strong>${folio}</strong> y los términos de la academia.</p>
             <br>
             <p>Atentamente,<br>El equipo de ${academia.nombre}</p>
           `,
-          // 🔥 AQUÍ ADJUNTAMOS EL ARCHIVO PDF EN BASE64
           attachment: [
             {
               content: pdfBuffer.toString('base64'),
