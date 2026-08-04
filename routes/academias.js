@@ -37,7 +37,7 @@ router.post('/registro-publico', async (req, res) => {
         nombre: nombre_academia, 
         nombre_director: nombre_director, 
         director_email: email, 
-        plan: 'Básico', // Plan inicial automático
+        plan: 'Prueba 15 Días', // Plan inicial automático
         estado: 'Activa', 
         jugadores_count: 0
       }])
@@ -78,6 +78,7 @@ router.post('/registro-publico', async (req, res) => {
               <div style="font-family: sans-serif; color: #333;">
                 <h2>¡Hola ${nombre_director}! Bienvenido a AcademiaPro</h2>
                 <p>Tu academia <strong>${nombre_academia}</strong> ha sido creada con éxito.</p>
+                <p>Tienes 15 días de prueba gratis para disfrutar de todas las funcionalidades.</p>
                 <p>Ya puedes iniciar sesión en la plataforma utilizando tu correo y la contraseña que creaste durante el registro.</p>
                 <br/>
                 <p>¡Mucho éxito en tu gestión!</p>
@@ -95,11 +96,108 @@ router.post('/registro-publico', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error en registro público:', error);
-    // Rollback: Si algo falla, borramos al usuario para que pueda volver a intentarlo
     if (createdAuthUser) {
       await supabase.auth.admin.deleteUser(createdAuthUser.id);
     }
     res.status(500).json({ error: error.message || 'Error interno del servidor al crear tu cuenta' });
+  }
+});
+
+
+// ====================================================================
+// 🚀 NUEVA RUTA: COMPLETAR PERFIL CON GOOGLE (CON LOGO Y 15 DÍAS)
+// ====================================================================
+router.post('/completar-google', upload.single('logo'), async (req, res) => {
+  try {
+    const { auth_id, email, nombre_director, nombre_academia, direccion } = req.body;
+
+    let logoUrl = null;
+
+    // 1. Subir el logo a Supabase Storage (Bucket 'logos-escuelas')
+    if (req.file) {
+      const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
+      const { error: uploadError } = await supabase.storage
+        .from('logos-escuelas')
+        .upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
+
+      if (uploadError) {
+        console.error('⚠️ Error al subir logo:', uploadError);
+      } else {
+        const { data: publicUrlData } = supabase.storage
+          .from('logos-escuelas')
+          .getPublicUrl(fileName);
+        logoUrl = publicUrlData.publicUrl;
+      }
+    }
+
+    // 2. Crear la Academia en la BD
+    const { data: nuevaAcademia, error: dbError } = await supabase
+      .from('academias')
+      .insert([{ 
+        nombre: nombre_academia, 
+        direccion: direccion,
+        logo: logoUrl,
+        nombre_director: nombre_director, 
+        director_email: email, 
+        plan: 'Prueba 15 Días', 
+        estado: 'Activa', 
+        jugadores_count: 0
+      }])
+      .select()
+      .single();
+
+    if (dbError) throw dbError;
+
+    // 3. Vincular al usuario de Google en la tabla 'usuarios'
+    const { error: userTableError } = await supabase.from('usuarios').insert([{
+      id: auth_id,
+      academia_id: nuevaAcademia.id,
+      nombre_completo: nombre_director,
+      rol: 'director',
+      requiere_cambio_password: false // Entra directo con Google
+    }]);
+
+    if (userTableError) throw userTableError;
+
+    // 4. Enviar correo de bienvenida por Brevo
+    const brevoApiKey = process.env.BREVO_API_KEY;
+    const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
+
+    if (brevoApiKey && brevoSenderEmail) {
+      try {
+        await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'api-key': brevoApiKey,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender: { name: "AcademiaPro", email: brevoSenderEmail },
+            to: [{ email: email }],
+            subject: "¡Bienvenido a AcademiaPro con Google! 🚀",
+            htmlContent: `
+              <div style="font-family: sans-serif; color: #333;">
+                <h2>¡Hola ${nombre_director}! Bienvenido a AcademiaPro</h2>
+                <p>Tu academia <strong>${nombre_academia}</strong> ha sido creada exitosamente mediante tu cuenta de Google.</p>
+                <p>Tienes 15 días de prueba gratis activados desde hoy.</p>
+                <br/>
+                <p>¡Mucho éxito en tu gestión!</p>
+                <p>El equipo de AcademiaPro</p>
+              </div>
+            `
+          })
+        });
+      } catch (fetchError) {
+        console.error(`❌ Error al enviar correo de bienvenida Google:`, fetchError);
+      }
+    }
+
+    res.status(200).json({ success: true, academia: nuevaAcademia });
+
+  } catch (error) {
+    console.error('❌ Error en /completar-google:', error);
+    res.status(500).json({ error: error.message || 'Error al completar el perfil' });
   }
 });
 
