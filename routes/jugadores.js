@@ -73,7 +73,7 @@ router.post('/', authMiddleware, async (req, res) => {
         academia_id,
         tutor_id: tutorId,
         nombre: nombre,
-        nombre_completo: nombre,
+        // 🔥 Eliminamos "nombre_completo" de aquí para evitar el error de caché/esquema
         sexo,
         fecha_nacimiento,
         posicion_cancha,
