@@ -26,7 +26,7 @@ router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { 
-      tutor, nombre, sexo, fecha_nacimiento, posicion_cancha, 
+      tutor, nombre, rut, tipo_alumno, certificado_medico, sexo, fecha_nacimiento, posicion_cancha, 
       talla_uniforme, talla_apoderado, numero_camiseta, nombre_camiseta, 
       monto_matricula, abono_matricula, monto_mensualidad, foto_base64 
     } = req.body;
@@ -73,7 +73,9 @@ router.post('/', authMiddleware, async (req, res) => {
         academia_id,
         tutor_id: tutorId,
         nombre: nombre,
-        // 🔥 Eliminamos "nombre_completo" de aquí para evitar el error de caché/esquema
+        rut: rut || null,
+        tipo_alumno: tipo_alumno || 'Nuevo',
+        certificado_medico: certificado_medico || 'Pendiente',
         sexo,
         fecha_nacimiento,
         posicion_cancha,
