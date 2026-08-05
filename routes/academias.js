@@ -437,4 +437,27 @@ router.post('/:id/reset-password', async (req, res) => {
   }
 });
 
+// ====================================================================
+// 6. ACTUALIZAR TÉRMINOS Y CONDICIONES (🔥 RUTA AÑADIDA)
+// ====================================================================
+router.put('/:id/terminos', async (req, res) => {
+  const { id } = req.params;
+  const { terminos_matricula } = req.body;
+  
+  try {
+    const { data, error } = await supabase
+      .from('academias')
+      .update({ terminos_matricula })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al actualizar términos:', error);
+    res.status(500).json({ error: 'Error al actualizar términos' });
+  }
+});
+
 module.exports = router;
