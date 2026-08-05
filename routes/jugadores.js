@@ -3,25 +3,43 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 
-// 1. OBTENER JUGADORES DE LA ACADEMIA
+// ====================================================================
+// 1. OBTENER JUGADORES DE LA ACADEMIA (CON SUS CATEGORÍAS)
+// ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    
+    // Obtenemos jugadores y usamos una subconsulta para traer las categorías a las que pertenecen
     const { data, error } = await supabase
       .from('jugadores')
-      .select('*')
+      .select(`
+        *,
+        jugador_categoria (
+          categorias ( id, nombre )
+        )
+      `)
       .eq('academia_id', academia_id)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json({ success: true, data });
+
+    // Formateamos un poco la respuesta para que sea más fácil de leer en React
+    const jugadoresFormateados = data.map(jugador => ({
+      ...jugador,
+      categorias: jugador.jugador_categoria.map(jc => jc.categorias)
+    }));
+
+    res.json({ success: true, data: jugadoresFormateados });
   } catch (error) {
     console.error('❌ Error al obtener jugadores:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
+// ====================================================================
 // 2. CREAR JUGADOR + TUTOR
+// ====================================================================
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -94,7 +112,6 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (errJugador) throw errJugador;
 
-    // C) Retornamos los IDs requeridos por la ruta de matrículas
     res.status(201).json({
       success: true,
       jugador_id: newJugador.id,
@@ -104,6 +121,120 @@ router.post('/', authMiddleware, async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error en POST /api/jugadores:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 3. OBTENER CATEGORÍAS DE LA ACADEMIA
+// ====================================================================
+router.get('/categorias', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const { data, error } = await supabase
+      .from('categorias')
+      .select('*')
+      .eq('academia_id', academia_id)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al obtener categorías:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 4. CREAR NUEVA CATEGORÍA
+// ====================================================================
+router.post('/categorias', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const { nombre, descripcion } = req.body;
+
+    const { data, error } = await supabase
+      .from('categorias')
+      .insert([{ academia_id, nombre, descripcion }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al crear categoría:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 5. ASIGNAR JUGADOR A CATEGORÍA
+// ====================================================================
+router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
+  try {
+    const { jugador_id } = req.params;
+    const { categoria_id } = req.body;
+
+    const { data, error } = await supabase
+      .from('jugador_categoria')
+      .insert([{ jugador_id, categoria_id }])
+      .select();
+
+    if (error) throw error;
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al asignar categoría:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 6. OBTENER HISTORIAL DE EVALUACIONES DEL JUGADOR
+// ====================================================================
+router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const { jugador_id } = req.params;
+
+    const { data, error } = await supabase
+      .from('evaluaciones')
+      .select('*')
+      .eq('jugador_id', jugador_id)
+      .eq('academia_id', academia_id)
+      .order('fecha', { ascending: false });
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al obtener evaluaciones:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 7. CREAR NUEVA EVALUACIÓN (DIBUJA EL RADAR)
+// ====================================================================
+router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const { jugador_id } = req.params;
+    const { datos_radar, comentarios_profesor } = req.body;
+
+    const { data, error } = await supabase
+      .from('evaluaciones')
+      .insert([{
+        jugador_id,
+        academia_id,
+        datos_radar,
+        comentarios_profesor
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(201).json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al guardar evaluación:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
