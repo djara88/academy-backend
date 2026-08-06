@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
@@ -37,7 +38,6 @@ router.post('/', authMiddleware, async (req, res) => {
       monto_matricula, abono_matricula, monto_mensualidad, foto_base64, evaluacion 
     } = req.body;
 
-    // A) Tutor
     let tutorId = null;
     if (tutor && tutor.rut) {
       const { data: existingTutor } = await supabase.from('tutores').select('id').eq('rut', tutor.rut).eq('academia_id', academia_id).maybeSingle();
@@ -51,7 +51,6 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // B) Jugador
     const { data: newJugador, error: errJugador } = await supabase.from('jugadores').insert([{
       academia_id, tutor_id: tutorId, nombre, rut: rut || null, tipo_alumno: tipo_alumno || 'Nuevo',
       certificado_medico: certificado_medico || 'Pendiente', sexo, fecha_nacimiento, posicion_cancha,
@@ -61,7 +60,6 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (errJugador) throw errJugador;
 
-    // C) 🔥 GUARDAR EVALUACIÓN INICIAL DE LA MATRÍCULA
     if (evaluacion && Object.keys(evaluacion).length > 0) {
       await supabase.from('evaluaciones').insert([{
         jugador_id: newJugador.id,
@@ -116,12 +114,11 @@ router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-// 6. OBTENER EVALUACIONES (🔥 CORRECCIÓN DEL ERROR DE FECHA)
+// 6. OBTENER EVALUACIONES
 router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { jugador_id } = req.params;
-    // Usamos created_at en lugar de fecha para evitar el error 42703
     const { data, error } = await supabase
       .from('evaluaciones')
       .select('*')
@@ -147,6 +144,81 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
     if (error) throw error;
     res.status(201).json({ success: true, data });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 8. ENVIAR INFORME PDF POR CORREO AL APODERADO (BREVO)
+// ====================================================================
+router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
+  try {
+    const { jugador_id } = req.params;
+    const { pdf_base64, comentarios } = req.body;
+
+    // Obtener datos del jugador y buscar a su tutor
+    const { data: jugador, error: errJugador } = await supabase
+      .from('jugadores')
+      .select('nombre, tutor_id')
+      .eq('id', jugador_id)
+      .single();
+
+    if (errJugador || !jugador.tutor_id) throw new Error('Jugador o tutor no encontrado.');
+
+    // Obtener el correo del tutor
+    const { data: tutor, error: errTutor } = await supabase
+      .from('tutores')
+      .select('email, nombre_completo')
+      .eq('id', jugador.tutor_id)
+      .single();
+
+    if (errTutor || !tutor.email) throw new Error('El apoderado no tiene un correo registrado.');
+
+    // Extraer solo el contenido en base64
+    const base64Content = pdf_base64.split('base64,')[1];
+
+    const brevoApiKey = process.env.BREVO_API_KEY;
+    const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
+
+    if (!brevoApiKey || !brevoSenderEmail) throw new Error('Credenciales de correo no configuradas.');
+
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'api-key': brevoApiKey,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        sender: { name: "AcademiaPro Deportes", email: brevoSenderEmail },
+        to: [{ email: tutor.email, name: tutor.nombre_completo }],
+        subject: `Informe de Evolución Deportiva - ${jugador.nombre} ⚽`,
+        htmlContent: `
+          <div style="font-family: sans-serif; color: #333;">
+            <h2>Hola ${tutor.nombre_completo},</h2>
+            <p>Adjuntamos el informe de evolución deportiva más reciente de <strong>${jugador.nombre}</strong>.</p>
+            ${comentarios ? `<div style="background-color: #f4f4f4; padding: 15px; border-radius: 8px; margin: 20px 0;"><p><strong>Comentarios del profesor:</strong><br/>${comentarios}</p></div>` : ''}
+            <p>Un saludo afectuoso,<br/>El equipo de la Academia</p>
+          </div>
+        `,
+        attachment: [
+          {
+            name: `Informe_${jugador.nombre.replace(/\s+/g, '_')}.pdf`,
+            content: base64Content
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Error de Brevo:', errorData);
+      throw new Error('Error al enviar el correo a través de Brevo.');
+    }
+
+    res.json({ success: true, message: 'Informe enviado por correo.' });
+  } catch (error) {
+    console.error('❌ Error al enviar informe:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
