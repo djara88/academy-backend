@@ -18,7 +18,8 @@ router.get('/', authMiddleware, async (req, res) => {
 
     const jugadoresFormateados = data.map(jugador => ({
       ...jugador,
-      categorias: jugador.jugador_categoria.map(jc => jc.categorias)
+      categorias: jugador.jugador_categoria.map(jc => jc.categorias),
+      insignias: jugador.insignias || []
     }));
 
     res.json({ success: true, data: jugadoresFormateados });
@@ -55,7 +56,9 @@ router.post('/', authMiddleware, async (req, res) => {
       academia_id, tutor_id: tutorId, nombre, rut: rut || null, tipo_alumno: tipo_alumno || 'Nuevo',
       certificado_medico: certificado_medico || 'Pendiente', sexo, fecha_nacimiento, posicion_cancha,
       talla_uniforme, talla_apoderado, numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
-      nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente'
+      nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente',
+      estado_financiero: 'Al Día',
+      insignias: []
     }]).select().single();
 
     if (errJugador) throw errJugador;
@@ -129,7 +132,6 @@ router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
     if (error) throw error;
     res.json({ success: true, data });
   } catch (error) {
-    console.error('❌ Error al obtener evaluaciones:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -148,35 +150,19 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 8. ENVIAR INFORME PDF POR CORREO AL APODERADO (BREVO)
-// ====================================================================
+// 8. ENVIAR INFORME PDF POR CORREO
 router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
   try {
     const { jugador_id } = req.params;
     const { pdf_base64, comentarios } = req.body;
 
-    // Obtener datos del jugador y buscar a su tutor
-    const { data: jugador, error: errJugador } = await supabase
-      .from('jugadores')
-      .select('nombre, tutor_id')
-      .eq('id', jugador_id)
-      .single();
-
+    const { data: jugador, error: errJugador } = await supabase.from('jugadores').select('nombre, tutor_id').eq('id', jugador_id).single();
     if (errJugador || !jugador.tutor_id) throw new Error('Jugador o tutor no encontrado.');
 
-    // Obtener el correo del tutor
-    const { data: tutor, error: errTutor } = await supabase
-      .from('tutores')
-      .select('email, nombre_completo')
-      .eq('id', jugador.tutor_id)
-      .single();
-
+    const { data: tutor, error: errTutor } = await supabase.from('tutores').select('email, nombre_completo').eq('id', jugador.tutor_id).single();
     if (errTutor || !tutor.email) throw new Error('El apoderado no tiene un correo registrado.');
 
-    // Extraer solo el contenido en base64
     const base64Content = pdf_base64.split('base64,')[1];
-
     const brevoApiKey = process.env.BREVO_API_KEY;
     const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
 
@@ -184,11 +170,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
 
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
-      headers: {
-        'accept': 'application/json',
-        'api-key': brevoApiKey,
-        'content-type': 'application/json'
-      },
+      headers: { 'accept': 'application/json', 'api-key': brevoApiKey, 'content-type': 'application/json' },
       body: JSON.stringify({
         sender: { name: "AcademiaPro Deportes", email: brevoSenderEmail },
         to: [{ email: tutor.email, name: tutor.nombre_completo }],
@@ -201,24 +183,69 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
             <p>Un saludo afectuoso,<br/>El equipo de la Academia</p>
           </div>
         `,
-        attachment: [
-          {
-            name: `Informe_${jugador.nombre.replace(/\s+/g, '_')}.pdf`,
-            content: base64Content
-          }
-        ]
+        attachment: [{ name: `Informe_${jugador.nombre.replace(/\s+/g, '_')}.pdf`, content: base64Content }]
       })
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Error de Brevo:', errorData);
-      throw new Error('Error al enviar el correo a través de Brevo.');
-    }
-
-    res.json({ success: true, message: 'Informe enviado por correo.' });
+    if (!response.ok) throw new Error('Error al enviar el correo a través de Brevo.');
+    res.json({ success: true, message: 'Informe enviado.' });
   } catch (error) {
-    console.error('❌ Error al enviar informe:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 🔥 9. OBTENER PROMEDIO DE UNA CATEGORÍA
+router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res) => {
+  try {
+    const { categoria_id } = req.params;
+    
+    // Buscar todos los jugadores de esa categoría
+    const { data: rels } = await supabase.from('jugador_categoria').select('jugador_id').eq('categoria_id', categoria_id);
+    const jugadorIds = rels.map(r => r.jugador_id);
+
+    if (jugadorIds.length === 0) return res.json({ success: true, data: {} });
+
+    // Buscar la última evaluación de esos jugadores
+    const { data: evals } = await supabase.from('evaluaciones').select('jugador_id, datos_radar').in('jugador_id', jugadorIds).order('created_at', { ascending: false });
+
+    const latestEvals = {};
+    evals.forEach(ev => { if (!latestEvals[ev.jugador_id]) latestEvals[ev.jugador_id] = ev.datos_radar; });
+
+    // Calcular promedios
+    const totals = {};
+    const counts = {};
+    Object.values(latestEvals).forEach(radar => {
+      Object.entries(radar).forEach(([skill, val]) => {
+        totals[skill] = (totals[skill] || 0) + val;
+        counts[skill] = (counts[skill] || 0) + 1;
+      });
+    });
+
+    const promedio = {};
+    Object.keys(totals).forEach(skill => { promedio[skill] = Math.round(totals[skill] / counts[skill]); });
+
+    res.json({ success: true, data: promedio });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 🔥 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS)
+router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
+  try {
+    const { jugador_id } = req.params;
+    const { estado_financiero, alerta_medica, insignias } = req.body;
+    
+    const updateData = {};
+    if (estado_financiero !== undefined) updateData.estado_financiero = estado_financiero;
+    if (alerta_medica !== undefined) updateData.alerta_medica = alerta_medica;
+    if (insignias !== undefined) updateData.insignias = insignias;
+
+    const { data, error } = await supabase.from('jugadores').update(updateData).eq('id', jugador_id).select().single();
+    if (error) throw error;
+    
+    res.json({ success: true, data });
+  } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
