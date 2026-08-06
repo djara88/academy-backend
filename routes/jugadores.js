@@ -3,8 +3,11 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { enviarWhatsApp } = require('../utils/whatsapp'); // Importamos el motor de WhatsApp
 
-// 1. OBTENER JUGADORES (CON SUS CATEGORÍAS)
+// ====================================================================
+// 1. OBTENER JUGADORES (CON SUS CATEGORÍAS E INSIGNIAS)
+// ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -29,7 +32,9 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 2. CREAR JUGADOR + TUTOR + EVALUACIÓN INICIAL
+// ====================================================================
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -58,6 +63,7 @@ router.post('/', authMiddleware, async (req, res) => {
       talla_uniforme, talla_apoderado, numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
       nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente',
       estado_financiero: 'Al Día',
+      alerta_medica: '',
       insignias: []
     }]).select().single();
 
@@ -79,7 +85,9 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 3. OBTENER CATEGORÍAS
+// ====================================================================
 router.get('/categorias', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -91,7 +99,9 @@ router.get('/categorias', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 4. CREAR CATEGORÍA
+// ====================================================================
 router.post('/categorias', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -104,7 +114,9 @@ router.post('/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. ASIGNAR CATEGORÍA
+// ====================================================================
+// 5. ASIGNAR CATEGORÍA A JUGADOR
+// ====================================================================
 router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
   try {
     const { jugador_id } = req.params;
@@ -117,7 +129,9 @@ router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-// 6. OBTENER EVALUACIONES
+// ====================================================================
+// 6. OBTENER EVALUACIONES DEL JUGADOR
+// ====================================================================
 router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -136,7 +150,9 @@ router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 7. NUEVA EVALUACIÓN
+// ====================================================================
 router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -150,7 +166,9 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
-// 8. ENVIAR INFORME PDF POR CORREO
+// ====================================================================
+// 8. ENVIAR INFORME PDF POR CORREO (BREVO)
+// ====================================================================
 router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
   try {
     const { jugador_id } = req.params;
@@ -194,7 +212,9 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 🔥 9. OBTENER PROMEDIO DE UNA CATEGORÍA
+// ====================================================================
 router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res) => {
   try {
     const { categoria_id } = req.params;
@@ -230,19 +250,50 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res
   }
 });
 
-// 🔥 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS)
+// ====================================================================
+// 🔥 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP)
+// ====================================================================
 router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
     const { jugador_id } = req.params;
     const { estado_financiero, alerta_medica, insignias } = req.body;
     
     const updateData = {};
     if (estado_financiero !== undefined) updateData.estado_financiero = estado_financiero;
     if (alerta_medica !== undefined) updateData.alerta_medica = alerta_medica;
-    if (insignias !== undefined) updateData.insignias = insignias;
+    
+    // Si vienen insignias, verificamos si es una NUEVA insignia para avisar por WhatsApp
+    let nuevaInsigniaDetectada = null;
+    if (insignias !== undefined) {
+      updateData.insignias = insignias;
+      
+      // Obtenemos el jugador actual para ver si se sumó una insignia
+      const { data: jugadorAntiguo } = await supabase.from('jugadores').select('insignias, nombre, tutor_id').eq('id', jugador_id).single();
+      
+      const cantidadAntes = jugadorAntiguo.insignias ? jugadorAntiguo.insignias.length : 0;
+      if (insignias.length > cantidadAntes) {
+        // La primera de la lista es la más reciente (según el frontend)
+        nuevaInsigniaDetectada = insignias[0]; 
+      }
+    }
 
+    // Actualizamos la base de datos
     const { data, error } = await supabase.from('jugadores').update(updateData).eq('id', jugador_id).select().single();
     if (error) throw error;
+
+    // Si hubo una nueva insignia, buscamos al tutor y disparamos el WhatsApp de forma asíncrona
+    if (nuevaInsigniaDetectada) {
+      supabase.from('tutores').select('telefono, nombre_completo').eq('id', data.tutor_id).single()
+        .then(({ data: tutor }) => {
+          if (tutor && tutor.telefono) {
+            const mensaje = `🏆 *¡Noticia desde la Academia!*\n\nHola ${tutor.nombre_completo},\nNos llena de orgullo informarte que hoy el cuerpo técnico le ha otorgado a *${data.nombre}* el siguiente reconocimiento:\n\n🌟 *${nuevaInsigniaDetectada.nombre}*\n\n¡Sigan apoyando su crecimiento deportivo! ⚽💪`;
+            
+            enviarWhatsApp(academia_id, tutor.telefono, mensaje);
+          }
+        })
+        .catch(err => console.error('Error buscando tutor para WS:', err));
+    }
     
     res.json({ success: true, data });
   } catch (error) {
