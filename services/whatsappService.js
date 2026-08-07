@@ -13,12 +13,10 @@ const conectarAcademia = async (academiaId) => {
   const instanceName = `academia_${academiaId}`;
 
   try {
-    // Verificamos si la instancia ya existe
     const stateResponse = await fetch(`${EVOLUTION_URL}/instance/connectionState/${instanceName}`, {
       headers: getHeaders()
     });
 
-    // Si no existe (Error 404), la creamos
     if (stateResponse.status === 404) {
       const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
         method: 'POST',
@@ -31,7 +29,6 @@ const conectarAcademia = async (academiaId) => {
       return await createResponse.json();
     }
 
-    // Si ya existe, pedimos conectarla
     const connectResponse = await fetch(`${EVOLUTION_URL}/instance/connect/${instanceName}`, {
       method: 'GET',
       headers: getHeaders()
