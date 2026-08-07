@@ -19,7 +19,7 @@ const parseResponse = async (response) => {
   }
 };
 
-// 0. Configurar Webhook automáticamente en Evolution API
+// 0. Configurar Webhook automáticamente en Evolution API (Estructura para v2)
 const configurarWebhook = async (academiaId) => {
   if (!EVOLUTION_URL) return;
 
@@ -31,18 +31,22 @@ const configurarWebhook = async (academiaId) => {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
-        enabled: true,
-        url: webhookUrl,
-        byEvents: false,
-        base64: false,
-        events: ['MESSAGES_UPSERT']
+        webhook: {
+          enabled: true,
+          url: webhookUrl,
+          byEvents: false,
+          base64: false,
+          events: ['MESSAGES_UPSERT']
+        }
       })
     });
+
+    const responseText = await response.text();
 
     if (response.ok) {
       console.log(`🔗 Webhook configurado con éxito para ${instanceName} -> ${webhookUrl}`);
     } else {
-      console.warn(`⚠️ No se pudo configurar el webhook para ${instanceName} (HTTP ${response.status})`);
+      console.warn(`⚠️ No se pudo configurar el webhook para ${instanceName} (HTTP ${response.status}): ${responseText}`);
     }
   } catch (error) {
     console.error(`❌ Error configurando webhook para ${instanceName}:`, error.message);
@@ -58,14 +62,14 @@ const conectarAcademia = async (academiaId) => {
   const instanceName = `academia_${academiaId}`;
 
   try {
-    // 🔥 Intentamos vincular el Webhook antes de conectar
+    // Intentamos vincular el Webhook antes de conectar
     await configurarWebhook(academiaId);
 
     const stateResponse = await fetch(`${EVOLUTION_URL}/instance/connectionState/${instanceName}`, {
       headers: getHeaders()
     });
 
-    // Si la instancia no existe (404), la creamos especificando la integración de Baileys y el Webhook
+    // Si la instancia no existe (404), la creamos
     if (stateResponse.status === 404) {
       const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
         method: 'POST',
