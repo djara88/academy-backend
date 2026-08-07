@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { enviarWhatsApp } = require('../utils/whatsapp'); // Importamos el motor de WhatsApp
+const { enviarMensaje } = require('../services/whatsappService'); // 👈 Importación corregida del servicio
 
 // ====================================================================
 // 1. OBTENER JUGADORES (CON SUS CATEGORÍAS E INSIGNIAS)
@@ -213,25 +213,22 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 🔥 9. OBTENER PROMEDIO DE UNA CATEGORÍA
+// 9. OBTENER PROMEDIO DE UNA CATEGORÍA
 // ====================================================================
 router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res) => {
   try {
     const { categoria_id } = req.params;
     
-    // Buscar todos los jugadores de esa categoría
     const { data: rels } = await supabase.from('jugador_categoria').select('jugador_id').eq('categoria_id', categoria_id);
     const jugadorIds = rels.map(r => r.jugador_id);
 
     if (jugadorIds.length === 0) return res.json({ success: true, data: {} });
 
-    // Buscar la última evaluación de esos jugadores
     const { data: evals } = await supabase.from('evaluaciones').select('jugador_id, datos_radar').in('jugador_id', jugadorIds).order('created_at', { ascending: false });
 
     const latestEvals = {};
     evals.forEach(ev => { if (!latestEvals[ev.jugador_id]) latestEvals[ev.jugador_id] = ev.datos_radar; });
 
-    // Calcular promedios
     const totals = {};
     const counts = {};
     Object.values(latestEvals).forEach(radar => {
@@ -251,7 +248,7 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res
 });
 
 // ====================================================================
-// 🔥 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP)
+// 🔥 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP AUTOMÁTICO)
 // ====================================================================
 router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
   try {
@@ -263,36 +260,41 @@ router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
     if (estado_financiero !== undefined) updateData.estado_financiero = estado_financiero;
     if (alerta_medica !== undefined) updateData.alerta_medica = alerta_medica;
     
-    // Si vienen insignias, verificamos si es una NUEVA insignia para avisar por WhatsApp
+    // Si vienen insignias, comprobamos si se agregó una nueva
     let nuevaInsigniaDetectada = null;
     if (insignias !== undefined) {
       updateData.insignias = insignias;
       
-      // Obtenemos el jugador actual para ver si se sumó una insignia
-      const { data: jugadorAntiguo } = await supabase.from('jugadores').select('insignias, nombre, tutor_id').eq('id', jugador_id).single();
+      const { data: jugadorAntiguo } = await supabase.from('jugadores').select('insignias').eq('id', jugador_id).single();
       
-      const cantidadAntes = jugadorAntiguo.insignias ? jugadorAntiguo.insignias.length : 0;
+      const cantidadAntes = jugadorAntiguo?.insignias ? jugadorAntiguo.insignias.length : 0;
       if (insignias.length > cantidadAntes) {
-        // La primera de la lista es la más reciente (según el frontend)
+        // La primera de la lista es la más reciente agregada por el frontend
         nuevaInsigniaDetectada = insignias[0]; 
       }
     }
 
-    // Actualizamos la base de datos
+    // Actualizamos el registro en Supabase
     const { data, error } = await supabase.from('jugadores').update(updateData).eq('id', jugador_id).select().single();
     if (error) throw error;
 
-    // Si hubo una nueva insignia, buscamos al tutor y disparamos el WhatsApp de forma asíncrona
-    if (nuevaInsigniaDetectada) {
+    // Si detectamos un nuevo reconocimiento y el jugador tiene tutor, enviamos el WhatsApp
+    if (nuevaInsigniaDetectada && data?.tutor_id) {
       supabase.from('tutores').select('telefono, nombre_completo').eq('id', data.tutor_id).single()
         .then(({ data: tutor }) => {
           if (tutor && tutor.telefono) {
-            const mensaje = `🏆 *¡Noticia desde la Academia!*\n\nHola ${tutor.nombre_completo},\nNos llena de orgullo informarte que hoy el cuerpo técnico le ha otorgado a *${data.nombre}* el siguiente reconocimiento:\n\n🌟 *${nuevaInsigniaDetectada.nombre}*\n\n¡Sigan apoyando su crecimiento deportivo! ⚽💪`;
+            // Limpieza del número telefónico (remueve espacios, guiones y signos)
+            const telefonoLimpio = tutor.telefono.replace(/\D/g, '');
+            const nombreInsignia = nuevaInsigniaDetectada.nombre || nuevaInsigniaDetectada;
             
-            enviarWhatsApp(academia_id, tutor.telefono, mensaje);
+            const mensaje = `🏆 *¡Noticia desde la Academia!*\n\nHola ${tutor.nombre_completo},\nNos llena de orgullo informarte que hoy el cuerpo técnico le ha otorgado a *${data.nombre}* el siguiente reconocimiento:\n\n🌟 *${nombreInsignia}*\n\n¡Sigan apoyando su crecimiento deportivo! ⚽💪`;
+            
+            enviarMensaje(academia_id, telefonoLimpio, mensaje)
+              .then(() => console.log(`✅ WhatsApp de reconocimiento enviado al apoderado de ${data.nombre}`))
+              .catch(err => console.error('❌ Error al enviar mensaje de WhatsApp:', err.message));
           }
         })
-        .catch(err => console.error('Error buscando tutor para WS:', err));
+        .catch(err => console.error('❌ Error al buscar tutor para WhatsApp:', err.message));
     }
     
     res.json({ success: true, data });
