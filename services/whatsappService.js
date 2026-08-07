@@ -2,6 +2,7 @@
 
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
 const API_KEY = process.env.EVOLUTION_API_KEY;
+const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
 
 const getHeaders = () => ({
   'Content-Type': 'application/json',
@@ -18,6 +19,36 @@ const parseResponse = async (response) => {
   }
 };
 
+// 0. Configurar Webhook automáticamente en Evolution API
+const configurarWebhook = async (academiaId) => {
+  if (!EVOLUTION_URL) return;
+
+  const instanceName = `academia_${academiaId}`;
+  const webhookUrl = `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`;
+
+  try {
+    const response = await fetch(`${EVOLUTION_URL}/webhook/set/${instanceName}`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        enabled: true,
+        url: webhookUrl,
+        byEvents: false,
+        base64: false,
+        events: ['MESSAGES_UPSERT']
+      })
+    });
+
+    if (response.ok) {
+      console.log(`🔗 Webhook configurado con éxito para ${instanceName} -> ${webhookUrl}`);
+    } else {
+      console.warn(`⚠️ No se pudo configurar el webhook para ${instanceName} (HTTP ${response.status})`);
+    }
+  } catch (error) {
+    console.error(`❌ Error configurando webhook para ${instanceName}:`, error.message);
+  }
+};
+
 // 1. Obtener estado o generar QR para una academia
 const conectarAcademia = async (academiaId) => {
   if (!EVOLUTION_URL) {
@@ -27,11 +58,14 @@ const conectarAcademia = async (academiaId) => {
   const instanceName = `academia_${academiaId}`;
 
   try {
+    // 🔥 Intentamos vincular el Webhook antes de conectar
+    await configurarWebhook(academiaId);
+
     const stateResponse = await fetch(`${EVOLUTION_URL}/instance/connectionState/${instanceName}`, {
       headers: getHeaders()
     });
 
-    // Si la instancia no existe (404), la creamos especificando la integración de Baileys
+    // Si la instancia no existe (404), la creamos especificando la integración de Baileys y el Webhook
     if (stateResponse.status === 404) {
       const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
         method: 'POST',
@@ -39,7 +73,14 @@ const conectarAcademia = async (academiaId) => {
         body: JSON.stringify({
           instanceName: instanceName,
           qrcode: true,
-          integration: 'WHATSAPP-BAILEYS' // 👈 OBLIGATORIO PARA EVOLUTION API V2
+          integration: 'WHATSAPP-BAILEYS',
+          webhook: {
+            enabled: true,
+            url: `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`,
+            byEvents: false,
+            base64: false,
+            events: ['MESSAGES_UPSERT']
+          }
         })
       });
       return await parseResponse(createResponse);
@@ -90,5 +131,6 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
 
 module.exports = {
   conectarAcademia,
-  enviarMensaje
+  enviarMensaje,
+  configurarWebhook
 };
