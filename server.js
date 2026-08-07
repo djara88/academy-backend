@@ -63,7 +63,7 @@ app.post('/api/login', async (req, res) => {
       nombre_completo: userData.nombre_completo,
       rol: userData.rol,
       academia_id: userData.academia_id,
-      requiere_cambio_password: userData.requiere_cambio_password // Frontend lee esto para redirigir
+      requiere_cambio_password: userData.requiere_cambio_password
     }
   });
 });
@@ -74,19 +74,15 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
   try {
     const { newPassword } = req.body;
-    
-    // Extraemos el ID cubriendo todos los formatos posibles de JWT
     const userId = req.user?.id || req.user?.sub || req.user?.userId;
 
     if (!userId) {
       return res.status(400).json({ error: 'No se pudo identificar el ID del usuario en el token.' });
     }
 
-    // 1. Cambiar contraseña en Auth
     const { error: authError } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
     if (authError) throw authError;
 
-    // 2. Quitar la marca en la base de datos (Fuerza la confirmación con .select)
     const { data, error: dbError } = await supabase
       .from('usuarios')
       .update({ requiere_cambio_password: false })
@@ -119,6 +115,7 @@ const torneoRoutes = require('./routes/torneos');
 const partidoRoutes = require('./routes/partidos');
 const academiaRoutes = require('./routes/academias');
 const matriculaRoutes = require('./routes/matriculas');
+const whatsappRoutes = require('./routes/whatsapp'); // 👈 OBLIGATORIO
 
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
@@ -128,6 +125,7 @@ app.use('/api/torneos', torneoRoutes);
 app.use('/api/partidos', partidoRoutes);
 app.use('/api/academias', academiaRoutes);
 app.use('/api/matriculas', matriculaRoutes);
+app.use('/api/whatsapp', whatsappRoutes); // 👈 OBLIGATORIO
 
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
