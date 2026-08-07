@@ -1,6 +1,5 @@
 // services/whatsappService.js
 
-// Elimina barras al final de la URL si existen para evitar rutas tipo //instance
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
 const API_KEY = process.env.EVOLUTION_API_KEY;
 
@@ -9,14 +8,13 @@ const getHeaders = () => ({
   'apikey': API_KEY
 });
 
-// Función auxiliar para procesar JSON sin tumbar el servidor si devuelve HTML/Texto
 const parseResponse = async (response) => {
   const text = await response.text();
   try {
     return JSON.parse(text);
   } catch (e) {
-    console.error(`❌ La respuesta de Evolution API no es JSON válid (HTTP ${response.status}):`, text);
-    throw new Error(`Servidor de WhatsApp respondió con error HTTP ${response.status}. Revisa EVOLUTION_API_URL.`);
+    console.error(`❌ Respuesta no válida de Evolution API (HTTP ${response.status}):`, text);
+    throw new Error(`Servidor de WhatsApp respondió con error HTTP ${response.status}.`);
   }
 };
 
@@ -33,14 +31,15 @@ const conectarAcademia = async (academiaId) => {
       headers: getHeaders()
     });
 
-    // Si la instancia no existe (Error 404 de Evolution API)
+    // Si la instancia no existe (404), la creamos especificando la integración de Baileys
     if (stateResponse.status === 404) {
       const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
           instanceName: instanceName,
-          qrcode: true
+          qrcode: true,
+          integration: 'WHATSAPP-BAILEYS' // 👈 OBLIGATORIO PARA EVOLUTION API V2
         })
       });
       return await parseResponse(createResponse);
