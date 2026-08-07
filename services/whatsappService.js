@@ -1,6 +1,7 @@
 // services/whatsappService.js
 
-const EVOLUTION_URL = process.env.EVOLUTION_API_URL;
+// Elimina barras al final de la URL si existen para evitar rutas tipo //instance
+const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
 const API_KEY = process.env.EVOLUTION_API_KEY;
 
 const getHeaders = () => ({
@@ -8,8 +9,23 @@ const getHeaders = () => ({
   'apikey': API_KEY
 });
 
+// Función auxiliar para procesar JSON sin tumbar el servidor si devuelve HTML/Texto
+const parseResponse = async (response) => {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.error(`❌ La respuesta de Evolution API no es JSON válid (HTTP ${response.status}):`, text);
+    throw new Error(`Servidor de WhatsApp respondió con error HTTP ${response.status}. Revisa EVOLUTION_API_URL.`);
+  }
+};
+
 // 1. Obtener estado o generar QR para una academia
 const conectarAcademia = async (academiaId) => {
+  if (!EVOLUTION_URL) {
+    throw new Error('EVOLUTION_API_URL no está configurada en Render 1');
+  }
+
   const instanceName = `academia_${academiaId}`;
 
   try {
@@ -17,6 +33,7 @@ const conectarAcademia = async (academiaId) => {
       headers: getHeaders()
     });
 
+    // Si la instancia no existe (Error 404 de Evolution API)
     if (stateResponse.status === 404) {
       const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
         method: 'POST',
@@ -26,7 +43,7 @@ const conectarAcademia = async (academiaId) => {
           qrcode: true
         })
       });
-      return await createResponse.json();
+      return await parseResponse(createResponse);
     }
 
     const connectResponse = await fetch(`${EVOLUTION_URL}/instance/connect/${instanceName}`, {
@@ -34,15 +51,19 @@ const conectarAcademia = async (academiaId) => {
       headers: getHeaders()
     });
     
-    return await connectResponse.json();
+    return await parseResponse(connectResponse);
   } catch (error) {
-    console.error(`❌ Error al conectar WhatsApp para academia ${academiaId}:`, error);
-    throw new Error('No se pudo comunicar con el servidor de WhatsApp');
+    console.error(`❌ Error al conectar WhatsApp para academia ${academiaId}:`, error.message);
+    throw error;
   }
 };
 
 // 2. Enviar un mensaje
 const enviarMensaje = async (academiaId, numero, mensaje) => {
+  if (!EVOLUTION_URL) {
+    throw new Error('EVOLUTION_API_URL no está configurada');
+  }
+
   const instanceName = `academia_${academiaId}`;
 
   try {
@@ -55,14 +76,15 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
       })
     });
 
+    const data = await parseResponse(response);
+
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || 'Error al enviar el mensaje');
+      throw new Error(data.message || 'Error al enviar el mensaje');
     }
 
-    return await response.json();
+    return data;
   } catch (error) {
-    console.error(`❌ Error enviando mensaje (Academia ${academiaId}):`, error);
+    console.error(`❌ Error enviando mensaje (Academia ${academiaId}):`, error.message);
     throw error;
   }
 };
