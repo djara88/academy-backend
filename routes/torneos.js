@@ -3,7 +3,6 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const axios = require('axios'); // Para conectar con la API de WhatsApp
 
 // CREAR un nuevo torneo
 router.post('/', authMiddleware, async (req, res) => {
@@ -85,7 +84,7 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
   }
 });
 
-// 🔥 ENVIAR CONVOCATORIA MASIVA POR CATEGORÍA CON DISPARO REAL DE WHATSAPP
+// 🔥 ENVIAR CONVOCATORIA MASIVA POR CATEGORÍA CON FETCH NATIVO
 router.post('/:id/convocar', authMiddleware, async (req, res) => {
   try {
     const torneo_id = req.params.id;
@@ -114,7 +113,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     // 3. Registrar en la base de datos los convocados
     const convocatorias = jugadores.map(j => {
-      // Obtenemos el teléfono del tutor o del jugador
       const telefono = j.tutores?.telefono || j.telefono || '';
       return {
         torneo_id,
@@ -132,10 +130,12 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errUpsert) throw errUpsert;
 
-    // 4. 🔥 DISPARAR MENSAJES DE WHATSAPP REALES
+    // 4. 🔥 DISPARAR MENSAJES DE WHATSAPP CON FETCH NATIVO DE NODE
     const costoFormateado = torneo.costo_inscripcion > 0 
       ? `$${Number(torneo.costo_inscripcion).toLocaleString('es-CL')}` 
       : 'Gratuito';
+
+    const port = process.env.PORT || 8080;
 
     for (const jugador of jugadores) {
       const telefono = jugador.tutores?.telefono || jugador.telefono;
@@ -145,13 +145,11 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
         continue;
       }
 
-      // Limpiamos el número para asegurar formato internacional (+56)
       let numLimpio = telefono.replace(/\D/g, '');
       if (!numLimpio.startsWith('56') && numLimpio.length === 9) {
         numLimpio = '56' + numLimpio;
       }
 
-      // Mensaje estructurado para el Bot
       const mensajeTexto = `🏆 *CONVOCATORIA A TORNEO*\n\n` +
         `Hola! Nos comunicamos de la academia.\n` +
         `*${jugador.nombre}* ha sido convocado/a para participar en:\n` +
@@ -162,12 +160,20 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
         `1️⃣ Para *CONFIRMAR* asistencia.\n` +
         `2️⃣ Para *RECHAZAR* la invitación.`;
 
-      // Envío a través de la ruta de WhatsApp interna
       try {
-        await axios.post(`http://localhost:${process.env.PORT || 8080}/api/whatsapp/enviar`, {
-          number: numLimpio,
-          message: mensajeTexto
+        const response = await fetch(`http://localhost:${port}/api/whatsapp/enviar`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            number: numLimpio,
+            message: mensajeTexto
+          })
         });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
         console.log(`✅ WhatsApp de convocatoria enviado a ${jugador.nombre} (${numLimpio})`);
       } catch (errApi) {
         console.error(`❌ Error al enviar WhatsApp a ${jugador.nombre}:`, errApi.message);
