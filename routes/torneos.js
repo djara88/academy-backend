@@ -84,7 +84,7 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
   }
 });
 
-// 🔥 ENVIAR CONVOCATORIA MASIVA POR CATEGORÍA CON FETCH NATIVO
+// 🔥 ENVIAR CONVOCATORIA MASIVA POR CATEGORÍA CON BÚSQUEDA BLINDADA DE TELÉFONOS
 router.post('/:id/convocar', authMiddleware, async (req, res) => {
   try {
     const torneo_id = req.params.id;
@@ -103,17 +103,37 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errTorneo || !torneo) throw new Error('No se encontró la información del torneo.');
 
-    // 2. Obtener datos de los jugadores y sus tutores
+    // 2. Obtener datos de los jugadores de forma simple (evitando ambigüedad en relaciones)
     const { data: jugadores, error: errJugadores } = await supabase
       .from('jugadores')
-      .select('*, tutores(*)')
+      .select('*')
       .in('id', jugadoresIds);
 
     if (errJugadores) throw errJugadores;
 
-    // 3. Registrar en la base de datos los convocados
+    // 3. Buscar los tutores/apoderados asociados
+    const tutorIds = jugadores
+      .map(j => j.tutor_id || j.apoderado_id || j.tutor_principal_id)
+      .filter(Boolean);
+
+    let tutoresMap = {};
+    if (tutorIds.length > 0) {
+      const { data: tutores } = await supabase
+        .from('tutores')
+        .select('*')
+        .in('id', tutorIds);
+
+      if (tutores) {
+        tutores.forEach(t => { tutoresMap[t.id] = t; });
+      }
+    }
+
+    // 4. Registrar en la base de datos las convocatorias
     const convocatorias = jugadores.map(j => {
-      const telefono = j.tutores?.telefono || j.telefono || '';
+      const idTutor = j.tutor_id || j.apoderado_id || j.tutor_principal_id;
+      const tutor = tutoresMap[idTutor];
+      const telefono = tutor?.telefono || j.telefono || '';
+
       return {
         torneo_id,
         jugador_id: j.id,
@@ -130,7 +150,7 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errUpsert) throw errUpsert;
 
-    // 4. 🔥 DISPARAR MENSAJES DE WHATSAPP CON FETCH NATIVO DE NODE
+    // 5. 🔥 DISPARAR MENSAJES DE WHATSAPP
     const costoFormateado = torneo.costo_inscripcion > 0 
       ? `$${Number(torneo.costo_inscripcion).toLocaleString('es-CL')}` 
       : 'Gratuito';
@@ -138,7 +158,9 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
     const port = process.env.PORT || 8080;
 
     for (const jugador of jugadores) {
-      const telefono = jugador.tutores?.telefono || jugador.telefono;
+      const idTutor = jugador.tutor_id || jugador.apoderado_id || jugador.tutor_principal_id;
+      const tutor = tutoresMap[idTutor];
+      const telefono = tutor?.telefono || jugador.telefono;
       
       if (!telefono) {
         console.warn(`⚠️ Jugador ${jugador.nombre} no tiene teléfono registrado.`);
@@ -161,7 +183,7 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
         `2️⃣ Para *RECHAZAR* la invitación.`;
 
       try {
-        const response = await fetch(`http://localhost:${port}/api/whatsapp/enviar`, {
+        const response = await fetch(`http://127.0.0.1:${port}/api/whatsapp/enviar`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
