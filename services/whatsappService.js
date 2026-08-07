@@ -1,140 +1,191 @@
-// services/whatsappService.js
+// routes/whatsapp.js
+const express = require('express');
+const router = express.Router();
+const { conectarAcademia, enviarMensaje } = require('../services/whatsappService');
+const supabase = require('../config/supabase');
 
-const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
-const API_KEY = process.env.EVOLUTION_API_KEY;
-const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
+// Ruta para consultar estado / obtener QR
+router.get('/estado/:academiaId', async (req, res) => {
+  const { academiaId } = req.params;
 
-const getHeaders = () => ({
-  'Content-Type': 'application/json',
-  'apikey': API_KEY
+  try {
+    const data = await conectarAcademia(academiaId);
+    
+    if (data?.instance?.state === 'open' || data?.state === 'open') {
+      return res.json({ conectado: true, mensaje: 'WhatsApp ya está conectado' });
+    }
+
+    if (data?.qrcode?.base64 || data?.base64) {
+      return res.json({ 
+        conectado: false, 
+        qrCode: data.qrcode?.base64 || data.base64 
+      });
+    }
+
+    res.json({ conectado: false, estado: 'Iniciando...', data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-const parseResponse = async (response) => {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    console.error(`❌ Respuesta no válida de Evolution API (HTTP ${response.status}):`, text);
-    throw new Error(`Servidor de WhatsApp respondió con error HTTP ${response.status}.`);
+// Ruta para enviar mensaje
+router.post('/enviar/:academiaId', async (req, res) => {
+  const { academiaId } = req.params;
+  const { numero, mensaje } = req.body;
+
+  if (!numero || !mensaje) {
+    return res.status(400).json({ error: 'Faltan el número o el mensaje' });
   }
-};
-
-// 0. Configurar Webhook automáticamente en Evolution API (Estructura para v2)
-const configurarWebhook = async (academiaId) => {
-  if (!EVOLUTION_URL) return;
-
-  const instanceName = `academia_${academiaId}`;
-  const webhookUrl = `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`;
 
   try {
-    const response = await fetch(`${EVOLUTION_URL}/webhook/set/${instanceName}`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        webhook: {
-          enabled: true,
-          url: webhookUrl,
-          byEvents: false,
-          base64: false,
-          events: ['MESSAGES_UPSERT']
-        }
-      })
-    });
-
-    const responseText = await response.text();
-
-    if (response.ok) {
-      console.log(`🔗 Webhook configurado con éxito para ${instanceName} -> ${webhookUrl}`);
-    } else {
-      console.warn(`⚠️ No se pudo configurar el webhook para ${instanceName} (HTTP ${response.status}): ${responseText}`);
-    }
+    const resultado = await enviarMensaje(academiaId, numero, mensaje);
+    res.json({ success: true, resultado });
   } catch (error) {
-    console.error(`❌ Error configurando webhook para ${instanceName}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
-};
+});
 
-// 1. Obtener estado o generar QR para una academia
-const conectarAcademia = async (academiaId) => {
-  if (!EVOLUTION_URL) {
-    throw new Error('EVOLUTION_API_URL no está configurada en Render 1');
-  }
-
-  const instanceName = `academia_${academiaId}`;
+// ========================================================
+// 🤖 EL CEREBRO DEL BOT (ROBUSTO Y CON LOGS DIAGNÓSTICOS)
+// ========================================================
+router.post('/webhook/:academiaId', async (req, res) => {
+  // Respondemos 200 OK inmediatamente a WhatsApp
+  res.status(200).send('OK');
 
   try {
-    // Intentamos vincular el Webhook antes de conectar
-    await configurarWebhook(academiaId);
+    const { academiaId } = req.params;
+    const body = req.body;
 
-    const stateResponse = await fetch(`${EVOLUTION_URL}/instance/connectionState/${instanceName}`, {
-      headers: getHeaders()
-    });
+    console.log(`📩 [WEBHOOK RECIBIDO] Academia: ${academiaId}`);
 
-    // Si la instancia no existe (404), la creamos
-    if (stateResponse.status === 404) {
-      const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          instanceName: instanceName,
-          qrcode: true,
-          integration: 'WHATSAPP-BAILEYS',
-          webhook: {
-            enabled: true,
-            url: `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`,
-            byEvents: false,
-            base64: false,
-            events: ['MESSAGES_UPSERT']
-          }
-        })
-      });
-      return await parseResponse(createResponse);
+    // Extraemos la información sin importar si viene en body.data o body
+    const payload = body.data || body;
+    if (!payload || !payload.key) {
+      console.log('ℹ️ Ignorado: El evento no contiene llave de mensaje (key).');
+      return;
     }
 
-    const connectResponse = await fetch(`${EVOLUTION_URL}/instance/connect/${instanceName}`, {
-      method: 'GET',
-      headers: getHeaders()
-    });
+    if (payload.key.fromMe) {
+      console.log('ℹ️ Ignorado: Es un mensaje enviado por la propia academia.');
+      return;
+    }
+
+    const remoteJid = payload.key.remoteJid || '';
+    if (!remoteJid || remoteJid.includes('@g.us')) {
+      console.log('ℹ️ Ignorado: Es un mensaje de grupo.');
+      return;
+    }
+
+    const messageData = payload.message;
+    if (!messageData) return;
+
+    let text = messageData.conversation || 
+               messageData.extendedTextMessage?.text || 
+               messageData.buttonsResponseMessage?.selectedButtonId || '';
     
-    return await parseResponse(connectResponse);
-  } catch (error) {
-    console.error(`❌ Error al conectar WhatsApp para academia ${academiaId}:`, error.message);
-    throw error;
-  }
-};
+    text = text.trim();
+    if (!text) return;
 
-// 2. Enviar un mensaje
-const enviarMensaje = async (academiaId, numero, mensaje) => {
-  if (!EVOLUTION_URL) {
-    throw new Error('EVOLUTION_API_URL no está configurada');
-  }
+    // Limpieza de número de teléfono: "56940054804@s.whatsapp.net" -> "56940054804"
+    const telefonoCompleto = remoteJid.split('@')[0].replace(/\D/g, '');
+    const ultimos8Digitos = telefonoCompleto.slice(-8); // Búsqueda flexible por los últimos 8 dígitos
 
-  const instanceName = `academia_${academiaId}`;
+    console.log(`💬 Mensaje recibido de ${telefonoCompleto}: "${text}" (Buscando coincidencia: %${ultimos8Digitos})`);
 
-  try {
-    const response = await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        number: numero,
-        text: mensaje
-      })
-    });
+    // Buscar en Supabase
+    const { data: participaciones, error } = await supabase
+      .from('torneo_participantes')
+      .select('*, torneos(*)')
+      .like('telefono_apoderado', `%${ultimos8Digitos}%`)
+      .neq('paso_bot', 'FINALIZADO')
+      .order('created_at', { ascending: false });
 
-    const data = await parseResponse(response);
-
-    if (!response.ok) {
-      throw new Error(data.message || 'Error al enviar el mensaje');
+    if (error) {
+      console.error('❌ Error buscando convocatoria en DB:', error);
+      return;
     }
 
-    return data;
-  } catch (error) {
-    console.error(`❌ Error enviando mensaje (Academia ${academiaId}):`, error.message);
-    throw error;
-  }
-};
+    if (!participaciones || participaciones.length === 0) {
+      console.log(`⚠️ No hay convocatorias pendientes en DB para el número con final %${ultimos8Digitos}`);
+      return;
+    }
 
-module.exports = {
-  conectarAcademia,
-  enviarMensaje,
-  configurarWebhook
-};
+    const participacion = participaciones[0];
+    const torneo = participacion.torneos;
+    let respuesta = '';
+    let nuevoPaso = participacion.paso_bot;
+    let updateData = {};
+
+    console.log(`🎯 Convocatoria encontrada ID: ${participacion.id} | Torneo: "${torneo?.nombre}" | Paso: ${participacion.paso_bot}`);
+
+    // -------------------------------------------------------------
+    // MÁQUINA DE ESTADOS DEL BOT
+    // -------------------------------------------------------------
+    if (participacion.paso_bot === 'ESPERANDO_PARTICIPACION') {
+      if (text === '1') {
+        updateData.respuesta_participacion = 'Si';
+        
+        if (torneo.permite_cuotas && torneo.costo_inscripcion > 0) {
+          nuevoPaso = 'ESPERANDO_CUOTAS';
+          const costo = Number(torneo.costo_inscripcion).toLocaleString('es-CL');
+          respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
+                      `💰 Valor inscripción: $${costo}\n\n` +
+                      `¿En cuántas cuotas deseas pagarlo?\n` +
+                      `Responde con un número del *1* al *${torneo.max_cuotas}*.`;
+        } else if (torneo.costo_inscripcion > 0) {
+          nuevoPaso = 'FINALIZADO';
+          const costo = Number(torneo.costo_inscripcion).toLocaleString('es-CL');
+          respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
+                      `💰 Valor inscripción: $${costo}\n` +
+                      `Pronto la academia te compartirá los datos para el pago.`;
+        } else {
+          nuevoPaso = 'FINALIZADO';
+          respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
+                      `El torneo es gratuito. ¡Nos vemos en la cancha! ⚽`;
+        }
+      } else if (text === '2') {
+        updateData.respuesta_participacion = 'No';
+        nuevoPaso = 'FINALIZADO';
+        respuesta = 'Entendido. 😔 Gracias por responder. ¡Nos vemos en el próximo torneo!';
+      } else {
+        respuesta = '⚠️ *Respuesta no válida*.\nPor favor responde *1* para Confirmar o *2* para Rechazar la invitación.';
+      }
+    } 
+    else if (participacion.paso_bot === 'ESPERANDO_CUOTAS') {
+      const cuotas = parseInt(text, 10);
+      if (isNaN(cuotas) || cuotas < 1 || cuotas > torneo.max_cuotas) {
+        respuesta = `⚠️ Por favor ingresa un número válido de cuotas (entre 1 y ${torneo.max_cuotas}).`;
+      } else {
+        updateData.pago_en_cuotas = cuotas > 1;
+        updateData.numero_cuotas = cuotas;
+        nuevoPaso = 'FINALIZADO';
+        respuesta = `¡Perfecto! Has registrado la participación en *${cuotas} cuota(s)*. 💳\n` +
+                    `Pronto la academia te enviará los detalles de pago. ¡Gracias!`;
+      }
+    }
+
+    // Actualizar Base de Datos
+    updateData.paso_bot = nuevoPaso;
+    const { error: errUpdate } = await supabase
+      .from('torneo_participantes')
+      .update(updateData)
+      .eq('id', participacion.id);
+
+    if (errUpdate) {
+      console.error('❌ Error al actualizar respuesta en DB:', errUpdate);
+    } else {
+      console.log(`✅ Registro actualizado con éxito: paso_bot=${nuevoPaso}, respuesta=${updateData.respuesta_participacion || 'Cuotas'}`);
+    }
+
+    // Responder por WhatsApp
+    if (respuesta) {
+      await enviarMensaje(academiaId, telefonoCompleto, respuesta);
+      console.log(`💬 Respuesta automática enviada a ${telefonoCompleto}`);
+    }
+
+  } catch (err) {
+    console.error('❌ Error crítico en Webhook:', err);
+  }
+});
+
+module.exports = router;
