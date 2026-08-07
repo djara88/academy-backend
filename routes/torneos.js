@@ -4,6 +4,9 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 
+// 🔥 Importamos la función nativa que SÍ funciona para las medallas
+const { enviarMensaje } = require('../services/whatsappService');
+
 // CREAR un nuevo torneo
 router.post('/', authMiddleware, async (req, res) => {
   try {
@@ -84,9 +87,10 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
   }
 });
 
-// 🔥 ENVIAR CONVOCATORIA MASIVA POR CATEGORÍA CON BÚSQUEDA BLINDADA DE TELÉFONOS
+// 🔥 ENVIAR CONVOCATORIA MASIVA (CON WHATSAPP FUNCIONAL Y DIRECTO)
 router.post('/:id/convocar', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user; // Necesitamos esto para Evolution API
     const torneo_id = req.params.id;
     const { jugadoresIds } = req.body;
 
@@ -94,7 +98,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'No hay jugadores para convocar.' });
     }
 
-    // 1. Obtener detalles del Torneo
     const { data: torneo, error: errTorneo } = await supabase
       .from('torneos')
       .select('*')
@@ -103,7 +106,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errTorneo || !torneo) throw new Error('No se encontró la información del torneo.');
 
-    // 2. Obtener datos de los jugadores de forma simple (evitando ambigüedad en relaciones)
     const { data: jugadores, error: errJugadores } = await supabase
       .from('jugadores')
       .select('*')
@@ -111,7 +113,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errJugadores) throw errJugadores;
 
-    // 3. Buscar los tutores/apoderados asociados
     const tutorIds = jugadores
       .map(j => j.tutor_id || j.apoderado_id || j.tutor_principal_id)
       .filter(Boolean);
@@ -128,7 +129,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
       }
     }
 
-    // 4. Registrar en la base de datos las convocatorias
     const convocatorias = jugadores.map(j => {
       const idTutor = j.tutor_id || j.apoderado_id || j.tutor_principal_id;
       const tutor = tutoresMap[idTutor];
@@ -150,13 +150,11 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errUpsert) throw errUpsert;
 
-    // 5. 🔥 DISPARAR MENSAJES DE WHATSAPP
     const costoFormateado = torneo.costo_inscripcion > 0 
       ? `$${Number(torneo.costo_inscripcion).toLocaleString('es-CL')}` 
       : 'Gratuito';
 
-    const port = process.env.PORT || 8080;
-
+    // Disparar WhatsApp a cada jugador
     for (const jugador of jugadores) {
       const idTutor = jugador.tutor_id || jugador.apoderado_id || jugador.tutor_principal_id;
       const tutor = tutoresMap[idTutor];
@@ -183,26 +181,15 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
         `2️⃣ Para *RECHAZAR* la invitación.`;
 
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/api/whatsapp/enviar`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            number: numLimpio,
-            message: mensajeTexto
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
+        // 🔥 Usamos exactamente la misma función que usas para las medallas
+        await enviarMensaje(academia_id, numLimpio, mensajeTexto);
         console.log(`✅ WhatsApp de convocatoria enviado a ${jugador.nombre} (${numLimpio})`);
-      } catch (errApi) {
-        console.error(`❌ Error al enviar WhatsApp a ${jugador.nombre}:`, errApi.message);
+      } catch (errWs) {
+        console.error(`❌ Error al enviar WhatsApp a ${jugador.nombre}:`, errWs.message);
       }
     }
 
-    res.json({ success: true, message: 'Convocatorias guardadas y mensajes enviados por WhatsApp.' });
+    res.json({ success: true, message: 'Convocatorias guardadas e invitaciones de WhatsApp enviadas con éxito.' });
   } catch (error) {
     console.error('❌ Error al convocar:', error);
     res.status(500).json({ success: false, error: error.message });
