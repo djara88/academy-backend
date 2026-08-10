@@ -5,7 +5,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
-// 1. CREAR PARTIDO (Torneo o Amistoso con Categoría)
+// 1. CREAR PARTIDO (Torneo o Amistoso)
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -19,6 +19,7 @@ router.post('/', authMiddleware, async (req, res) => {
       ubicacion, 
       link_maps, 
       color_uniforme,
+      condicion, // 👈 Local o Visita
       cobra_arbitraje,
       monto_arbitraje_jugador
     } = req.body;
@@ -36,6 +37,7 @@ router.post('/', authMiddleware, async (req, res) => {
         ubicacion: ubicacion || '',
         link_maps: link_maps || '',
         color_uniforme: color_uniforme || 'Titular',
+        condicion: condicion || 'Local',
         cobra_arbitraje: cobra_arbitraje || false,
         monto_arbitraje_jugador: cobra_arbitraje ? (monto_arbitraje_jugador || 0) : 0,
         estado: 'Programado'
@@ -81,7 +83,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// 3. EDITAR UN PARTIDO EXISTENTE 🔥
+// 3. EDITAR UN PARTIDO EXISTENTE
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
     const { 
@@ -94,6 +96,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
       ubicacion, 
       link_maps, 
       color_uniforme,
+      condicion,
       cobra_arbitraje,
       monto_arbitraje_jugador,
       estado
@@ -111,6 +114,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
         ubicacion: ubicacion || '',
         link_maps: link_maps || '',
         color_uniforme: color_uniforme || 'Titular',
+        condicion: condicion || 'Local',
         cobra_arbitraje: cobra_arbitraje || false,
         monto_arbitraje_jugador: cobra_arbitraje ? (monto_arbitraje_jugador || 0) : 0,
         ...(estado && { estado })
@@ -127,7 +131,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 4. ELIMINAR UN PARTIDO 🔥
+// 4. ELIMINAR UN PARTIDO
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const { error } = await supabase
@@ -199,6 +203,7 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       .upsert(citaciones, { onConflict: 'partido_id, jugador_id', ignoreDuplicates: true });
 
     const tipoTexto = partido.es_amistoso ? '🤝 *PARTIDO AMISTOSO*' : `🏆 *TORNEO: ${partido.torneos?.nombre || ''}*`;
+    const condicionTag = partido.condicion === 'Visita' ? '✈️ *Condición:* Visita' : '🏠 *Condición:* Local';
     const arbitrajeTexto = partido.cobra_arbitraje 
       ? `\n⚖️ *Arbitraje (en cancha):* $${Number(partido.monto_arbitraje_jugador).toLocaleString('es-CL')} por jugador` 
       : '';
@@ -220,10 +225,11 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
         `${tipoTexto}\n` +
         `⚽ *Rival:* vs ${partido.rival}\n` +
         `🏷️ *Categoría:* ${partido.categorias?.nombre || 'General'}\n` +
+        `${condicionTag}\n` +
         `📅 *Fecha:* ${partido.fecha}\n` +
         `⏰ *Hora:* ${partido.hora} hrs\n` +
         `🏟️ *Lugar:* ${partido.ubicacion || 'Por confirmar'}` +
-        `${mapsTexto}` +
+        `${mapsTexto}\n` +
         `👕 *Uniforme:* ${partido.color_uniforme}` +
         `${arbitrajeTexto}\n\n` +
         `Por favor responde a este mensaje:\n` +
