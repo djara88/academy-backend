@@ -7,29 +7,47 @@ const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
 // ====================================================================
-// 1. OBTENER JUGADORES (AÑADIDAS ESTADÍSTICAS DE ASISTENCIA) 🔥
+// 1. OBTENER JUGADORES (CORREGIDA COLISIÓN DE NOMBRES EN SUPABASE) 🔥
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     
-    // Consultamos jugadores uniendo partidos y AHORA también las asistencias a entrenamientos
-    const { data, error } = await supabase
+    // 1. Consultar jugadores con categorías y estadísticas de partidos
+    const { data: jugadores, error: errJugadores } = await supabase
       .from('jugadores')
       .select(`
         *,
         jugador_categoria ( categorias ( id, nombre ) ),
-        partido_estadisticas ( goles, asistencias, tarjetas_amarillas, tarjetas_rojas, es_mvp ),
-        asistencias ( estado )
+        partido_estadisticas ( goles, asistencias, tarjetas_amarillas, tarjetas_rojas, es_mvp )
       `)
       .eq('academia_id', academia_id)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (errJugadores) throw errJugadores;
 
-    const jugadoresFormateados = data.map(jugador => {
+    const jugadorIds = (jugadores || []).map(j => j.id);
+
+    // 2. Consultar asistencias a entrenamientos de forma independiente para evitar colisión de nombres
+    let asistenciasMap = {};
+    if (jugadorIds.length > 0) {
+      const { data: asistenciasData, error: errAsist } = await supabase
+        .from('asistencias')
+        .select('jugador_id, estado')
+        .in('jugador_id', jugadorIds);
+
+      if (!errAsist && asistenciasData) {
+        asistenciasData.forEach(a => {
+          if (!asistenciasMap[a.jugador_id]) asistenciasMap[a.jugador_id] = [];
+          asistenciasMap[a.jugador_id].push(a.estado);
+        });
+      }
+    }
+
+    // 3. Formatear los resultados acumulados
+    const jugadoresFormateados = (jugadores || []).map(jugador => {
       const statsPartidos = jugador.partido_estadisticas || [];
-      const statsAsistencias = jugador.asistencias || [];
+      const estadosAsistencia = asistenciasMap[jugador.id] || [];
       
       // Cálculo acumulado de Partidos
       const totalGoles = statsPartidos.reduce((acc, curr) => acc + (curr.goles || 0), 0);
@@ -39,17 +57,16 @@ router.get('/', authMiddleware, async (req, res) => {
       const totalMvp = statsPartidos.filter(s => s.es_mvp).length;
       const partidosJugados = statsPartidos.length;
 
-      // 🔥 Cálculo acumulado de Asistencia a Entrenamientos
-      const clasesAusente = statsAsistencias.filter(a => a.estado === 'Ausente').length;
-      const clasesPresente = statsAsistencias.filter(a => a.estado === 'Presente').length;
-      const clasesJustificadas = statsAsistencias.filter(a => a.estado === 'Justificado').length;
+      // Cálculo acumulado de Asistencias a Entrenamientos
+      const clasesAusente = estadosAsistencia.filter(e => e === 'Ausente').length;
+      const clasesPresente = estadosAsistencia.filter(e => e === 'Presente').length;
+      const clasesJustificadas = estadosAsistencia.filter(e => e === 'Justificado').length;
 
       return {
         ...jugador,
-        categorias: jugador.jugador_categoria ? jugador.jugador_categoria.map(jc => jc.categorias) : [],
+        categorias: jugador.jugador_categoria ? jugador.jugador_categoria.map(jc => jc.categorias).filter(Boolean) : [],
         insignias: jugador.insignias || [],
         
-        // Objeto acumulado disponible para el perfil del alumno:
         estadisticas_acumuladas: {
           partidos_jugados: partidosJugados,
           goles: totalGoles,
@@ -57,7 +74,6 @@ router.get('/', authMiddleware, async (req, res) => {
           mvp: totalMvp,
           tarjetas_amarillas: totalAmarillas,
           tarjetas_rojas: totalRojas,
-          // Nuevos campos de entrenamiento:
           clases_ausente: clasesAusente,
           clases_presente: clasesPresente,
           clases_justificadas: clasesJustificadas
