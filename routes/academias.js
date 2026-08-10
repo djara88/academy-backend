@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
+const authMiddleware = require('../middleware/auth');
 const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -135,6 +136,49 @@ router.post('/completar-google', upload.single('logo'), async (req, res) => {
     res.status(200).json({ success: true, academia: nuevaAcademia });
   } catch (error) {
     res.status(500).json({ error: error.message || 'Error al completar el perfil' });
+  }
+});
+
+// ====================================================================
+// 🏟️ RUTAS DE CONFIGURACIÓN DE MI ACADEMIA (DÍAS, HORARIOS Y LUGAR)
+// ====================================================================
+router.get('/mi-academia', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const { data, error } = await supabase
+      .from('academias')
+      .select('*')
+      .eq('id', academia_id)
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/mi-academia', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const { nombre, dias_entrenamiento, horarios_entrenamiento, ubicacion_entrenamiento } = req.body;
+
+    const { data, error } = await supabase
+      .from('academias')
+      .update({
+        nombre,
+        dias_entrenamiento,
+        horarios_entrenamiento,
+        ubicacion_entrenamiento
+      })
+      .eq('id', academia_id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
