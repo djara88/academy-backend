@@ -5,7 +5,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
-// CREAR PARTIDO (Torneo o Amistoso con Categoría)
+// 1. CREAR PARTIDO (Torneo o Amistoso con Categoría)
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -51,7 +51,7 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
-// OBTENER PARTIDOS CON CATEGORÍAS
+// 2. OBTENER PARTIDOS CON CATEGORÍAS
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -81,13 +81,74 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// DISPARAR CITACIÓN POR WHATSAPP A LA CATEGORÍA
+// 3. EDITAR UN PARTIDO EXISTENTE 🔥
+router.put('/:id', authMiddleware, async (req, res) => {
+  try {
+    const { 
+      torneo_id, 
+      categoria_id, 
+      es_amistoso, 
+      rival, 
+      fecha, 
+      hora, 
+      ubicacion, 
+      link_maps, 
+      color_uniforme,
+      cobra_arbitraje,
+      monto_arbitraje_jugador,
+      estado
+    } = req.body;
+
+    const { data, error } = await supabase
+      .from('partidos')
+      .update({
+        torneo_id: es_amistoso ? null : (torneo_id || null),
+        categoria_id: categoria_id || null,
+        es_amistoso: es_amistoso || false,
+        rival,
+        fecha,
+        hora: hora || '00:00',
+        ubicacion: ubicacion || '',
+        link_maps: link_maps || '',
+        color_uniforme: color_uniforme || 'Titular',
+        cobra_arbitraje: cobra_arbitraje || false,
+        monto_arbitraje_jugador: cobra_arbitraje ? (monto_arbitraje_jugador || 0) : 0,
+        ...(estado && { estado })
+      })
+      .eq('id', req.params.id)
+      .select('*, torneos(nombre), categorias(nombre)')
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('❌ Error al editar partido:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 4. ELIMINAR UN PARTIDO 🔥
+router.delete('/:id', authMiddleware, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('partidos')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Partido eliminado correctamente.' });
+  } catch (error) {
+    console.error('❌ Error al eliminar partido:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 5. DISPARAR CITACIÓN POR WHATSAPP A LA CATEGORÍA
 router.post('/:id/citacion', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const partido_id = req.params.id;
 
-    // 1. Obtener detalles del Partido, Torneo y Categoría
     const { data: partido, error: errPartido } = await supabase
       .from('partidos')
       .select('*, torneos(nombre), categorias(nombre)')
@@ -97,7 +158,6 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
     if (errPartido || !partido) throw new Error('No se encontró el partido.');
     if (!partido.categoria_id) throw new Error('Este partido no tiene una categoría asignada.');
 
-    // 2. Obtener los jugadores asociados a esta categoría
     const { data: rels } = await supabase
       .from('jugador_categoria')
       .select('jugador_id')
@@ -113,7 +173,6 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       .select('*')
       .in('id', jugadorIds);
 
-    // 3. Obtener tutores para extraer teléfonos
     const tutorIds = jugadores.map(j => j.tutor_id || j.apoderado_id || j.tutor_principal_id).filter(Boolean);
     let tutoresMap = {};
     if (tutorIds.length > 0) {
@@ -121,7 +180,6 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       if (tutores) tutores.forEach(t => { tutoresMap[t.id] = t; });
     }
 
-    // 4. Registrar en la tabla partido_citaciones
     const citaciones = jugadores.map(j => {
       const idTutor = j.tutor_id || j.apoderado_id || j.tutor_principal_id;
       const tutor = tutoresMap[idTutor];
@@ -140,7 +198,6 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       .from('partido_citaciones')
       .upsert(citaciones, { onConflict: 'partido_id, jugador_id', ignoreDuplicates: true });
 
-    // 5. Enviar mensajes de WhatsApp
     const tipoTexto = partido.es_amistoso ? '🤝 *PARTIDO AMISTOSO*' : `🏆 *TORNEO: ${partido.torneos?.nombre || ''}*`;
     const arbitrajeTexto = partido.cobra_arbitraje 
       ? `\n⚖️ *Arbitraje (en cancha):* $${Number(partido.monto_arbitraje_jugador).toLocaleString('es-CL')} por jugador` 
@@ -188,7 +245,7 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
   }
 });
 
-// OBTENER ESTADO DE CITACIONES DE UN PARTIDO
+// 6. OBTENER ESTADO DE CITACIONES DE UN PARTIDO
 router.get('/:id/citaciones', authMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase
