@@ -5,23 +5,13 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
-// 1. CREAR PARTIDO (Torneo o Amistoso)
+// 1. CREAR PARTIDO
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { 
-      torneo_id, 
-      categoria_id,
-      es_amistoso, 
-      rival, 
-      fecha, 
-      hora, 
-      ubicacion, 
-      link_maps, 
-      color_uniforme,
-      condicion, // 👈 Local o Visita
-      cobra_arbitraje,
-      monto_arbitraje_jugador
+      torneo_id, categoria_id, es_amistoso, rival, fecha, hora, 
+      ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, monto_arbitraje_jugador 
     } = req.body;
 
     const { data, error } = await supabase
@@ -53,7 +43,7 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
-// 2. OBTENER PARTIDOS CON CATEGORÍAS
+// 2. OBTENER PARTIDOS
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -83,23 +73,13 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// 3. EDITAR UN PARTIDO EXISTENTE
+// 3. EDITAR PARTIDO
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
     const { 
-      torneo_id, 
-      categoria_id, 
-      es_amistoso, 
-      rival, 
-      fecha, 
-      hora, 
-      ubicacion, 
-      link_maps, 
-      color_uniforme,
-      condicion,
-      cobra_arbitraje,
-      monto_arbitraje_jugador,
-      estado
+      torneo_id, categoria_id, es_amistoso, rival, fecha, hora, 
+      ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, 
+      monto_arbitraje_jugador, estado
     } = req.body;
 
     const { data, error } = await supabase
@@ -131,7 +111,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 4. ELIMINAR UN PARTIDO
+// 4. ELIMINAR PARTIDO
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const { error } = await supabase
@@ -147,7 +127,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. DISPARAR CITACIÓN POR WHATSAPP A LA CATEGORÍA
+// 5. DISPARAR CITACIÓN POR WHATSAPP
 router.post('/:id/citacion', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -238,7 +218,6 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
 
       try {
         await enviarMensaje(academia_id, numLimpio, mensaje);
-        console.log(`✅ Citación de partido enviada a ${j.nombre} (${numLimpio})`);
       } catch (err) {
         console.error(`❌ Error enviando citación a ${j.nombre}:`, err.message);
       }
@@ -251,7 +230,7 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
   }
 });
 
-// 6. OBTENER ESTADO DE CITACIONES DE UN PARTIDO
+// 6. OBTENER CITACIONES
 router.get('/:id/citaciones', authMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -263,6 +242,150 @@ router.get('/:id/citaciones', authMiddleware, async (req, res) => {
     if (error) throw error;
     res.json({ success: true, data });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 7. OBTENER ESTADÍSTICAS DEL PARTIDO PARA EL FORMULARIO 🔥
+router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
+  try {
+    const partido_id = req.params.id;
+
+    // Obtener las citaciones confirmadas con datos del jugador
+    const { data: citaciones, error: errCit } = await supabase
+      .from('partido_citaciones')
+      .select('jugador_id, jugadores(id, nombre, foto_base64)')
+      .eq('partido_id', partido_id)
+      .eq('respuesta', 'Si');
+
+    if (errCit) throw errCit;
+
+    // Obtener estadísticas si ya fueron registradas previamente
+    const { data: stats } = await supabase
+      .from('partido_estadisticas')
+      .select('*')
+      .eq('partido_id', partido_id);
+
+    const statsMap = {};
+    if (stats) {
+      stats.forEach(s => { statsMap[s.jugador_id] = s; });
+    }
+
+    const jugadoresConStats = (citaciones || []).map(c => {
+      const st = statsMap[c.jugador_id] || {};
+      return {
+        jugador_id: c.jugadores.id,
+        nombre: c.jugadores.nombre,
+        foto_base64: c.jugadores.foto_base64,
+        goles: st.goles || 0,
+        asistencias: st.asistencias || 0,
+        tarjetas_amarillas: st.tarjetas_amarillas || 0,
+        tarjetas_rojas: st.tarjetas_rojas || 0,
+        es_mvp: st.es_mvp || false
+      };
+    });
+
+    res.json({ success: true, data: jugadoresConStats });
+  } catch (error) {
+    console.error('❌ Error al obtener estadísticas:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 8. GUARDAR RESULTADO, ESTADÍSTICAS Y NOTIFICAR POR WHATSAPP 🔥
+router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const partido_id = req.params.id;
+    const { goles_favor, goles_contra, estadisticas, enviarWhatsapp } = req.body;
+
+    // 1. Actualizar el marcador y estado del partido
+    const { data: partido, error: errP } = await supabase
+      .from('partidos')
+      .update({
+        goles_favor: Number(goles_favor) || 0,
+        goles_contra: Number(goles_contra) || 0,
+        estado: 'Jugado'
+      })
+      .eq('id', partido_id)
+      .select('*, torneos(nombre), categorias(nombre)')
+      .single();
+
+    if (errP) throw errP;
+
+    // 2. Guardar / Actualizar las estadísticas individuales
+    if (estadisticas && estadisticas.length > 0) {
+      const statsToUpsert = estadisticas.map(st => ({
+        partido_id,
+        jugador_id: st.jugador_id,
+        goles: st.goles || 0,
+        asistencias: st.asistencias || 0,
+        tarjetas_amarillas: st.tarjetas_amarillas || 0,
+        tarjetas_rojas: st.tarjetas_rojas || 0,
+        es_mvp: st.es_mvp || false
+      }));
+
+      const { error: errUpsert } = await supabase
+        .from('partido_estadisticas')
+        .upsert(statsToUpsert, { onConflict: 'partido_id, jugador_id' });
+
+      if (errUpsert) throw errUpsert;
+    }
+
+    // 3. Enviar notificación por WhatsApp si el usuario lo activó
+    if (enviarWhatsapp) {
+      // Buscar tutores de los jugadores citados que confirmaron
+      const { data: citaciones } = await supabase
+        .from('partido_citaciones')
+        .select('telefono_apoderado, jugadores(nombre)')
+        .eq('partido_id', partido_id)
+        .eq('respuesta', 'Si');
+
+      const mvp = estadisticas.find(s => s.es_mvp);
+      const goleadores = estadisticas.filter(s => s.goles > 0);
+      const asistentes = estadisticas.filter(s => s.asistencias > 0);
+
+      // Formatear texto de destacados
+      let goleadoresTxt = goleadores.length > 0 
+        ? `\n⚽ *Goles:* ` + goleadores.map(g => `${g.nombre} (${g.goles})`).join(', ')
+        : '';
+
+      let asistentesTxt = asistentes.length > 0 
+        ? `\n🎯 *Asistencias:* ` + asistentes.map(a => `${a.nombre} (${a.asistencias})`).join(', ')
+        : '';
+
+      let mvpTxt = mvp ? `\n🌟 *Jugador del Partido (MVP):* ${mvp.nombre}` : '';
+
+      const resultadoEmoji = goles_favor > goles_contra ? '🎉 ¡VICTORIA!' : (goles_favor === goles_contra ? '🤝 EMPATE' : '💪 ¡A SEGUIR MEJORANDO!');
+
+      const mensajeGeneral = `📊 *RESULTADO FINAL DEL PARTIDO*\n\n` +
+        `⚽ *Nuestra Academia ${goles_favor} - ${goles_contra} ${partido.rival}*\n` +
+        `🏷️ *Categoría:* ${partido.categorias?.nombre || 'General'}\n` +
+        `${resultadoEmoji}\n` +
+        `${mvpTxt}` +
+        `${goleadoresTxt}` +
+        `${asistenciasTxt}\n\n` +
+        `¡Felicitaciones a todos los alumnos por su entrega en la cancha! ⚽👏`;
+
+      if (citaciones && citaciones.length > 0) {
+        for (const c of citaciones) {
+          if (!c.telefono_apoderado) continue;
+
+          let numLimpio = c.telefono_apoderado.replace(/\D/g, '');
+          if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;
+
+          try {
+            await enviarMensaje(academia_id, numLimpio, mensajeGeneral);
+          } catch (errWs) {
+            console.error(`❌ Error enviando resumen WhatsApp a ${numLimpio}:`, errWs.message);
+          }
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'Resultado guardado e informe procesado correctamente.' });
+  } catch (error) {
+    console.error('❌ Error al guardar resultado:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
