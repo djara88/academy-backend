@@ -31,7 +31,10 @@ router.post('/', authMiddleware, async (req, res) => {
       .select()
       .single();
 
-    if (errEnt) throw errEnt;
+    if (errEnt) {
+      console.error('❌ Error insertando entrenamiento:', errEnt);
+      throw errEnt;
+    }
 
     if (estado === 'Realizado' && lista_asistencia && lista_asistencia.length > 0) {
       const records = lista_asistencia.map(a => ({
@@ -44,7 +47,10 @@ router.post('/', authMiddleware, async (req, res) => {
         .from('asistencias')
         .upsert(records, { onConflict: 'entrenamiento_id, jugador_id' });
 
-      if (errAsist) throw errAsist;
+      if (errAsist) {
+        console.error('❌ Error guardando asistencias:', errAsist);
+        throw errAsist;
+      }
     }
 
     res.json({ success: true, data: ent });
@@ -55,7 +61,7 @@ router.post('/', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. OBTENER MÉTRICAS (GLOBAL, CATEGORÍA E INDIVIDUAL) 🔥
+// 2. OBTENER MÉTRICAS Y GRÁFICOS DEL MES
 // ====================================================================
 router.get('/metricas', authMiddleware, async (req, res) => {
   try {
@@ -75,7 +81,10 @@ router.get('/metricas', authMiddleware, async (req, res) => {
       .gte('fecha', fechaInicio)
       .lte('fecha', fechaFin);
 
-    if (errEnt) throw errEnt;
+    if (errEnt) {
+      console.error('❌ Error consultando entrenamientos en métricas:', errEnt);
+      throw errEnt;
+    }
 
     const listaEntrenamientos = entrenamientos || [];
     const entIds = listaEntrenamientos.map(e => e.id);
@@ -110,7 +119,7 @@ router.get('/metricas', authMiddleware, async (req, res) => {
             if (a.estado === 'Presente') catStats[cat.catId].presentes++;
           }
 
-          // Por Jugador (Individual)
+          // Por Jugador
           if (a.jugadores) {
             if (!jugStats[a.jugador_id]) jugStats[a.jugador_id] = { nombre: a.jugadores.nombre, presentes: 0, total: 0 };
             jugStats[a.jugador_id].total++;
@@ -154,7 +163,7 @@ router.get('/metricas', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 3. ENVIAR REPORTE MENSUAL A APODERADOS POR WHATSAPP
+// 3. ENVIAR REPORTE MENSUAL A APODERADOS POR WHATSAPP (CORREGIDO) 🔥
 // ====================================================================
 router.post('/reporte-mensual', authMiddleware, async (req, res) => {
   try {
@@ -182,9 +191,10 @@ router.post('/reporte-mensual', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'No hay clases realizadas este mes para esta categoría.' });
     }
 
+    // 🛑 AHORA SACAMOS EL 'telefono' de jugadores PARA EVITAR EL ERROR DE COLUMNA
     const { data: asistencias, error: errAsist } = await supabase
       .from('asistencias')
-      .select('jugador_id, estado, jugadores(nombre, tutor_id, telefono)')
+      .select('jugador_id, estado, jugadores(nombre, tutor_id)')
       .in('entrenamiento_id', entIds);
 
     if (errAsist) throw errAsist;
@@ -196,7 +206,6 @@ router.post('/reporte-mensual', authMiddleware, async (req, res) => {
         reportePorJugador[a.jugador_id] = { 
           nombre: a.jugadores.nombre, 
           tutor_id: a.jugadores.tutor_id, 
-          telefono: a.jugadores.telefono,
           presentes: 0, ausentes: 0, justificados: 0 
         };
       }
@@ -216,9 +225,10 @@ router.post('/reporte-mensual', authMiddleware, async (req, res) => {
       
       let mensajeExtra = porcentaje >= 80 ? '🌟 ¡Excelente compromiso!' : '💪 ¡Vamos por más asistencia el próximo mes!';
 
-      let telefonoFinal = data.telefono;
-      let nombreTutor = 'apoderado';
+      let telefonoFinal = null;
+      let nombreTutor = 'Apoderado';
 
+      // 🛑 BUSCAMOS EL TELÉFONO DIRECTAMENTE AL TUTOR
       if (data.tutor_id) {
         const { data: tutor } = await supabase.from('tutores').select('telefono, nombre_completo').eq('id', data.tutor_id).single();
         if (tutor) {
