@@ -70,17 +70,54 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// OBTENER los participantes ya convocados a un torneo
+// OBTENER los participantes ya convocados a un torneo (CON FILTRO OPCIONAL DE CATEGORÍA) 🔥
 router.get('/:id/participantes', authMiddleware, async (req, res) => {
   try {
+    const torneo_id = req.params.id;
+    const { categoria_id } = req.query; // 👈 Captura de categoría si viene en la consulta
+
     const { data, error } = await supabase
       .from('torneo_participantes')
-      .select('*, jugadores(nombre, foto_base64)')
-      .eq('torneo_id', req.params.id)
+      .select(`
+        *,
+        jugadores (
+          id,
+          nombre,
+          foto_base64,
+          jugador_categoria (
+            categoria_id,
+            categorias ( id, nombre )
+          )
+        )
+      `)
+      .eq('torneo_id', torneo_id)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json({ success: true, data });
+
+    // Formatear la estructura para aplanar las categorías del jugador
+    let participantesFormateados = data.map(p => {
+      const cats = p.jugadores?.jugador_categoria
+        ? p.jugadores.jugador_categoria.map(jc => jc.categorias).filter(Boolean)
+        : [];
+
+      return {
+        ...p,
+        jugadores: {
+          ...p.jugadores,
+          categorias: cats
+        }
+      };
+    });
+
+    // Filtrar si se proporcionó un ID de categoría
+    if (categoria_id) {
+      participantesFormateados = participantesFormateados.filter(p =>
+        p.jugadores?.categorias?.some(c => c.id === categoria_id)
+      );
+    }
+
+    res.json({ success: true, data: participantesFormateados });
   } catch (error) {
     console.error('❌ Error al obtener participantes:', error);
     res.status(500).json({ success: false, error: error.message });
