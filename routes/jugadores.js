@@ -7,19 +7,20 @@ const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
 // ====================================================================
-// 1. OBTENER JUGADORES (CON CATEGORÍAS, INSIGNIAS Y ESTADÍSTICAS ACUMULADAS) 🔥
+// 1. OBTENER JUGADORES (AÑADIDAS ESTADÍSTICAS DE ASISTENCIA) 🔥
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     
-    // Consultamos jugadores uniendo las categorías y sus estadísticas históricas de partidos
+    // Consultamos jugadores uniendo partidos y AHORA también las asistencias a entrenamientos
     const { data, error } = await supabase
       .from('jugadores')
       .select(`
         *,
         jugador_categoria ( categorias ( id, nombre ) ),
-        partido_estadisticas ( goles, asistencias, tarjetas_amarillas, tarjetas_rojas, es_mvp )
+        partido_estadisticas ( goles, asistencias, tarjetas_amarillas, tarjetas_rojas, es_mvp ),
+        asistencias ( estado )
       `)
       .eq('academia_id', academia_id)
       .order('created_at', { ascending: false });
@@ -27,28 +28,39 @@ router.get('/', authMiddleware, async (req, res) => {
     if (error) throw error;
 
     const jugadoresFormateados = data.map(jugador => {
-      const stats = jugador.partido_estadisticas || [];
+      const statsPartidos = jugador.partido_estadisticas || [];
+      const statsAsistencias = jugador.asistencias || [];
       
-      // Cálculo acumulado en tiempo real
-      const totalGoles = stats.reduce((acc, curr) => acc + (curr.goles || 0), 0);
-      const totalAsistencias = stats.reduce((acc, curr) => acc + (curr.asistencias || 0), 0);
-      const totalAmarillas = stats.reduce((acc, curr) => acc + (curr.tarjetas_amarillas || 0), 0);
-      const totalRojas = stats.reduce((acc, curr) => acc + (curr.tarjetas_rojas || 0), 0);
-      const totalMvp = stats.filter(s => s.es_mvp).length;
-      const partidosJugados = stats.length;
+      // Cálculo acumulado de Partidos
+      const totalGoles = statsPartidos.reduce((acc, curr) => acc + (curr.goles || 0), 0);
+      const totalAsistencias = statsPartidos.reduce((acc, curr) => acc + (curr.asistencias || 0), 0);
+      const totalAmarillas = statsPartidos.reduce((acc, curr) => acc + (curr.tarjetas_amarillas || 0), 0);
+      const totalRojas = statsPartidos.reduce((acc, curr) => acc + (curr.tarjetas_rojas || 0), 0);
+      const totalMvp = statsPartidos.filter(s => s.es_mvp).length;
+      const partidosJugados = statsPartidos.length;
+
+      // 🔥 Cálculo acumulado de Asistencia a Entrenamientos
+      const clasesAusente = statsAsistencias.filter(a => a.estado === 'Ausente').length;
+      const clasesPresente = statsAsistencias.filter(a => a.estado === 'Presente').length;
+      const clasesJustificadas = statsAsistencias.filter(a => a.estado === 'Justificado').length;
 
       return {
         ...jugador,
         categorias: jugador.jugador_categoria ? jugador.jugador_categoria.map(jc => jc.categorias) : [],
         insignias: jugador.insignias || [],
-        // 🔥 Objeto acumulado que estará disponible en el perfil del jugador:
+        
+        // Objeto acumulado disponible para el perfil del alumno:
         estadisticas_acumuladas: {
           partidos_jugados: partidosJugados,
           goles: totalGoles,
           asistencias: totalAsistencias,
           mvp: totalMvp,
           tarjetas_amarillas: totalAmarillas,
-          tarjetas_rojas: totalRojas
+          tarjetas_rojas: totalRojas,
+          // Nuevos campos de entrenamiento:
+          clases_ausente: clasesAusente,
+          clases_presente: clasesPresente,
+          clases_justificadas: clasesJustificadas
         }
       };
     });
@@ -276,7 +288,7 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res
 });
 
 // ====================================================================
-// 🔟 ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP AUTOMÁTICO)
+// 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP AUTOMÁTICO)
 // ====================================================================
 router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
   try {
@@ -288,7 +300,6 @@ router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
     if (estado_financiero !== undefined) updateData.estado_financiero = estado_financiero;
     if (alerta_medica !== undefined) updateData.alerta_medica = alerta_medica;
     
-    // Si vienen insignias, comprobamos si se agregó una nueva
     let nuevaInsigniaDetectada = null;
     if (insignias !== undefined) {
       updateData.insignias = insignias;
@@ -297,21 +308,17 @@ router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
       
       const cantidadAntes = jugadorAntiguo?.insignias ? jugadorAntiguo.insignias.length : 0;
       if (insignias.length > cantidadAntes) {
-        // La primera de la lista es la más reciente agregada por el frontend
         nuevaInsigniaDetectada = insignias[0]; 
       }
     }
 
-    // Actualizamos el registro en Supabase
     const { data, error } = await supabase.from('jugadores').update(updateData).eq('id', jugador_id).select().single();
     if (error) throw error;
 
-    // Si detectamos un nuevo reconocimiento y el jugador tiene tutor, enviamos el WhatsApp
     if (nuevaInsigniaDetectada && data?.tutor_id) {
       supabase.from('tutores').select('telefono, nombre_completo').eq('id', data.tutor_id).single()
         .then(({ data: tutor }) => {
           if (tutor && tutor.telefono) {
-            // Limpieza del número telefónico (remueve espacios, guiones y signos)
             const telefonoLimpio = tutor.telefono.replace(/\D/g, '');
             const nombreInsignia = nuevaInsigniaDetectada.nombre || nuevaInsigniaDetectada;
             
