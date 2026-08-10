@@ -1,11 +1,12 @@
-// routes/entrenamientos.js
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
-// 1. REGISTRAR UN ENTRENAMIENTO Y SU LISTA DE ASISTENCIA
+// ====================================================================
+// 1. REGISTRAR UN ENTRENAMIENTO Y SU LISTA DE ASISTENCIA (INDIVIDUAL O TODAS LAS CATEGORÍAS)
+// ====================================================================
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -15,6 +16,44 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Falta la fecha o la categoría.' });
     }
 
+    // SUSPENSIÓN MASIVA PARA TODA LA ESCUELA (TODAS LAS CATEGORÍAS)
+    if (categoria_id === 'TODAS') {
+      const { data: cats, error: errCats } = await supabase
+        .from('categorias')
+        .select('id')
+        .eq('academia_id', academia_id);
+
+      if (errCats) throw errCats;
+      if (!cats || cats.length === 0) {
+        return res.status(400).json({ success: false, error: 'No hay categorías registradas en la academia.' });
+      }
+
+      const registrosMasivos = cats.map(c => ({
+        academia_id,
+        categoria_id: c.id,
+        fecha,
+        hora: hora || '17:00',
+        lugar: lugar || '',
+        estado: estado || 'Cancelado',
+        es_recuperacion: false,
+        motivo_cancelacion: motivo_cancelacion || 'Suspensión General de la Escuela',
+        clase_recuperada_id: null
+      }));
+
+      const { data: entCreados, error: errBulk } = await supabase
+        .from('entrenamientos')
+        .insert(registrosMasivos)
+        .select();
+
+      if (errBulk) throw errBulk;
+
+      return res.json({ 
+        success: true, 
+        message: `Se registró la suspensión para las ${entCreados.length} categorías de la escuela.` 
+      });
+    }
+
+    // REGISTRO PARA UNA SOLA CATEGORÍA
     const { data: ent, error: errEnt } = await supabase
       .from('entrenamientos')
       .insert([{
@@ -54,7 +93,9 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 2. OBTENER CLASES SUSPENDIDAS PENDIENTES DE RECUPERACIÓN
+// ====================================================================
 router.get('/suspendidas', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -72,7 +113,9 @@ router.get('/suspendidas', authMiddleware, async (req, res) => {
   }
 });
 
-// 3. REAGENDAR Y NOTIFICAR CLASE DE RECUPERACIÓN POR WHATSAPP 🔥
+// ====================================================================
+// 3. REAGENDAR Y NOTIFICAR CLASE DE RECUPERACIÓN POR WHATSAPP
+// ====================================================================
 router.post('/reagendar-notificar', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -82,7 +125,6 @@ router.post('/reagendar-notificar', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Faltan datos requeridos (categoría, fecha o hora).' });
     }
 
-    // A. Registrar la nueva clase de recuperación
     const { data: entRecuperacion, error: errEnt } = await supabase
       .from('entrenamientos')
       .insert([{
@@ -100,7 +142,6 @@ router.post('/reagendar-notificar', authMiddleware, async (req, res) => {
 
     if (errEnt) throw errEnt;
 
-    // B. Obtener los apoderados de los jugadores de esta categoría
     const { data: rels } = await supabase
       .from('jugador_categoria')
       .select('jugador_id')
@@ -158,7 +199,9 @@ router.post('/reagendar-notificar', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 4. OBTENER MÉTRICAS Y GRÁFICOS DEL MES
+// ====================================================================
 router.get('/metricas', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -252,7 +295,9 @@ router.get('/metricas', authMiddleware, async (req, res) => {
   }
 });
 
+// ====================================================================
 // 5. ENVIAR REPORTE MENSUAL A APODERADOS POR WHATSAPP
+// ====================================================================
 router.post('/reporte-mensual', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
