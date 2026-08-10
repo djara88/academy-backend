@@ -116,7 +116,8 @@ const partidoRoutes = require('./routes/partidos');
 const academiaRoutes = require('./routes/academias');
 const matriculaRoutes = require('./routes/matriculas');
 const whatsappRoutes = require('./routes/whatsapp');
-const finanzasRoutes = require('./routes/finanzas'); // 👈 NUEVA IMPORTACIÓN
+const finanzasRoutes = require('./routes/finanzas');
+const entrenamientosRoutes = require('./routes/entrenamientos'); // 👈 NUEVA IMPORTACIÓN
 
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
@@ -127,7 +128,8 @@ app.use('/api/partidos', partidoRoutes);
 app.use('/api/academias', academiaRoutes);
 app.use('/api/matriculas', matriculaRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
-app.use('/api/finanzas', finanzasRoutes); // 👈 NUEVA RUTA REGISTRADA
+app.use('/api/finanzas', finanzasRoutes);
+app.use('/api/entrenamientos', entrenamientosRoutes); // 👈 NUEVA RUTA REGISTRADA
 
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
