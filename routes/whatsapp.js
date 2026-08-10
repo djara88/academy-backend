@@ -104,7 +104,88 @@ router.post('/webhook/:academiaId', async (req, res) => {
 
     console.log(`💬 Mensaje de ${telefonoLimpio}: "${text}" (Buscando coincidencia con %${ultimos8Digitos})`);
 
-    // Consulta flexible en Supabase (Array de resultados para evitar caídas por .single())
+    // =========================================================
+    // ⚽ BLOQUE A: COMPROBAR CITACIONES DE PARTIDOS PRIMERO
+    // =========================================================
+    const { data: citaciones, error: errCitacion } = await supabase
+      .from('partido_citaciones')
+      .select('*, partidos(*)')
+      .like('telefono_apoderado', `%${ultimos8Digitos}%`)
+      .neq('paso_bot', 'FINALIZADO')
+      .order('created_at', { ascending: false });
+
+    if (!errCitacion && citaciones && citaciones.length > 0) {
+      const citacion = citaciones[0];
+      const partido = citacion.partidos;
+      let respuestaPart = '';
+      let nuevoPasoPart = citacion.paso_bot;
+      let updateDataPart = {};
+
+      console.log(`🎯 Citación de Partido hallada (ID: ${citacion.id}) | Rival: "vs ${partido?.rival}" | Paso: ${citacion.paso_bot}`);
+
+      if (citacion.paso_bot === 'ESPERANDO_CITACION') {
+        if (text === '1') {
+          updateDataPart.respuesta = 'Si';
+          nuevoPasoPart = 'FINALIZADO';
+          
+          const arbitrajeStr = partido?.cobra_arbitraje 
+            ? `\n⚖️ Recuerda llevar $${Number(partido.monto_arbitraje_jugador).toLocaleString('es-CL')} para la cuota de arbitraje en cancha.` 
+            : '';
+
+          respuestaPart = `¡Excelente! 🎉 Has confirmado asistencia para el partido vs *${partido?.rival || 'el rival'}*.${arbitrajeStr}\n\n¡Nos vemos en la cancha! ⚽`;
+        } else if (text === '2') {
+          updateDataPart.respuesta = 'No';
+          nuevoPasoPart = 'ESPERANDO_MOTIVO';
+          
+          respuestaPart = `Entendido. 😔 Por favor indica el número del motivo de la ausencia para informar al cuerpo técnico:\n\n` +
+                          `1️⃣ Enfermedad / Lesión 🏥\n` +
+                          `2️⃣ Compromisos familiares 👨‍👩‍👧\n` +
+                          `3️⃣ Estudios / Colegio 📚\n` +
+                          `4️⃣ Otro motivo ⚽`;
+        } else {
+          respuestaPart = '⚠️ *Respuesta no válida*.\nPor favor responde *1* para Confirmar o *2* para Informar Ausencia.';
+        }
+      } 
+      else if (citacion.paso_bot === 'ESPERANDO_MOTIVO') {
+        const mapaMotivos = {
+          '1': 'Enfermedad / Lesión 🏥',
+          '2': 'Compromisos familiares 👨‍👩‍👧',
+          '3': 'Estudios / Colegio 📚',
+          '4': 'Otro motivo ⚽'
+        };
+
+        if (mapaMotivos[text]) {
+          updateDataPart.motivo_ausencia = mapaMotivos[text];
+          nuevoPasoPart = 'FINALIZADO';
+          respuestaPart = `Gracias por avisarnos. Registramos el motivo: *${mapaMotivos[text]}*.\n¡Que todo salga bien y nos vemos en la próxima fecha!`;
+        } else {
+          respuestaPart = '⚠️ Por favor responde con un número del 1 al 4 para registrar el motivo de la inasistencia.';
+        }
+      }
+
+      updateDataPart.paso_bot = nuevoPasoPart;
+      const { error: errUpdateCit } = await supabase
+        .from('partido_citaciones')
+        .update(updateDataPart)
+        .eq('id', citacion.id);
+
+      if (errUpdateCit) {
+        console.error('❌ Error actualizando la citación en BD:', errUpdateCit);
+      } else {
+        console.log(`✅ Citación actualizada en BD -> paso_bot: ${nuevoPasoPart}, respuesta: ${updateDataPart.respuesta || 'Motivo registrado'}`);
+      }
+
+      if (respuestaPart) {
+        await enviarMensaje(academiaId, telefonoLimpio, respuestaPart);
+        console.log(`💬 Respuesta de citación enviada a ${telefonoLimpio}`);
+      }
+
+      return; // Finalizamos aquí para no entrar al flujo de Torneos
+    }
+
+    // =========================================================
+    // 🏆 BLOQUE B: CONVOCATORIAS DE TORNEOS (INTACTO)
+    // =========================================================
     const { data: participaciones, error } = await supabase
       .from('torneo_participantes')
       .select('*, torneos(*)')
@@ -118,7 +199,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
     }
 
     if (!participaciones || participaciones.length === 0) {
-      console.log(`⚠️ No hay convocatorias pendientes para el número finalizado en %${ultimos8Digitos}`);
+      console.log(`⚠️ No hay convocatorias ni citaciones pendientes para el número finalizado en %${ultimos8Digitos}`);
       return;
     }
 
@@ -130,9 +211,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
 
     console.log(`🎯 Convocatoria hallada (ID: ${participacion.id}) | Torneo: "${torneo?.nombre}" | Paso actual: ${participacion.paso_bot}`);
 
-    // =========================================================
-    // 🧠 MÁQUINA DE ESTADOS
-    // =========================================================
+    // MÁQUINA DE ESTADOS TORNEOS
     if (participacion.paso_bot === 'ESPERANDO_PARTICIPACION') {
       if (text === '1') {
         updateData.respuesta_participacion = 'Si';
@@ -147,12 +226,12 @@ router.post('/webhook/:academiaId', async (req, res) => {
         } else if (torneo.costo_inscripcion > 0) {
           nuevoPaso = 'FINALIZADO';
           const costoStr = Number(torneo.costo_inscripcion).toLocaleString('es-CL');
-          respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
+          respuesta = `¡Excelente! 🎉 Has confirmed asistencia para *${torneo.nombre}*.\n\n` +
                       `💰 Valor inscripción: $${costoStr}\n` +
                       `Pronto la academia te enviará los datos para la transferencia.`;
         } else {
           nuevoPaso = 'FINALIZADO';
-          respuesta = `¡Excelente! 🎉 Has confirmed asistencia para *${torneo.nombre}*.\n\n` +
+          respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
                       `El torneo es gratuito. ¡Nos vemos en la cancha! ⚽`;
         }
       } else if (text === '2') {
