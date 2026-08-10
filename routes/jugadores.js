@@ -1,29 +1,57 @@
+// routes/jugadores.js
 require('dotenv').config();
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { enviarMensaje } = require('../services/whatsappService'); // 👈 Importación corregida del servicio
+const { enviarMensaje } = require('../services/whatsappService');
 
 // ====================================================================
-// 1. OBTENER JUGADORES (CON SUS CATEGORÍAS E INSIGNIAS)
+// 1. OBTENER JUGADORES (CON CATEGORÍAS, INSIGNIAS Y ESTADÍSTICAS ACUMULADAS) 🔥
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    
+    // Consultamos jugadores uniendo las categorías y sus estadísticas históricas de partidos
     const { data, error } = await supabase
       .from('jugadores')
-      .select(`*, jugador_categoria ( categorias ( id, nombre ) )`)
+      .select(`
+        *,
+        jugador_categoria ( categorias ( id, nombre ) ),
+        partido_estadisticas ( goles, asistencias, tarjetas_amarillas, tarjetas_rojas, es_mvp )
+      `)
       .eq('academia_id', academia_id)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
 
-    const jugadoresFormateados = data.map(jugador => ({
-      ...jugador,
-      categorias: jugador.jugador_categoria.map(jc => jc.categorias),
-      insignias: jugador.insignias || []
-    }));
+    const jugadoresFormateados = data.map(jugador => {
+      const stats = jugador.partido_estadisticas || [];
+      
+      // Cálculo acumulado en tiempo real
+      const totalGoles = stats.reduce((acc, curr) => acc + (curr.goles || 0), 0);
+      const totalAsistencias = stats.reduce((acc, curr) => acc + (curr.asistencias || 0), 0);
+      const totalAmarillas = stats.reduce((acc, curr) => acc + (curr.tarjetas_amarillas || 0), 0);
+      const totalRojas = stats.reduce((acc, curr) => acc + (curr.tarjetas_rojas || 0), 0);
+      const totalMvp = stats.filter(s => s.es_mvp).length;
+      const partidosJugados = stats.length;
+
+      return {
+        ...jugador,
+        categorias: jugador.jugador_categoria ? jugador.jugador_categoria.map(jc => jc.categorias) : [],
+        insignias: jugador.insignias || [],
+        // 🔥 Objeto acumulado que estará disponible en el perfil del jugador:
+        estadisticas_acumuladas: {
+          partidos_jugados: partidosJugados,
+          goles: totalGoles,
+          asistencias: totalAsistencias,
+          mvp: totalMvp,
+          tarjetas_amarillas: totalAmarillas,
+          tarjetas_rojas: totalRojas
+        }
+      };
+    });
 
     res.json({ success: true, data: jugadoresFormateados });
   } catch (error) {
@@ -248,7 +276,7 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res
 });
 
 // ====================================================================
-// 🔥 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP AUTOMÁTICO)
+// 🔟 ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP AUTOMÁTICO)
 // ====================================================================
 router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
   try {
