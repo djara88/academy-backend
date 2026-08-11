@@ -19,7 +19,7 @@ const esTallaValidaApoderado = (talla) => {
 };
 
 // ====================================================================
-// 1. OBTENER TODO EL MÓDULO (CON PURGA AUTOMÁTICA DE REGISTROS 'NO DESEA') 🔥
+// 1. OBTENER TODO EL MÓDULO (CON PURGA AUTOMÁTICA DE REGISTROS 'NO DESEA')
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -34,7 +34,7 @@ router.get('/', authMiddleware, async (req, res) => {
     let pedidos = resPedidos.data || [];
     const jugadores = resJugadores.data || [];
 
-    // 🔥 A. PURGA AUTOMÁTICA DE REGISTROS ANTIGUOS INVÁLIDOS EN BD
+    // Purga de registros inválidos
     const idsAEliminar = pedidos
       .filter(p => p.prenda_nombre && p.prenda_nombre.toLowerCase().includes('apoderado') && !esTallaValidaApoderado(p.talla))
       .map(p => p.id);
@@ -44,7 +44,7 @@ router.get('/', authMiddleware, async (req, res) => {
       pedidos = pedidos.filter(p => !idsAEliminar.includes(p.id));
     }
 
-    // B. AUTO-SINCRONIZACIÓN: Crear solo si la talla del apoderado ES VÁLIDA y no existía
+    // Auto-sincronización de apoderados válidos
     const nuevosPedidosApoderados = [];
     for (const jug of jugadores) {
       if (esTallaValidaApoderado(jug.talla_apoderado)) {
@@ -78,7 +78,7 @@ router.get('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // C. Agrupación consolidada para el Reporte del Taller
+    // Agrupación consolidada para el Reporte del Taller
     const conteoTaller = {};
     pedidos.forEach(p => {
       const esTaller = !p.prendas_catalogo || p.prendas_catalogo.tipo_operacion === 'Taller';
@@ -106,7 +106,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. CREAR PRENDA EN EL CATÁLOGO (STOCK O TALLER)
+// 2. CREAR PRENDA EN EL CATÁLOGO
 // ====================================================================
 router.post('/catalogo', authMiddleware, async (req, res) => {
   try {
@@ -135,7 +135,50 @@ router.post('/catalogo', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 3. ASIGNAR PRENDA A ALUMNO Y DESCONTAR STOCK SI APLICA
+// 3. EDITAR PRENDA DEL CATÁLOGO 🔥
+// ====================================================================
+router.put('/catalogo/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { nombre, precio, aplica_numero, aplica_nombre_estampado, tipo_operacion, stock_disponible } = req.body;
+
+    const { data, error } = await supabase
+      .from('prendas_catalogo')
+      .update({
+        nombre,
+        precio: Number(precio) || 0,
+        aplica_numero: Boolean(aplica_numero),
+        aplica_nombre_estampado: Boolean(aplica_nombre_estampado),
+        tipo_operacion: tipo_operacion || 'Taller',
+        stock_disponible: tipo_operacion === 'Stock' ? (Number(stock_disponible) || 0) : 0
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 4. ELIMINAR PRENDA DEL CATÁLOGO 🔥
+// ====================================================================
+router.delete('/catalogo/:id', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('prendas_catalogo').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true, message: 'Prenda eliminada del catálogo.' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ====================================================================
+// 5. ASIGNAR PRENDA A ALUMNO Y DESCONTAR STOCK SI APLICA
 // ====================================================================
 router.post('/pedidos', authMiddleware, async (req, res) => {
   try {
@@ -196,7 +239,7 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 4. ACTUALIZAR LOGÍSTICA (Y AVISAR WHATSAPP) O FINANZAS
+// 6. ACTUALIZAR LOGÍSTICA O FINANZAS
 // ====================================================================
 router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
   try {
