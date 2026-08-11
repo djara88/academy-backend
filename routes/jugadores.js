@@ -7,7 +7,7 @@ const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
 // ====================================================================
-// 1. OBTENER JUGADORES (CORREGIDA COLISIÓN DE NOMBRES EN SUPABASE) 🔥
+// 1. OBTENER JUGADORES (CON ESTADÍSTICAS Y CATEGORÍAS)
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -28,7 +28,7 @@ router.get('/', authMiddleware, async (req, res) => {
 
     const jugadorIds = (jugadores || []).map(j => j.id);
 
-    // 2. Consultar asistencias a entrenamientos de forma independiente para evitar colisión de nombres
+    // 2. Consultar asistencias a entrenamientos
     let asistenciasMap = {};
     if (jugadorIds.length > 0) {
       const { data: asistenciasData, error: errAsist } = await supabase
@@ -49,7 +49,6 @@ router.get('/', authMiddleware, async (req, res) => {
       const statsPartidos = jugador.partido_estadisticas || [];
       const estadosAsistencia = asistenciasMap[jugador.id] || [];
       
-      // Cálculo acumulado de Partidos
       const totalGoles = statsPartidos.reduce((acc, curr) => acc + (curr.goles || 0), 0);
       const totalAsistencias = statsPartidos.reduce((acc, curr) => acc + (curr.asistencias || 0), 0);
       const totalAmarillas = statsPartidos.reduce((acc, curr) => acc + (curr.tarjetas_amarillas || 0), 0);
@@ -57,7 +56,6 @@ router.get('/', authMiddleware, async (req, res) => {
       const totalMvp = statsPartidos.filter(s => s.es_mvp).length;
       const partidosJugados = statsPartidos.length;
 
-      // Cálculo acumulado de Asistencias a Entrenamientos
       const clasesAusente = estadosAsistencia.filter(e => e === 'Ausente').length;
       const clasesPresente = estadosAsistencia.filter(e => e === 'Presente').length;
       const clasesJustificadas = estadosAsistencia.filter(e => e === 'Justificado').length;
@@ -89,7 +87,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. CREAR JUGADOR + TUTOR + EVALUACIÓN INICIAL
+// 2. CREAR JUGADORES + TUTOR + EVALUACIÓN INICIAL + VÍNCULO DE UNIFORME 🔥
 // ====================================================================
 router.post('/', authMiddleware, async (req, res) => {
   try {
@@ -97,9 +95,12 @@ router.post('/', authMiddleware, async (req, res) => {
     const { 
       tutor, nombre, rut, tipo_alumno, certificado_medico, sexo, fecha_nacimiento, posicion_cancha, 
       talla_uniforme, talla_apoderado, numero_camiseta, nombre_camiseta, 
-      monto_matricula, abono_matricula, monto_mensualidad, foto_base64, evaluacion 
+      monto_matricula, abono_matricula, monto_mensualidad, foto_base64, evaluacion,
+      // 🔥 CAMPOS OPCIONALES DEL MÓDULO DE UNIFORMES
+      prenda_id, prenda_nombre, prenda_monto, prenda_estado_pago, generar_cobro_prenda
     } = req.body;
 
+    // A. Gestión / Creación de Tutor
     let tutorId = null;
     if (tutor && tutor.rut) {
       const { data: existingTutor } = await supabase.from('tutores').select('id').eq('rut', tutor.rut).eq('academia_id', academia_id).maybeSingle();
@@ -113,6 +114,7 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
+    // B. Creación de Jugador
     const { data: newJugador, error: errJugador } = await supabase.from('jugadores').insert([{
       academia_id, tutor_id: tutorId, nombre, rut: rut || null, tipo_alumno: tipo_alumno || 'Nuevo',
       certificado_medico: certificado_medico || 'Pendiente', sexo, fecha_nacimiento, posicion_cancha,
@@ -125,6 +127,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (errJugador) throw errJugador;
 
+    // C. Evaluación Inicial (si aplica)
     if (evaluacion && Object.keys(evaluacion).length > 0) {
       await supabase.from('evaluaciones').insert([{
         jugador_id: newJugador.id,
@@ -132,6 +135,69 @@ router.post('/', authMiddleware, async (req, res) => {
         datos_radar: evaluacion,
         comentarios_profesor: 'Evaluación inicial generada durante la matrícula.'
       }]);
+    }
+
+    // D. REGISTRO AUTOMÁTICO DE UNIFORME / PEDIDO 🔥
+    if (prenda_nombre || prenda_id || talla_uniforme) {
+      try {
+        const nombrePrendaFinal = prenda_nombre || 'Kit de Matrícula';
+        const estadoPagoFinal = prenda_estado_pago || 'Incluido en Matrícula';
+        const precioPrenda = Number(prenda_monto) || 0;
+        let cobroId = null;
+
+        // Si la prenda se cobra por separado y está pendiente
+        if (estadoPagoFinal === 'Pendiente de Pago' && precioPrenda > 0 && generar_cobro_prenda) {
+          const { data: cobroCreado } = await supabase
+            .from('cobros')
+            .insert([{
+              academia_id,
+              jugador_id: newJugador.id,
+              concepto: `Indumentaria: ${nombrePrendaFinal} (Talla ${talla_uniforme || 'S/T'})`,
+              tipo_concepto: 'Indumentaria',
+              monto: precioPrenda,
+              monto_pagado: 0,
+              estado: 'Pendiente',
+              fecha_vencimiento: new Date().toISOString().split('T')[0]
+            }])
+            .select()
+            .single();
+
+          if (cobroCreado) cobroId = cobroCreado.id;
+        }
+
+        // Insertar en pedidos_indumentaria
+        await supabase.from('pedidos_indumentaria').insert([{
+          academia_id,
+          jugador_id: newJugador.id,
+          prenda_id: prenda_id || null,
+          prenda_nombre: nombrePrendaFinal,
+          talla: talla_uniforme || 'S/T',
+          numero_estampado: numero_camiseta ? parseInt(numero_camiseta) : null,
+          nombre_estampado: nombre_camiseta || '',
+          monto: precioPrenda,
+          cobro_id: cobroId,
+          estado_pago: estadoPagoFinal,
+          estado_entrega: 'Pendiente'
+        }]);
+
+        // Restar stock físico de bodega si la prenda seleccionada es de tipo 'Stock'
+        if (prenda_id) {
+          const { data: prendaData } = await supabase
+            .from('prendas_catalogo')
+            .select('tipo_operacion, stock_disponible')
+            .eq('id', prenda_id)
+            .single();
+
+          if (prendaData && prendaData.tipo_operacion === 'Stock' && prendaData.stock_disponible > 0) {
+            await supabase
+              .from('prendas_catalogo')
+              .update({ stock_disponible: prendaData.stock_disponible - 1 })
+              .eq('id', prenda_id);
+          }
+        }
+      } catch (errUniforme) {
+        console.error('⚠️ Jugador matriculado, pero hubo un detalle al registrar la indumentaria:', errUniforme.message);
+      }
     }
 
     res.status(201).json({ success: true, jugador_id: newJugador.id, tutor_id: tutorId, data: newJugador });
