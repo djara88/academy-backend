@@ -3,15 +3,16 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-
-// 🔥 Importamos la función nativa que SÍ funciona para las medallas
 const { enviarMensaje } = require('../services/whatsappService');
 
-// CREAR un nuevo torneo
+// 1. CREAR TORNEO + EGRESO ORGANIZACIÓN (SI APLICA)
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
-    const { nombre, fecha_inicio, fecha_fin, costo_inscripcion, permite_cuotas, max_cuotas } = req.body;
+    const { 
+      nombre, fecha_inicio, fecha_fin, costo_inscripcion, permite_cuotas, max_cuotas,
+      costo_organizacion // Opcional: gasto que paga la academia por participar
+    } = req.body;
 
     const { data, error } = await supabase
       .from('torneos')
@@ -28,6 +29,20 @@ router.post('/', authMiddleware, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // 🔥 GENERAR EGRESO SI LA ACADEMIA PAGA POR PARTICIPAR EN EL TORNEO
+    if (Number(costo_organizacion) > 0) {
+      await supabase.from('egresos').insert([{
+        academia_id,
+        torneo_id: data.id,
+        concepto: `Inscripción Equipo Torneo: ${nombre}`,
+        categoria_gasto: 'Arbitraje',
+        centro_costo: 'Fútbol',
+        monto: Number(costo_organizacion),
+        fecha_gasto: fecha_inicio || new Date().toISOString().split('T')[0]
+      }]);
+    }
+
     res.json({ success: true, data });
   } catch (error) {
     console.error('❌ Error al crear torneo:', error);
@@ -35,7 +50,7 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
-// OBTENER todos los torneos de la academia
+// 2. OBTENER TODOS LOS TORNEOS
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -53,7 +68,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// OBTENER un torneo específico por su ID
+// 3. OBTENER UN TORNEO
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -70,11 +85,11 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// OBTENER los participantes ya convocados a un torneo (CON FILTRO OPCIONAL DE CATEGORÍA) 🔥
+// 4. OBTENER PARTICIPANTES
 router.get('/:id/participantes', authMiddleware, async (req, res) => {
   try {
     const torneo_id = req.params.id;
-    const { categoria_id } = req.query; // 👈 Captura de categoría si viene en la consulta
+    const { categoria_id } = req.query;
 
     const { data, error } = await supabase
       .from('torneo_participantes')
@@ -95,7 +110,6 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
 
     if (error) throw error;
 
-    // Formatear la estructura para aplanar las categorías del jugador
     let participantesFormateados = data.map(p => {
       const cats = p.jugadores?.jugador_categoria
         ? p.jugadores.jugador_categoria.map(jc => jc.categorias).filter(Boolean)
@@ -110,7 +124,6 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
       };
     });
 
-    // Filtrar si se proporcionó un ID de categoría
     if (categoria_id) {
       participantesFormateados = participantesFormateados.filter(p =>
         p.jugadores?.categorias?.some(c => c.id === categoria_id)
@@ -124,10 +137,10 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
   }
 });
 
-// 🔥 ENVIAR CONVOCATORIA MASIVA (CON WHATSAPP FUNCIONAL Y DIRECTO)
+// 5. ENVIAR CONVOCATORIA MASIVA (+ COBROS Y WHATSAPP) 🔥
 router.post('/:id/convocar', authMiddleware, async (req, res) => {
   try {
-    const { academia_id } = req.user; // Necesitamos esto para Evolution API
+    const { academia_id } = req.user;
     const torneo_id = req.params.id;
     const { jugadoresIds } = req.body;
 
@@ -187,20 +200,40 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errUpsert) throw errUpsert;
 
+    // 🔥 VÍNCULO AUTOMÁTICO CON FINANZAS: REGISTRAR COBROS DE TORNEO EN CUENTAS CORRIENTES
+    const precioTorneo = Number(torneo.costo_inscripcion) || 0;
+    if (precioTorneo > 0) {
+      const cobrosTorneo = jugadores.map(j => ({
+        academia_id,
+        jugador_id: j.id,
+        torneo_id,
+        concepto: `Inscripción Torneo: ${torneo.nombre}`,
+        tipo_concepto: 'Torneo',
+        monto: precioTorneo,
+        monto_pagado: 0,
+        estado: 'Pendiente',
+        fecha_vencimiento: torneo.fecha_inicio || new Date().toISOString().split('T')[0]
+      }));
+
+      try {
+        await supabase.from('cobros').insert(cobrosTorneo);
+        await supabase.from('jugadores').update({ estado_financiero: 'Moroso' }).in('id', jugadoresIds);
+      } catch (errFin) {
+        console.error('⚠️ Detalle creando cobros de torneo:', errFin.message);
+      }
+    }
+
     const costoFormateado = torneo.costo_inscripcion > 0 
       ? `$${Number(torneo.costo_inscripcion).toLocaleString('es-CL')}` 
       : 'Gratuito';
 
-    // Disparar WhatsApp a cada jugador
+    // Disparar WhatsApp
     for (const jugador of jugadores) {
       const idTutor = jugador.tutor_id || jugador.apoderado_id || jugador.tutor_principal_id;
       const tutor = tutoresMap[idTutor];
       const telefono = tutor?.telefono || jugador.telefono;
       
-      if (!telefono) {
-        console.warn(`⚠️ Jugador ${jugador.nombre} no tiene teléfono registrado.`);
-        continue;
-      }
+      if (!telefono) continue;
 
       let numLimpio = telefono.replace(/\D/g, '');
       if (!numLimpio.startsWith('56') && numLimpio.length === 9) {
@@ -218,15 +251,13 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
         `2️⃣ Para *RECHAZAR* la invitación.`;
 
       try {
-        // 🔥 Usamos exactamente la misma función que usas para las medallas
         await enviarMensaje(academia_id, numLimpio, mensajeTexto);
-        console.log(`✅ WhatsApp de convocatoria enviado a ${jugador.nombre} (${numLimpio})`);
       } catch (errWs) {
         console.error(`❌ Error al enviar WhatsApp a ${jugador.nombre}:`, errWs.message);
       }
     }
 
-    res.json({ success: true, message: 'Convocatorias guardadas e invitaciones de WhatsApp enviadas con éxito.' });
+    res.json({ success: true, message: 'Convocatorias guardadas e invitaciones enviadas.' });
   } catch (error) {
     console.error('❌ Error al convocar:', error);
     res.status(500).json({ success: false, error: error.message });
