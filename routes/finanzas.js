@@ -21,7 +21,6 @@ router.get('/resumen', authMiddleware, async (req, res) => {
     const egresos = resEgresos.data || [];
     const jugadores = resJugadores.data || [];
 
-    // Totales Financieros
     let totalIngresosReales = 0;
     let totalPorCobrar = 0;
     let totalEgresos = 0;
@@ -38,8 +37,6 @@ router.get('/resumen', authMiddleware, async (req, res) => {
     });
 
     const balanceNeto = totalIngresosReales - totalEgresos;
-
-    // Cálculo de Morosidad
     const morosos = jugadores.filter(j => j.estado_financiero === 'Moroso').length;
     const tasaMorosidad = jugadores.length > 0 ? ((morosos / jugadores.length) * 100).toFixed(1) : 0;
 
@@ -61,21 +58,64 @@ router.get('/resumen', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. CUENTAS CORRIENTES (LISTA DE ALUMNOS CON SUS COBROS)
+// 2. CUENTAS CORRIENTES (CON AUTO-SINCRONIZACIÓN DE ALUMNOS ANTIGUOS) 🔥
 // ====================================================================
 router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
 
     const [resJugadores, resCobros] = await Promise.all([
-      supabase.from('jugadores').select('id, nombre, foto_base64, estado_financiero, tutor_id, tutores(nombre_completo, telefono)').eq('academia_id', academia_id).order('nombre', { ascending: true }),
+      supabase.from('jugadores').select('id, nombre, foto_base64, estado_financiero, monto_matricula, abono_matricula, monto_mensualidad, tutor_id, tutores(nombre_completo, telefono)').eq('academia_id', academia_id).order('nombre', { ascending: true }),
       supabase.from('cobros').select('*').eq('academia_id', academia_id).order('fecha_vencimiento', { ascending: false })
     ]);
 
     const jugadores = resJugadores.data || [];
-    const cobros = resCobros.data || [];
+    let cobros = resCobros.data || [];
 
-    // Mapear cobros a cada alumno
+    // AUTO-CREACIÓN DE COBROS PARA ALUMNOS DE PRUEBA O ANTIGUOS SIN REGISTROS
+    const cobrosFaltantes = [];
+    for (const jug of jugadores) {
+      const susCobros = cobros.filter(c => c.jugador_id === jug.id);
+      
+      if (susCobros.length === 0) {
+        const valMatricula = Number(jug.monto_matricula) || 0;
+        const abonoMatricula = Number(jug.abono_matricula) || 0;
+        const valMensualidad = Number(jug.monto_mensualidad) || 0;
+
+        if (valMatricula > 0) {
+          cobrosFaltantes.push({
+            academia_id,
+            jugador_id: jug.id,
+            concepto: 'Matrícula Inicial',
+            tipo_concepto: 'Matrícula',
+            monto: valMatricula,
+            monto_pagado: abonoMatricula,
+            estado: abonoMatricula >= valMatricula ? 'Pagado' : abonoMatricula > 0 ? 'Parcial' : 'Pendiente',
+            fecha_vencimiento: new Date().toISOString().split('T')[0]
+          });
+        }
+
+        if (valMensualidad > 0) {
+          cobrosFaltantes.push({
+            academia_id,
+            jugador_id: jug.id,
+            concepto: 'Mensualidad Inicial',
+            tipo_concepto: 'Mensualidad',
+            monto: valMensualidad,
+            monto_pagado: 0,
+            estado: 'Pendiente',
+            fecha_vencimiento: new Date().toISOString().split('T')[0]
+          });
+        }
+      }
+    }
+
+    if (cobrosFaltantes.length > 0) {
+      await supabase.from('cobros').insert(cobrosFaltantes);
+      const { data: cobrosRecargados } = await supabase.from('cobros').select('*').eq('academia_id', academia_id).order('fecha_vencimiento', { ascending: false });
+      if (cobrosRecargados) cobros = cobrosRecargados;
+    }
+
     const cuentas = jugadores.map(j => {
       const misCobros = cobros.filter(c => c.jugador_id === j.id);
       let deudaTotal = 0;
@@ -140,7 +180,6 @@ router.put('/cobros/:id/pagar', authMiddleware, async (req, res) => {
 
     if (errUpd) throw errUpd;
 
-    // Actualizar semáforo financiero del jugador si liquidó sus deudas
     if (cobroActual.jugador_id) {
       const { data: pend } = await supabase
         .from('cobros')
@@ -187,7 +226,6 @@ router.post('/cobros', authMiddleware, async (req, res) => {
 
     if (error) throw error;
 
-    // Marcar moroso si el cobro nace vencido
     if (jugador_id) {
       await supabase.from('jugadores').update({ estado_financiero: 'Moroso' }).eq('id', jugador_id);
     }
@@ -199,7 +237,7 @@ router.post('/cobros', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 5. REGISTRAR Y OBTENER EGRESOS (GASTOS)
+// 5. REGISTRAR Y OBTENER EGRESOS
 // ====================================================================
 router.get('/egresos', authMiddleware, async (req, res) => {
   try {
@@ -256,7 +294,7 @@ router.delete('/egresos/:id', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 6. FLUJO DE CAJA UNIFICADO (MOVIMIENTOS EN TIEMPO REAL)
+// 6. FLUJO DE CAJA UNIFICADO
 // ====================================================================
 router.get('/flujo-caja', authMiddleware, async (req, res) => {
   try {
