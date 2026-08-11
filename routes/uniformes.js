@@ -15,7 +15,8 @@ router.get('/', authMiddleware, async (req, res) => {
     const [resCatalogo, resPedidos, resJugadores] = await Promise.all([
       supabase.from('prendas_catalogo').select('*').eq('academia_id', academia_id).order('created_at', { ascending: false }),
       supabase.from('pedidos_indumentaria').select('*, prendas_catalogo(tipo_operacion), jugadores(id, nombre, foto_base64, tutor_id)').eq('academia_id', academia_id).order('created_at', { ascending: false }),
-      supabase.from('jugadores').select('id, nombre, talla_uniforme, numero_camiseta, foto_base64').eq('academia_id', academia_id)
+      // 🔥 AQUÍ ESTABA EL ERROR: Limpiamos los campos viejos y ordenamos por nombre
+      supabase.from('jugadores').select('id, nombre, foto_base64, tutor_id').eq('academia_id', academia_id).order('nombre', { ascending: true })
     ]);
 
     const pedidos = resPedidos.data || [];
