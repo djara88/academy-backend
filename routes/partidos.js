@@ -5,13 +5,14 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
-// 1. CREAR PARTIDO
+// 1. CREAR PARTIDO + EGRESOS AUTOMÁTICOS (ARBITRAJE / CANCHA) 🔥
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { 
       torneo_id, categoria_id, es_amistoso, rival, fecha, hora, 
-      ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, monto_arbitraje_jugador 
+      ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, monto_arbitraje_jugador,
+      costo_arbitraje_total, costo_cancha // Opcionales de egresos
     } = req.body;
 
     const { data, error } = await supabase
@@ -36,6 +37,37 @@ router.post('/', authMiddleware, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // 🔥 GENERAR EGRESOS SI HUBO GASTO DE ARBITRAJE O ARRIENDO DE CANCHA
+    const egresosPartidos = [];
+    if (Number(costo_arbitraje_total) > 0) {
+      egresosPartidos.push({
+        academia_id,
+        partido_id: data.id,
+        concepto: `Arbitraje: Partido vs ${rival}`,
+        categoria_gasto: 'Arbitraje',
+        centro_costo: 'Fútbol',
+        monto: Number(costo_arbitraje_total),
+        fecha_gasto: fecha
+      });
+    }
+
+    if (Number(costo_cancha) > 0) {
+      egresosPartidos.push({
+        academia_id,
+        partido_id: data.id,
+        concepto: `Arriendo Cancha: Partido vs ${rival}`,
+        categoria_gasto: 'Arriendo Canchas',
+        centro_costo: 'Fútbol',
+        monto: Number(costo_cancha),
+        fecha_gasto: fecha
+      });
+    }
+
+    if (egresosPartidos.length > 0) {
+      await supabase.from('egresos').insert(egresosPartidos);
+    }
+
     res.json({ success: true, data });
   } catch (error) {
     console.error('❌ Error al crear partido:', error);
@@ -127,7 +159,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. DISPARAR CITACIÓN POR WHATSAPP
+// 5. DISPARAR CITACIÓN POR WHATSAPP + COBRO DE ARBITRAJE AUTOMÁTICO 🔥
 router.post('/:id/citacion', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -181,6 +213,29 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
     await supabase
       .from('partido_citaciones')
       .upsert(citaciones, { onConflict: 'partido_id, jugador_id', ignoreDuplicates: true });
+
+    // 🔥 VÍNCULO AUTOMÁTICO CON FINANZAS: COBRO DE CUOTA/ARBITRAJE AL CITAR
+    const valArbitraje = Number(partido.monto_arbitraje_jugador) || 0;
+    if (partido.cobra_arbitraje && valArbitraje > 0) {
+      const cobrosPartidos = jugadores.map(j => ({
+        academia_id,
+        jugador_id: j.id,
+        partido_id,
+        concepto: `Arbitraje Partido vs ${partido.rival}`,
+        tipo_concepto: 'Partido',
+        monto: valArbitraje,
+        monto_pagado: 0,
+        estado: 'Pendiente',
+        fecha_vencimiento: partido.fecha
+      }));
+
+      try {
+        await supabase.from('cobros').insert(cobrosPartidos);
+        await supabase.from('jugadores').update({ estado_financiero: 'Moroso' }).in('id', jugadorIds);
+      } catch (errFin) {
+        console.error('⚠️ Detalle creando cobros de partido:', errFin.message);
+      }
+    }
 
     const tipoTexto = partido.es_amistoso ? '🤝 *PARTIDO AMISTOSO*' : `🏆 *TORNEO: ${partido.torneos?.nombre || ''}*`;
     const condicionTag = partido.condicion === 'Visita' ? '✈️ *Condición:* Visita' : '🏠 *Condición:* Local';
@@ -290,7 +345,7 @@ router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
   }
 });
 
-// 8. GUARDAR RESULTADO, ESTADÍSTICAS E INFORME PERSONALIZADO POR ALUMNO CON MENSAJE FORMATIVO 🔥
+// 8. GUARDAR RESULTADO E INFORME
 router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -300,7 +355,6 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
     const numGolesFavor = Number(goles_favor) || 0;
     const numGolesContra = Number(goles_contra) || 0;
 
-    // 1. Actualizar el marcador y estado del partido
     const { data: partido, error: errP } = await supabase
       .from('partidos')
       .update({
@@ -314,7 +368,6 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
 
     if (errP) throw errP;
 
-    // 2. Guardar / Actualizar las estadísticas individuales
     if (estadisticas && estadisticas.length > 0) {
       const statsToUpsert = estadisticas.map(st => ({
         partido_id,
@@ -333,7 +386,6 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
       if (errUpsert) throw errUpsert;
     }
 
-    // 3. Enviar informe individualizado con reflexiones formativas por WhatsApp
     if (enviarWhatsapp && estadisticas && estadisticas.length > 0) {
       const jugadorIds = estadisticas.map(st => st.jugador_id);
 
@@ -354,7 +406,6 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
       const jugMap = {};
       (jugadores || []).forEach(j => { jugMap[j.id] = j; });
 
-      // DEFINICIÓN DEL MENSAJE FORMATIVO SEGÚN EL RESULTADO DE LA CATEGORÍA
       let resultadoEmoji = '';
       let mensajeFormativo = '';
 
@@ -378,7 +429,6 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
           let numLimpio = tutor.telefono.replace(/\D/g, '');
           if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;
 
-          // CONSTRUCCIÓN DEL REPORTE INDIVIDUAL DEL ALUMNO
           const golesTxt = st.goles > 0 ? `⚽ *Goles convertidos:* ${st.goles}\n` : '';
           const asistenciasTxt = st.asistencias > 0 ? `🎯 *Asistencias:* ${st.asistencias}\n` : '';
           const amarillasTxt = st.tarjetas_amarillas > 0 ? `🟨 *Tarjetas amarillas:* ${st.tarjetas_amarillas}\n` : '';
