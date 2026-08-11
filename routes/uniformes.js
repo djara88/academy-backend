@@ -15,17 +15,16 @@ router.get('/', authMiddleware, async (req, res) => {
     const [resCatalogo, resPedidos, resJugadores] = await Promise.all([
       supabase.from('prendas_catalogo').select('*').eq('academia_id', academia_id).order('created_at', { ascending: false }),
       supabase.from('pedidos_indumentaria').select('*, prendas_catalogo(tipo_operacion), jugadores(id, nombre, foto_base64, tutor_id)').eq('academia_id', academia_id).order('created_at', { ascending: false }),
-      // 🔥 AQUÍ ESTABA EL ERROR: Limpiamos los campos viejos y ordenamos por nombre
       supabase.from('jugadores').select('id, nombre, foto_base64, tutor_id').eq('academia_id', academia_id).order('nombre', { ascending: true })
     ]);
 
     const pedidos = resPedidos.data || [];
 
-    // Agrupación solo para prendas 'Taller' (para mandar a confeccionar)
+    // Agrupación para confección en taller
     const conteoTaller = {};
     pedidos.forEach(p => {
-      // Solo sumar al reporte de taller si la prenda es "A pedido" y no ha sido entregada
-      const esTaller = p.prendas_catalogo?.tipo_operacion === 'Taller';
+      // Si no tiene catálogo asignado (creado en matrícula), se asume 'Taller'
+      const esTaller = !p.prendas_catalogo || p.prendas_catalogo.tipo_operacion === 'Taller';
       const st = p.estado_entrega || 'Pendiente';
       
       if (esTaller && (st === 'Pendiente' || st === 'En Taller') && p.talla) {
@@ -88,7 +87,7 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
     let cobroId = null;
     const precioFinal = Number(monto) || 0;
 
-    // A. Cobro separado en cuenta corriente
+    // Cobro separado en cuenta corriente
     if (generar_cobro && precioFinal > 0 && estado_pago === 'Pendiente de Pago') {
       const { data: cobroCreado, error: errCobro } = await supabase
         .from('cobros')
@@ -107,7 +106,7 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
       if (cobroCreado) cobroId = cobroCreado.id;
     }
 
-    // B. Crear Pedido
+    // Crear Pedido
     const { data: nuevoPedido, error: errPedido } = await supabase
       .from('pedidos_indumentaria')
       .insert([{
@@ -127,7 +126,7 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
 
     if (errPedido) throw errPedido;
 
-    // C. Si la prenda es de Stock, restar 1 al inventario
+    // Si la prenda es de Stock, restar 1 al inventario
     if (prenda_id) {
       const { data: prendaData } = await supabase.from('prendas_catalogo').select('tipo_operacion, stock_disponible').eq('id', prenda_id).single();
       if (prendaData && prendaData.tipo_operacion === 'Stock' && prendaData.stock_disponible > 0) {
@@ -168,7 +167,7 @@ router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
 
     if (error) throw error;
 
-    // WhatsApp si está listo para entrega
+    // Enviar WhatsApp si está listo para entrega
     if (estado_entrega === 'Listo para Entrega' && pedido.jugadores?.tutor_id) {
       const { data: tutor } = await supabase.from('tutores').select('telefono, nombre_completo').eq('id', pedido.jugadores.tutor_id).single();
       if (tutor && tutor.telefono) {
