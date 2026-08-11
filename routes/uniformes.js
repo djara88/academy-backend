@@ -5,14 +5,26 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
+// Función auxiliar para validar que sea una talla real de apoderado
+const esTallaValidaApoderado = (talla) => {
+  if (!talla) return false;
+  const t = String(talla).trim().toLowerCase();
+  const descartados = [
+    'no', 'no desea', 'no requiere', 'no quiere', 'ninguna', 'ninguno', 
+    'sin camiseta', 'sin kit', 'n/a', '0', 'undefined', 'null', '', 'no aplica'
+  ];
+  if (descartados.includes(t)) return false;
+  if (t.includes('no desea') || t.includes('sin camiseta') || t.includes('no requiere') || t.includes('no aplica')) return false;
+  return true;
+};
+
 // ====================================================================
-// 1. OBTENER TODO EL MÓDULO (CON SINCRONIZACIÓN AUTOMÁTICA DE APODERADOS) 🔥
+// 1. OBTENER TODO EL MÓDULO (CON FILTRO ESTRICTO DE APODERADOS) 🔥
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
 
-    // A. Consultar catálogo, pedidos y jugadores (incluyendo talla_apoderado)
     const [resCatalogo, resPedidos, resJugadores] = await Promise.all([
       supabase.from('prendas_catalogo').select('*').eq('academia_id', academia_id).order('created_at', { ascending: false }),
       supabase.from('pedidos_indumentaria').select('*, prendas_catalogo(tipo_operacion), jugadores(id, nombre, foto_base64, tutor_id)').eq('academia_id', academia_id).order('created_at', { ascending: false }),
@@ -22,22 +34,20 @@ router.get('/', authMiddleware, async (req, res) => {
     let pedidos = resPedidos.data || [];
     const jugadores = resJugadores.data || [];
 
-    // B. AUTO-SINCRONIZACIÓN: Detectar si hay apoderados con talla cargada pero sin pedido generado
+    // AUTO-SINCRONIZACIÓN: Solo crear pedido si la talla del apoderado ES VÁLIDA
     const nuevosPedidosApoderados = [];
     for (const jug of jugadores) {
-      const tallaAp = jug.talla_apoderado ? String(jug.talla_apoderado).trim() : '';
-      const esTallaValida = tallaAp && !['no', 'ninguna', 'sin camiseta', 'n/a', '0', 'undefined', 'null', ''].includes(tallaAp.toLowerCase());
-
-      if (esTallaValida) {
-        // Verificar si ya existe una "Camiseta Apoderado" registrada para este alumno
+      if (esTallaValidaApoderado(jug.talla_apoderado)) {
+        const tallaLimpia = String(jug.talla_apoderado).trim().toUpperCase();
         const yaExiste = pedidos.some(p => p.jugador_id === jug.id && p.prenda_nombre && p.prenda_nombre.toLowerCase().includes('apoderado'));
+        
         if (!yaExiste) {
           nuevosPedidosApoderados.push({
             academia_id,
             jugador_id: jug.id,
             prenda_id: null,
             prenda_nombre: 'Camiseta Apoderado',
-            talla: tallaAp,
+            talla: tallaLimpia,
             monto: 0,
             estado_pago: 'Incluido en Matrícula',
             estado_entrega: 'Pendiente'
@@ -46,7 +56,6 @@ router.get('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // C. Si se detectaron camisetas de apoderado faltantes, se crean en BD y se recargan los pedidos
     if (nuevosPedidosApoderados.length > 0) {
       await supabase.from('pedidos_indumentaria').insert(nuevosPedidosApoderados);
       const { data: pedidosActualizados } = await supabase
@@ -57,13 +66,14 @@ router.get('/', authMiddleware, async (req, res) => {
       if (pedidosActualizados) pedidos = pedidosActualizados;
     }
 
-    // D. Agrupación consolidada para el Reporte del Taller
+    // Agrupación consolidada para el Reporte del Taller
     const conteoTaller = {};
     pedidos.forEach(p => {
       const esTaller = !p.prendas_catalogo || p.prendas_catalogo.tipo_operacion === 'Taller';
       const st = p.estado_entrega || 'Pendiente';
       
-      if (esTaller && (st === 'Pendiente' || st === 'En Taller') && p.talla) {
+      // Solo contar si es talla válida y no está descartada
+      if (esTaller && (st === 'Pendiente' || st === 'En Taller') && p.talla && esTallaValidaApoderado(p.talla)) {
         const key = `${p.prenda_nombre} (Talla ${p.talla})`;
         conteoTaller[key] = (conteoTaller[key] || 0) + 1;
       }
@@ -124,7 +134,6 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
     let cobroId = null;
     const precioFinal = Number(monto) || 0;
 
-    // Cobro separado en cuenta corriente
     if (generar_cobro && precioFinal > 0 && estado_pago === 'Pendiente de Pago') {
       const { data: cobroCreado, error: errCobro } = await supabase
         .from('cobros')
@@ -143,7 +152,6 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
       if (cobroCreado) cobroId = cobroCreado.id;
     }
 
-    // Crear Pedido
     const { data: nuevoPedido, error: errPedido } = await supabase
       .from('pedidos_indumentaria')
       .insert([{
@@ -163,7 +171,6 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
 
     if (errPedido) throw errPedido;
 
-    // Restar stock si aplica
     if (prenda_id) {
       const { data: prendaData } = await supabase.from('prendas_catalogo').select('tipo_operacion, stock_disponible').eq('id', prenda_id).single();
       if (prendaData && prendaData.tipo_operacion === 'Stock' && prendaData.stock_disponible > 0) {
@@ -204,7 +211,6 @@ router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
 
     if (error) throw error;
 
-    // Enviar WhatsApp si está listo para entrega
     if (estado_entrega === 'Listo para Entrega' && pedido.jugadores?.tutor_id) {
       const { data: tutor } = await supabase.from('tutores').select('telefono, nombre_completo').eq('id', pedido.jugadores.tutor_id).single();
       if (tutor && tutor.telefono) {
