@@ -19,7 +19,7 @@ const esTallaValidaApoderado = (talla) => {
 };
 
 // ====================================================================
-// 1. OBTENER TODO EL MÓDULO (CON FILTRO ESTRICTO DE APODERADOS) 🔥
+// 1. OBTENER TODO EL MÓDULO (CON PURGA AUTOMÁTICA DE REGISTROS 'NO DESEA') 🔥
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -34,7 +34,17 @@ router.get('/', authMiddleware, async (req, res) => {
     let pedidos = resPedidos.data || [];
     const jugadores = resJugadores.data || [];
 
-    // AUTO-SINCRONIZACIÓN: Solo crear pedido si la talla del apoderado ES VÁLIDA
+    // 🔥 A. PURGA AUTOMÁTICA DE REGISTROS ANTIGUOS INVÁLIDOS EN BD
+    const idsAEliminar = pedidos
+      .filter(p => p.prenda_nombre && p.prenda_nombre.toLowerCase().includes('apoderado') && !esTallaValidaApoderado(p.talla))
+      .map(p => p.id);
+
+    if (idsAEliminar.length > 0) {
+      await supabase.from('pedidos_indumentaria').delete().in('id', idsAEliminar);
+      pedidos = pedidos.filter(p => !idsAEliminar.includes(p.id));
+    }
+
+    // B. AUTO-SINCRONIZACIÓN: Crear solo si la talla del apoderado ES VÁLIDA y no existía
     const nuevosPedidosApoderados = [];
     for (const jug of jugadores) {
       if (esTallaValidaApoderado(jug.talla_apoderado)) {
@@ -63,16 +73,17 @@ router.get('/', authMiddleware, async (req, res) => {
         .select('*, prendas_catalogo(tipo_operacion), jugadores(id, nombre, foto_base64, tutor_id)')
         .eq('academia_id', academia_id)
         .order('created_at', { ascending: false });
-      if (pedidosActualizados) pedidos = pedidosActualizados;
+      if (pedidosActualizados) {
+        pedidos = pedidosActualizados.filter(p => !(p.prenda_nombre && p.prenda_nombre.toLowerCase().includes('apoderado') && !esTallaValidaApoderado(p.talla)));
+      }
     }
 
-    // Agrupación consolidada para el Reporte del Taller
+    // C. Agrupación consolidada para el Reporte del Taller
     const conteoTaller = {};
     pedidos.forEach(p => {
       const esTaller = !p.prendas_catalogo || p.prendas_catalogo.tipo_operacion === 'Taller';
       const st = p.estado_entrega || 'Pendiente';
       
-      // Solo contar si es talla válida y no está descartada
       if (esTaller && (st === 'Pendiente' || st === 'En Taller') && p.talla && esTallaValidaApoderado(p.talla)) {
         const key = `${p.prenda_nombre} (Talla ${p.talla})`;
         conteoTaller[key] = (conteoTaller[key] || 0) + 1;
