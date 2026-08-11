@@ -262,7 +262,8 @@ router.get('/metricas', authMiddleware, async (req, res) => {
       }
     }
 
-    const totalClases = listaEntrenamientos.length;
+    // 🔥 FILTRADO EXCLUSIVO: Solo se cuentan clases dictadas (Realizadas)
+    const totalClases = listaEntrenamientos.filter(e => e.estado === 'Realizado').length;
     const canceladas = listaEntrenamientos.filter(e => e.estado === 'Cancelado').length;
     const recuperativas = listaEntrenamientos.filter(e => e.es_recuperacion).length;
 
