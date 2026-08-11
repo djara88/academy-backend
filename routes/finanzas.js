@@ -58,7 +58,7 @@ router.get('/resumen', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. CUENTAS CORRIENTES (CON AUTO-SINCRONIZACIÓN DE ALUMNOS ANTIGUOS) 🔥
+// 2. CUENTAS CORRIENTES (AUTO-SINCRONIZACIÓN INDIVIDUAL DE ALUMNOS) 🔥
 // ====================================================================
 router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
   try {
@@ -72,41 +72,44 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
     const jugadores = resJugadores.data || [];
     let cobros = resCobros.data || [];
 
-    // AUTO-CREACIÓN DE COBROS PARA ALUMNOS DE PRUEBA O ANTIGUOS SIN REGISTROS
+    // AUTO-SINCRONIZACIÓN ESPECÍFICA POR CONCEPTO
     const cobrosFaltantes = [];
     for (const jug of jugadores) {
       const susCobros = cobros.filter(c => c.jugador_id === jug.id);
       
-      if (susCobros.length === 0) {
-        const valMatricula = Number(jug.monto_matricula) || 0;
-        const abonoMatricula = Number(jug.abono_matricula) || 0;
-        const valMensualidad = Number(jug.monto_mensualidad) || 0;
+      const tieneMatricula = susCobros.some(c => c.tipo_concepto === 'Matrícula' || (c.concepto && c.concepto.toLowerCase().includes('matrícula')));
+      const tieneMensualidad = susCobros.some(c => c.tipo_concepto === 'Mensualidad' || (c.concepto && c.concepto.toLowerCase().includes('mensualidad')));
 
-        if (valMatricula > 0) {
-          cobrosFaltantes.push({
-            academia_id,
-            jugador_id: jug.id,
-            concepto: 'Matrícula Inicial',
-            tipo_concepto: 'Matrícula',
-            monto: valMatricula,
-            monto_pagado: abonoMatricula,
-            estado: abonoMatricula >= valMatricula ? 'Pagado' : abonoMatricula > 0 ? 'Parcial' : 'Pendiente',
-            fecha_vencimiento: new Date().toISOString().split('T')[0]
-          });
-        }
+      const valMatricula = Number(jug.monto_matricula) || 0;
+      const abonoMatricula = Number(jug.abono_matricula) || 0;
+      const valMensualidad = Number(jug.monto_mensualidad) || 0;
 
-        if (valMensualidad > 0) {
-          cobrosFaltantes.push({
-            academia_id,
-            jugador_id: jug.id,
-            concepto: 'Mensualidad Inicial',
-            tipo_concepto: 'Mensualidad',
-            monto: valMensualidad,
-            monto_pagado: 0,
-            estado: 'Pendiente',
-            fecha_vencimiento: new Date().toISOString().split('T')[0]
-          });
-        }
+      // Si no tiene el cobro de Matrícula y en su perfil hay monto registrado
+      if (!tieneMatricula && valMatricula > 0) {
+        cobrosFaltantes.push({
+          academia_id,
+          jugador_id: jug.id,
+          concepto: 'Matrícula Inicial',
+          tipo_concepto: 'Matrícula',
+          monto: valMatricula,
+          monto_pagado: abonoMatricula,
+          estado: abonoMatricula >= valMatricula ? 'Pagado' : abonoMatricula > 0 ? 'Parcial' : 'Pendiente',
+          fecha_vencimiento: new Date().toISOString().split('T')[0]
+        });
+      }
+
+      // Si no tiene el cobro de Mensualidad y en su perfil hay monto registrado
+      if (!tieneMensualidad && valMensualidad > 0) {
+        cobrosFaltantes.push({
+          academia_id,
+          jugador_id: jug.id,
+          concepto: 'Mensualidad Inicial',
+          tipo_concepto: 'Mensualidad',
+          monto: valMensualidad,
+          monto_pagado: 0,
+          estado: 'Pendiente',
+          fecha_vencimiento: new Date().toISOString().split('T')[0]
+        });
       }
     }
 
