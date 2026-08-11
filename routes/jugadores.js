@@ -6,7 +6,6 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
-// Función auxiliar para validar que sea una talla real de apoderado
 const esTallaValidaApoderado = (talla) => {
   if (!talla) return false;
   const t = String(talla).trim().toLowerCase();
@@ -20,7 +19,7 @@ const esTallaValidaApoderado = (talla) => {
 };
 
 // ====================================================================
-// 1. OBTENER JUGADORES (CON ESTADÍSTICAS Y CATEGORÍAS)
+// 1. OBTENER JUGADORES
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -97,7 +96,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. CREAR JUGADORES + TUTOR + EVALUACIÓN INICIAL + UNIFORMES 🔥
+// 2. CREAR JUGADORES + TUTOR + UNIFORMES + COBROS INICIALES 🔥
 // ====================================================================
 router.post('/', authMiddleware, async (req, res) => {
   try {
@@ -106,10 +105,13 @@ router.post('/', authMiddleware, async (req, res) => {
       tutor, nombre, rut, tipo_alumno, certificado_medico, sexo, fecha_nacimiento, posicion_cancha, 
       talla_uniforme, talla_apoderado, numero_camiseta, nombre_camiseta, 
       monto_matricula, abono_matricula, monto_mensualidad, foto_base64, evaluacion,
-      prenda_id, prenda_nombre, prenda_monto, prenda_estado_pago, generar_cobro_prenda
+      prenda_id, prenda_nombre, prenda_monto, prenda_estado_pago, generar_cobro_prenda,
+      monto_camiseta_apoderado // 🔥 VALOR DE LA CAMISETA DEL APODERADO
     } = req.body;
 
     const tallaApoderadoFinal = talla_apoderado || tutor?.talla_apoderado || req.body.talla_tutor || req.body.talla_apoderado_camiseta;
+    const requiereCamisetaApoderado = esTallaValidaApoderado(tallaApoderadoFinal);
+    const costoCamisetaApoderado = requiereCamisetaApoderado ? (Number(monto_camiseta_apoderado) || 0) : 0;
 
     // A. Gestión / Creación de Tutor
     let tutorId = null;
@@ -129,7 +131,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const { data: newJugador, error: errJugador } = await supabase.from('jugadores').insert([{
       academia_id, tutor_id: tutorId, nombre, rut: rut || null, tipo_alumno: tipo_alumno || 'Nuevo',
       certificado_medico: certificado_medico || 'Pendiente', sexo, fecha_nacimiento, posicion_cancha,
-      talla_uniforme, talla_apoderado: esTallaValidaApoderado(tallaApoderadoFinal) ? String(tallaApoderadoFinal).toUpperCase() : null,
+      talla_uniforme, talla_apoderado: requiereCamisetaApoderado ? String(tallaApoderadoFinal).toUpperCase() : null,
       numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
       nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente',
       estado_financiero: 'Al Día',
@@ -149,26 +151,58 @@ router.post('/', authMiddleware, async (req, res) => {
       }]);
     }
 
-    // D. REGISTRO AUTOMÁTICO DE UNIFORME DE ALUMNO
+    // D. REGISTRO EN FINANZAS: COBRO DE MATRÍCULA (INCLUYE CAMISETA APODERADO SI APLICA) 🔥
+    const baseMatricula = Number(monto_matricula) || 0;
+    const totalMatriculaConCamiseta = baseMatricula + costoCamisetaApoderado;
+    const abonoInicial = Number(abono_matricula) || 0;
+
+    if (totalMatriculaConCamiseta > 0) {
+      const conceptoMatricula = costoCamisetaApoderado > 0 
+        ? `Matrícula Inicial (Incluye Camiseta Apoderado Talla ${String(tallaApoderadoFinal).toUpperCase()})` 
+        : 'Matrícula Inicial';
+
+      let estMatricula = 'Pendiente';
+      if (abonoInicial >= totalMatriculaConCamiseta) estMatricula = 'Pagado';
+      else if (abonoInicial > 0) estMatricula = 'Parcial';
+
+      await supabase.from('cobros').insert([{
+        academia_id,
+        jugador_id: newJugador.id,
+        concepto: conceptoMatricula,
+        tipo_concepto: 'Matrícula',
+        monto: totalMatriculaConCamiseta,
+        monto_pagado: abonoInicial,
+        estado: estMatricula,
+        fecha_vencimiento: new Date().toISOString().split('T')[0]
+      }]);
+    }
+
+    // E. REGISTRO EN FINANZAS: COBRO DE PRIMERA MENSUALIDAD 🔥
+    const baseMensualidad = Number(monto_mensualidad) || 0;
+    if (baseMensualidad > 0) {
+      await supabase.from('cobros').insert([{
+        academia_id,
+        jugador_id: newJugador.id,
+        concepto: 'Mensualidad Inicial',
+        tipo_concepto: 'Mensualidad',
+        monto: baseMensualidad,
+        monto_pagado: 0,
+        estado: 'Pendiente',
+        fecha_vencimiento: new Date().toISOString().split('T')[0]
+      }]);
+    }
+
+    // F. REGISTRO EN UNIFORMES / TALLER
     if (prenda_nombre || prenda_id || talla_uniforme) {
       try {
         const nombrePrendaFinal = prenda_nombre || 'Kit de Matrícula (Alumno)';
         const estadoPagoFinal = prenda_estado_pago || 'Incluido en Matrícula';
         const precioPrenda = Number(prenda_monto) || 0;
-        let cobroId = null;
-
-        if (estadoPagoFinal === 'Pendiente de Pago' && precioPrenda > 0 && generar_cobro_prenda) {
-          const { data: cobroCreado } = await supabase.from('cobros').insert([{
-              academia_id, jugador_id: newJugador.id, concepto: `Indumentaria: ${nombrePrendaFinal} (Talla ${talla_uniforme || 'S/T'})`,
-              tipo_concepto: 'Indumentaria', monto: precioPrenda, monto_pagado: 0, estado: 'Pendiente', fecha_vencimiento: new Date().toISOString().split('T')[0]
-            }]).select().single();
-          if (cobroCreado) cobroId = cobroCreado.id;
-        }
 
         await supabase.from('pedidos_indumentaria').insert([{
           academia_id, jugador_id: newJugador.id, prenda_id: prenda_id || null, prenda_nombre: nombrePrendaFinal,
           talla: talla_uniforme || 'S/T', numero_estampado: numero_camiseta ? parseInt(numero_camiseta) : null,
-          nombre_estampado: nombre_camiseta || '', monto: precioPrenda, cobro_id: cobroId,
+          nombre_estampado: nombre_camiseta || '', monto: precioPrenda,
           estado_pago: estadoPagoFinal, estado_entrega: 'Pendiente'
         }]);
 
@@ -183,8 +217,7 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // E. REGISTRO AUTOMÁTICO DE CAMISETA DE APODERADO (SOLO SI LA TALLA ES VÁLIDA) 🔥
-    if (esTallaValidaApoderado(tallaApoderadoFinal)) {
+    if (requiereCamisetaApoderado) {
       try {
         await supabase.from('pedidos_indumentaria').insert([{
           academia_id, 
@@ -194,8 +227,7 @@ router.post('/', authMiddleware, async (req, res) => {
           talla: String(tallaApoderadoFinal).toUpperCase(),
           numero_estampado: null,
           nombre_estampado: '',
-          monto: 0,
-          cobro_id: null,
+          monto: costoCamisetaApoderado,
           estado_pago: 'Incluido en Matrícula',
           estado_entrega: 'Pendiente'
         }]);
@@ -212,7 +244,7 @@ router.post('/', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 3. OBTENER CATEGORÍAS
+// OTROS ENDPOINTS
 // ====================================================================
 router.get('/categorias', authMiddleware, async (req, res) => {
   try {
@@ -225,9 +257,6 @@ router.get('/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 4. CREAR CATEGORÍA
-// ====================================================================
 router.post('/categorias', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -240,9 +269,6 @@ router.post('/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 5. ASIGNAR CATEGORÍA A JUGADOR
-// ====================================================================
 router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
   try {
     const { jugador_id } = req.params;
@@ -255,9 +281,6 @@ router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 6. OBTENER EVALUACIONES DEL JUGADOR
-// ====================================================================
 router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -276,9 +299,6 @@ router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 7. NUEVA EVALUACIÓN
-// ====================================================================
 router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -292,9 +312,6 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 8. ENVIAR INFORME PDF POR CORREO (BREVO)
-// ====================================================================
 router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
   try {
     const { jugador_id } = req.params;
@@ -338,9 +355,6 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
   }
 });
 
-// ====================================================================
-// 9. OBTENER PROMEDIO DE UNA CATEGORÍA
-// ====================================================================
 router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res) => {
   try {
     const { categoria_id } = req.params;
@@ -373,9 +387,6 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res
   }
 });
 
-// ====================================================================
-// 10. ACTUALIZACIÓN RÁPIDA (SEMÁFOROS E INSIGNIAS CON WHATSAPP AUTOMÁTICO)
-// ====================================================================
 router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
