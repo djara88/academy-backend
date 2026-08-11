@@ -6,39 +6,30 @@ const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
 // ====================================================================
-// 1. OBTENER RESUMEN DE INDUMENTARIA, CATÁLOGO Y PEDIDOS
+// 1. OBTENER TODO EL MÓDULO (CATÁLOGO, PEDIDOS Y JUGADORES)
 // ====================================================================
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
 
     const [resCatalogo, resPedidos, resJugadores] = await Promise.all([
-      supabase.from('prendas_catalogo').select('*').eq('academia_id', academia_id),
-      supabase.from('pedidos_indumentaria').select('*, jugadores(id, nombre, foto_base64, tutor_id)').eq('academia_id', academia_id).order('created_at', { ascending: false }),
-      supabase.from('jugadores').select('id, nombre, talla_uniforme, numero_camiseta, nombre_camiseta, foto_base64').eq('academia_id', academia_id)
+      supabase.from('prendas_catalogo').select('*').eq('academia_id', academia_id).order('created_at', { ascending: false }),
+      supabase.from('pedidos_indumentaria').select('*, prendas_catalogo(tipo_operacion), jugadores(id, nombre, foto_base64, tutor_id)').eq('academia_id', academia_id).order('created_at', { ascending: false }),
+      supabase.from('jugadores').select('id, nombre, talla_uniforme, numero_camiseta, foto_base64').eq('academia_id', academia_id)
     ]);
-
-    if (resCatalogo.error) throw resCatalogo.error;
-    if (resPedidos.error) throw resPedidos.error;
 
     const pedidos = resPedidos.data || [];
 
-    // Agrupación de tallas pendientes/en taller para enviar a confeccionar al taller
-    const conteoTallas = {};
-    let pendientes = 0;
-    let enTaller = 0;
-    let listos = 0;
-    let entregados = 0;
-
+    // Agrupación solo para prendas 'Taller' (para mandar a confeccionar)
+    const conteoTaller = {};
     pedidos.forEach(p => {
+      // Solo sumar al reporte de taller si la prenda es "A pedido" y no ha sido entregada
+      const esTaller = p.prendas_catalogo?.tipo_operacion === 'Taller';
       const st = p.estado_entrega || 'Pendiente';
-      if (st === 'Pendiente') pendientes++;
-      if (st === 'En Taller') enTaller++;
-      if (st === 'Listo para Entrega') listos++;
-      if (st === 'Entregado') entregados++;
-
-      if (st !== 'Entregado' && p.talla) {
-        conteoTallas[p.talla] = (conteoTallas[p.talla] || 0) + 1;
+      
+      if (esTaller && (st === 'Pendiente' || st === 'En Taller') && p.talla) {
+        const key = `${p.prenda_nombre} (Talla ${p.talla})`;
+        conteoTaller[key] = (conteoTaller[key] || 0) + 1;
       }
     });
 
@@ -46,25 +37,23 @@ router.get('/', authMiddleware, async (req, res) => {
       success: true,
       data: {
         catalogo: resCatalogo.data || [],
-        kpis: { totalPedidos: pedidos.length, pendientes, enTaller, listos, entregados },
-        resumenTallas: conteoTallas,
+        resumenTaller: conteoTaller,
         pedidos,
         jugadores: resJugadores.data || []
       }
     });
   } catch (error) {
-    console.error('❌ Error obteniendo módulo de uniformes:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ====================================================================
-// 2. AGREGAR PRENDA AL CATÁLOGO DE LA ACADEMIA
+// 2. CREAR PRENDA EN EL CATÁLOGO (STOCK O TALLER)
 // ====================================================================
 router.post('/catalogo', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
-    const { nombre, precio, aplica_numero, aplica_nombre_estampado } = req.body;
+    const { nombre, precio, aplica_numero, aplica_nombre_estampado, tipo_operacion, stock_disponible } = req.body;
 
     const { data, error } = await supabase
       .from('prendas_catalogo')
@@ -73,7 +62,9 @@ router.post('/catalogo', authMiddleware, async (req, res) => {
         nombre,
         precio: Number(precio) || 0,
         aplica_numero: Boolean(aplica_numero),
-        aplica_nombre_estampado: Boolean(aplica_nombre_estampado)
+        aplica_nombre_estampado: Boolean(aplica_nombre_estampado),
+        tipo_operacion: tipo_operacion || 'Taller',
+        stock_disponible: tipo_operacion === 'Stock' ? (Number(stock_disponible) || 0) : 0
       }])
       .select()
       .single();
@@ -86,18 +77,18 @@ router.post('/catalogo', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 3. ASIGNAR INDUMENTARIA A ALUMNO Y CREAR COBRO SEPARADO EN CUENTA CORRIENTE 🔥
+// 3. ASIGNAR PRENDA A ALUMNO Y DESCONTAR STOCK SI APLICA
 // ====================================================================
 router.post('/pedidos', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
-    const { jugador_id, prenda_id, prenda_nombre, talla, numero_estampado, nombre_estampado, monto, generar_cobro } = req.body;
+    const { jugador_id, prenda_id, prenda_nombre, talla, numero_estampado, nombre_estampado, monto, generar_cobro, estado_pago } = req.body;
 
     let cobroId = null;
     const precioFinal = Number(monto) || 0;
 
-    // A. Si se solicita generar cobro, se crea una entrada INDEPENDIENTE en cobros
-    if (generar_cobro && precioFinal > 0) {
+    // A. Cobro separado en cuenta corriente
+    if (generar_cobro && precioFinal > 0 && estado_pago === 'Pendiente de Pago') {
       const { data: cobroCreado, error: errCobro } = await supabase
         .from('cobros')
         .insert([{
@@ -110,15 +101,12 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
           estado: 'Pendiente',
           fecha_vencimiento: new Date().toISOString().split('T')[0]
         }])
-        .select()
-        .single();
+        .select().single();
 
-      if (!errCobro && cobroCreado) {
-        cobroId = cobroCreado.id;
-      }
+      if (cobroCreado) cobroId = cobroCreado.id;
     }
 
-    // B. Crear registro del pedido
+    // B. Crear Pedido
     const { data: nuevoPedido, error: errPedido } = await supabase
       .from('pedidos_indumentaria')
       .insert([{
@@ -131,38 +119,43 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
         nombre_estampado: nombre_estampado || '',
         monto: precioFinal,
         cobro_id: cobroId,
+        estado_pago: estado_pago || 'Pendiente de Pago',
         estado_entrega: 'Pendiente'
       }])
-      .select()
-      .single();
+      .select().single();
 
     if (errPedido) throw errPedido;
 
-    res.status(201).json({ 
-      success: true, 
-      data: nuevoPedido, 
-      message: cobroId 
-        ? 'Indumentaria solicitada y cobro independiente registrado en la cuenta corriente.' 
-        : 'Indumentaria registrada sin cargo adicional.' 
-    });
+    // C. Si la prenda es de Stock, restar 1 al inventario
+    if (prenda_id) {
+      const { data: prendaData } = await supabase.from('prendas_catalogo').select('tipo_operacion, stock_disponible').eq('id', prenda_id).single();
+      if (prendaData && prendaData.tipo_operacion === 'Stock' && prendaData.stock_disponible > 0) {
+        await supabase.from('prendas_catalogo').update({ stock_disponible: prendaData.stock_disponible - 1 }).eq('id', prenda_id);
+      }
+    }
+
+    res.status(201).json({ success: true, message: 'Indumentaria asignada correctamente al alumno.' });
   } catch (error) {
-    console.error('❌ Error registrando pedido de indumentaria:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ====================================================================
-// 4. CAMBIAR ESTADO DE ENTREGA Y AVISAR POR WHATSAPP SI ESTÁ LISTO
+// 4. ACTUALIZAR LOGÍSTICA (Y AVISAR WHATSAPP) O FINANZAS (ESTADO PAGO)
 // ====================================================================
-router.put('/pedidos/:id/estado', authMiddleware, async (req, res) => {
+router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { id } = req.params;
-    const { estado_entrega } = req.body;
+    const { estado_entrega, estado_pago } = req.body;
 
-    const updateData = { estado_entrega };
-    if (estado_entrega === 'Entregado') {
-      updateData.fecha_entrega = new Date().toISOString();
+    const updateData = {};
+    if (estado_entrega) {
+      updateData.estado_entrega = estado_entrega;
+      if (estado_entrega === 'Entregado') updateData.fecha_entrega = new Date().toISOString();
+    }
+    if (estado_pago) {
+      updateData.estado_pago = estado_pago;
     }
 
     const { data: pedido, error } = await supabase
@@ -174,14 +167,9 @@ router.put('/pedidos/:id/estado', authMiddleware, async (req, res) => {
 
     if (error) throw error;
 
-    // Enviar notificación automática por WhatsApp cuando la prenda llega a la cancha
+    // WhatsApp si está listo para entrega
     if (estado_entrega === 'Listo para Entrega' && pedido.jugadores?.tutor_id) {
-      const { data: tutor } = await supabase
-        .from('tutores')
-        .select('telefono, nombre_completo')
-        .eq('id', pedido.jugadores.tutor_id)
-        .single();
-
+      const { data: tutor } = await supabase.from('tutores').select('telefono, nombre_completo').eq('id', pedido.jugadores.tutor_id).single();
       if (tutor && tutor.telefono) {
         let numLimpio = tutor.telefono.replace(/\D/g, '');
         if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;
@@ -199,9 +187,7 @@ router.put('/pedidos/:id/estado', authMiddleware, async (req, res) => {
 
         try {
           await enviarMensaje(academia_id, numLimpio, mensaje);
-        } catch (errWs) {
-          console.error(`Error enviando WhatsApp de indumentaria a ${numLimpio}:`, errWs.message);
-        }
+        } catch (e) {}
       }
     }
 
