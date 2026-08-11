@@ -6,6 +6,19 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 
+// Función auxiliar para validar que sea una talla real de apoderado
+const esTallaValidaApoderado = (talla) => {
+  if (!talla) return false;
+  const t = String(talla).trim().toLowerCase();
+  const descartados = [
+    'no', 'no desea', 'no requiere', 'no quiere', 'ninguna', 'ninguno', 
+    'sin camiseta', 'sin kit', 'n/a', '0', 'undefined', 'null', '', 'no aplica'
+  ];
+  if (descartados.includes(t)) return false;
+  if (t.includes('no desea') || t.includes('sin camiseta') || t.includes('no requiere') || t.includes('no aplica')) return false;
+  return true;
+};
+
 // ====================================================================
 // 1. OBTENER JUGADORES (CON ESTADÍSTICAS Y CATEGORÍAS)
 // ====================================================================
@@ -96,7 +109,6 @@ router.post('/', authMiddleware, async (req, res) => {
       prenda_id, prenda_nombre, prenda_monto, prenda_estado_pago, generar_cobro_prenda
     } = req.body;
 
-    // Detectar talla de apoderado sin importar el nombre exacto de la variable
     const tallaApoderadoFinal = talla_apoderado || tutor?.talla_apoderado || req.body.talla_tutor || req.body.talla_apoderado_camiseta;
 
     // A. Gestión / Creación de Tutor
@@ -117,7 +129,8 @@ router.post('/', authMiddleware, async (req, res) => {
     const { data: newJugador, error: errJugador } = await supabase.from('jugadores').insert([{
       academia_id, tutor_id: tutorId, nombre, rut: rut || null, tipo_alumno: tipo_alumno || 'Nuevo',
       certificado_medico: certificado_medico || 'Pendiente', sexo, fecha_nacimiento, posicion_cancha,
-      talla_uniforme, talla_apoderado: tallaApoderadoFinal || null, numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
+      talla_uniforme, talla_apoderado: esTallaValidaApoderado(tallaApoderadoFinal) ? String(tallaApoderadoFinal).toUpperCase() : null,
+      numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
       nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente',
       estado_financiero: 'Al Día',
       alerta_medica: '',
@@ -170,10 +183,8 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // E. REGISTRO AUTOMÁTICO DE CAMISETA DE APODERADO 🔥
-    const esTallaApoderadoValida = tallaApoderadoFinal && !['no', 'ninguna', 'sin camiseta', 'n/a', '0', ''].includes(String(tallaApoderadoFinal).toLowerCase());
-    
-    if (esTallaApoderadoValida) {
+    // E. REGISTRO AUTOMÁTICO DE CAMISETA DE APODERADO (SOLO SI LA TALLA ES VÁLIDA) 🔥
+    if (esTallaValidaApoderado(tallaApoderadoFinal)) {
       try {
         await supabase.from('pedidos_indumentaria').insert([{
           academia_id, 
