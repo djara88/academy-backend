@@ -13,7 +13,6 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     
-    // 1. Consultar jugadores con categorías y estadísticas de partidos
     const { data: jugadores, error: errJugadores } = await supabase
       .from('jugadores')
       .select(`
@@ -28,7 +27,6 @@ router.get('/', authMiddleware, async (req, res) => {
 
     const jugadorIds = (jugadores || []).map(j => j.id);
 
-    // 2. Consultar asistencias a entrenamientos
     let asistenciasMap = {};
     if (jugadorIds.length > 0) {
       const { data: asistenciasData, error: errAsist } = await supabase
@@ -44,7 +42,6 @@ router.get('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // 3. Formatear los resultados acumulados
     const jugadoresFormateados = (jugadores || []).map(jugador => {
       const statsPartidos = jugador.partido_estadisticas || [];
       const estadosAsistencia = asistenciasMap[jugador.id] || [];
@@ -87,7 +84,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // ====================================================================
-// 2. CREAR JUGADORES + TUTOR + EVALUACIÓN INICIAL + VÍNCULO DE UNIFORME
+// 2. CREAR JUGADORES + TUTOR + EVALUACIÓN INICIAL + UNIFORMES 🔥
 // ====================================================================
 router.post('/', authMiddleware, async (req, res) => {
   try {
@@ -98,6 +95,9 @@ router.post('/', authMiddleware, async (req, res) => {
       monto_matricula, abono_matricula, monto_mensualidad, foto_base64, evaluacion,
       prenda_id, prenda_nombre, prenda_monto, prenda_estado_pago, generar_cobro_prenda
     } = req.body;
+
+    // Detectar talla de apoderado sin importar el nombre exacto de la variable
+    const tallaApoderadoFinal = talla_apoderado || tutor?.talla_apoderado || req.body.talla_tutor || req.body.talla_apoderado_camiseta;
 
     // A. Gestión / Creación de Tutor
     let tutorId = null;
@@ -117,7 +117,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const { data: newJugador, error: errJugador } = await supabase.from('jugadores').insert([{
       academia_id, tutor_id: tutorId, nombre, rut: rut || null, tipo_alumno: tipo_alumno || 'Nuevo',
       certificado_medico: certificado_medico || 'Pendiente', sexo, fecha_nacimiento, posicion_cancha,
-      talla_uniforme, talla_apoderado, numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
+      talla_uniforme, talla_apoderado: tallaApoderadoFinal || null, numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
       nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente',
       estado_financiero: 'Al Día',
       alerta_medica: '',
@@ -126,7 +126,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (errJugador) throw errJugador;
 
-    // C. Evaluación Inicial (si aplica)
+    // C. Evaluación Inicial
     if (evaluacion && Object.keys(evaluacion).length > 0) {
       await supabase.from('evaluaciones').insert([{
         jugador_id: newJugador.id,
@@ -136,9 +136,7 @@ router.post('/', authMiddleware, async (req, res) => {
       }]);
     }
 
-    // D. REGISTRO AUTOMÁTICO DE UNIFORME / PEDIDO
-    
-    // 1. Pedido del Alumno
+    // D. REGISTRO AUTOMÁTICO DE UNIFORME DE ALUMNO
     if (prenda_nombre || prenda_id || talla_uniforme) {
       try {
         const nombrePrendaFinal = prenda_nombre || 'Kit de Matrícula (Alumno)';
@@ -172,15 +170,17 @@ router.post('/', authMiddleware, async (req, res) => {
       }
     }
 
-    // 2. Pedido del Apoderado (Camiseta Apoderado)
-    if (talla_apoderado) {
+    // E. REGISTRO AUTOMÁTICO DE CAMISETA DE APODERADO 🔥
+    const esTallaApoderadoValida = tallaApoderadoFinal && !['no', 'ninguna', 'sin camiseta', 'n/a', '0', ''].includes(String(tallaApoderadoFinal).toLowerCase());
+    
+    if (esTallaApoderadoValida) {
       try {
         await supabase.from('pedidos_indumentaria').insert([{
           academia_id, 
           jugador_id: newJugador.id,
           prenda_id: null,
           prenda_nombre: 'Camiseta Apoderado',
-          talla: talla_apoderado,
+          talla: String(tallaApoderadoFinal).toUpperCase(),
           numero_estampado: null,
           nombre_estampado: '',
           monto: 0,
@@ -189,7 +189,7 @@ router.post('/', authMiddleware, async (req, res) => {
           estado_entrega: 'Pendiente'
         }]);
       } catch (errApoderado) {
-        console.error('⚠️ Detalle registrando indumentaria del apoderado:', errApoderado.message);
+        console.error('⚠️ Detalle registrando la camiseta del apoderado:', errApoderado.message);
       }
     }
 
