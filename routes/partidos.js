@@ -350,7 +350,7 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
         ? `\n⚽ *Goles:* ` + goleadores.map(g => `${g.nombre} (${g.goles})`).join(', ')
         : '';
 
-      let asistentesTxt = asistentes.length > 0 
+      let asistenciasTxt = asistentes.length > 0 
         ? `\n🎯 *Asistencias:* ` + asistentes.map(a => `${a.nombre} (${a.asistencias})`).join(', ')
         : '';
 
