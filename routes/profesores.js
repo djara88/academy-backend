@@ -6,13 +6,24 @@ const { requireDirector, requireProfessor } = require('../middleware/professorAc
 const { getProfessorLimit } = require('../services/planLimits');
 const { sendProfessorAccessEmail } = require('../services/accessEmail');
 const { toProfessorPlayer } = require('../services/professorPlayerView');
+const { buildAttendanceAlertRows } = require('../services/attendanceAlerts');
 
 const router = express.Router();
 const ATTENDANCE_STATES = new Set(['Presente', 'Ausente', 'Justificado']);
 
 const createTemporaryPassword = () => `${crypto.randomBytes(9).toString('base64url')}A9!`;
 const cleanText = (value) => String(value || '').trim();
+const cleanLimitedText = (value, maxLength) => cleanText(value).slice(0, maxLength);
 const uniqueIds = (values) => [...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))];
+const isValidDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+const todayInChile = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+const addDays = (date, days) => {
+  const value = new Date(`${date}T12:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
 
 const getAcademyProfessorUsage = async (academyId) => {
   const [{ data: academy, error: academyError }, { count, error: countError }] = await Promise.all([
@@ -79,6 +90,61 @@ const getCategoryPlayers = async (academyId, categoryId) => {
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 };
 
+const getAssignedCategoryIds = async (user) => {
+  const { data, error } = await supabase.from('profesor_categorias').select('categoria_id')
+    .eq('academia_id', user.academia_id).eq('profesor_id', user.id).eq('activo', true);
+  if (error) throw error;
+  return uniqueIds((data || []).map((item) => item.categoria_id));
+};
+
+const requireAssignedTraining = async (user, trainingId) => {
+  const { data: training, error } = await supabase.from('entrenamientos')
+    .select('id,academia_id,categoria_id,fecha,hora,lugar,estado,es_recuperacion')
+    .eq('id', trainingId).eq('academia_id', user.academia_id).maybeSingle();
+  if (error) throw error;
+  if (!training) throw Object.assign(new Error('Entrenamiento no encontrado.'), { status: 404 });
+  await requireAssignedCategory(user, training.categoria_id);
+  return training;
+};
+
+const requireAssignedMatch = async (user, matchId) => {
+  const { data: match, error } = await supabase.from('partidos')
+    .select('id,academia_id,categoria_id,rival,fecha,hora,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre)')
+    .eq('id', matchId).eq('academia_id', user.academia_id).maybeSingle();
+  if (error) throw error;
+  if (!match) throw Object.assign(new Error('Partido no encontrado.'), { status: 404 });
+  if (!match.categoria_id) throw Object.assign(new Error('El partido debe tener una categoría asignada.'), { status: 409 });
+  await requireAssignedCategory(user, match.categoria_id);
+  return match;
+};
+
+const refreshAttendanceAlerts = async ({ academyId, categoryId, playerIds }) => {
+  const { data: trainings, error: trainingError } = await supabase.from('entrenamientos')
+    .select('id,fecha,created_at').eq('academia_id', academyId).eq('categoria_id', categoryId)
+    .eq('estado', 'Realizado').order('fecha', { ascending: false }).order('created_at', { ascending: false }).limit(20);
+  if (trainingError) throw trainingError;
+  const trainingIds = (trainings || []).map((training) => training.id);
+  if (!trainingIds.length || !playerIds.length) return 0;
+
+  const [{ data: attendance, error: attendanceError }, { data: existing, error: existingError }] = await Promise.all([
+    supabase.from('asistencias').select('entrenamiento_id,jugador_id,estado')
+      .in('entrenamiento_id', trainingIds).in('jugador_id', playerIds),
+    supabase.from('alertas_asistencia').select('jugador_id,racha,activa,detectada_at,revisada_at,revisada_por')
+      .eq('academia_id', academyId).eq('categoria_id', categoryId).in('jugador_id', playerIds),
+  ]);
+  if (attendanceError) throw attendanceError;
+  if (existingError) throw existingError;
+
+  const calculated = buildAttendanceAlertRows({
+    academyId, categoryId, playerIds, trainings: trainings || [], attendance: attendance || [], existingAlerts: existing || [],
+  });
+  const rows = calculated.map(({ newly_activated: _newlyActivated, ...row }) => row);
+  const { error: upsertError } = await supabase.from('alertas_asistencia')
+    .upsert(rows, { onConflict: 'academia_id,categoria_id,jugador_id,tipo' });
+  if (upsertError) throw upsertError;
+  return calculated.filter((row) => row.newly_activated).length;
+};
+
 router.get('/', authMiddleware, requireDirector, async (req, res) => {
   try {
     const usage = await getAcademyProfessorUsage(req.user.academia_id);
@@ -98,6 +164,55 @@ router.get('/', authMiddleware, requireDirector, async (req, res) => {
         .map((item) => categoryMap.get(item.categoria_id)).filter(Boolean),
     }));
     res.json({ success: true, data, categorias: categories || [], cupos: { used: usage.used, max: usage.max, remaining: usage.remaining }, plan: usage.academy.plan });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/alertas/asistencia', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('alertas_asistencia')
+      .select('id,racha,detectada_at,ultima_ausencia,jugadores(id,nombre,foto_url,avatar_url),categorias(id,nombre)')
+      .eq('academia_id', req.user.academia_id).eq('activa', true)
+      .order('detectada_at', { ascending: false }).limit(50);
+    if (error) throw error;
+    res.json({ success: true, data: data || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/alertas/asistencia/:id/revisada', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('alertas_asistencia')
+      .update({ activa: false, revisada_at: new Date().toISOString(), revisada_por: req.user.id, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id).eq('academia_id', req.user.academia_id).eq('activa', true)
+      .select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'La alerta ya fue revisada o no pertenece a tu academia.' });
+    res.json({ success: true, message: 'Alerta marcada como revisada.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/actividad', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const [{ data: logs, error: logError }, { data: plans, error: planError }] = await Promise.all([
+      supabase.from('entrenamiento_bitacoras')
+        .select('id,objetivo,incidencias,intensidad,updated_at,categorias(id,nombre),usuarios(nombre_completo),entrenamientos(fecha,hora)')
+        .eq('academia_id', req.user.academia_id).order('updated_at', { ascending: false }).limit(10),
+      supabase.from('partido_preparaciones')
+        .select('id,sistema_juego,objetivo,estado,updated_at,categorias(id,nombre),usuarios(nombre_completo),partidos(rival,fecha,hora)')
+        .eq('academia_id', req.user.academia_id).order('updated_at', { ascending: false }).limit(10),
+    ]);
+    if (logError) throw logError;
+    if (planError) throw planError;
+    const activity = [
+      ...(logs || []).map((item) => ({ ...item, tipo: 'Bitácora' })),
+      ...(plans || []).map((item) => ({ ...item, tipo: 'Preparación' })),
+    ].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 12);
+    res.json({ success: true, data: activity });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -288,6 +403,178 @@ router.get('/me', authMiddleware, requireProfessor, async (req, res) => {
   }
 });
 
+router.get('/me/agenda', authMiddleware, requireProfessor, async (req, res) => {
+  try {
+    const from = cleanText(req.query.desde) || todayInChile();
+    const to = cleanText(req.query.hasta) || addDays(from, 60);
+    if (!isValidDate(from) || !isValidDate(to) || to < from || to > addDays(from, 120)) {
+      return res.status(400).json({ error: 'El rango de agenda es inválido o supera 120 días.' });
+    }
+    const categoryIds = await getAssignedCategoryIds(req.user);
+    if (!categoryIds.length) return res.json({ success: true, data: [] });
+
+    const [{ data: trainings, error: trainingError }, { data: matches, error: matchError }] = await Promise.all([
+      supabase.from('entrenamientos')
+        .select('id,categoria_id,fecha,hora,lugar,estado,es_recuperacion,categorias(id,nombre)')
+        .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds)
+        .gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
+      supabase.from('partidos')
+        .select('id,categoria_id,rival,fecha,hora,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre)')
+        .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds)
+        .gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
+    ]);
+    if (trainingError) throw trainingError;
+    if (matchError) throw matchError;
+
+    const trainingIds = (trainings || []).map((item) => item.id);
+    const matchIds = (matches || []).map((item) => item.id);
+    const [logsResult, plansResult] = await Promise.all([
+      trainingIds.length
+        ? supabase.from('entrenamiento_bitacoras').select('entrenamiento_id').eq('academia_id', req.user.academia_id).in('entrenamiento_id', trainingIds)
+        : Promise.resolve({ data: [], error: null }),
+      matchIds.length
+        ? supabase.from('partido_preparaciones').select('partido_id,estado').eq('academia_id', req.user.academia_id).in('partido_id', matchIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (logsResult.error) throw logsResult.error;
+    if (plansResult.error) throw plansResult.error;
+    const loggedTrainingIds = new Set((logsResult.data || []).map((item) => item.entrenamiento_id));
+    const planByMatch = new Map((plansResult.data || []).map((item) => [item.partido_id, item.estado]));
+
+    const events = [
+      ...(trainings || []).map((item) => ({ ...item, tipo: 'Entrenamiento', bitacora_completa: loggedTrainingIds.has(item.id) })),
+      ...(matches || []).map((item) => ({ ...item, tipo: 'Partido', preparacion_estado: planByMatch.get(item.id) || null })),
+    ].sort((a, b) => `${a.fecha} ${a.hora || ''}`.localeCompare(`${b.fecha} ${b.hora || ''}`));
+    res.json({ success: true, data: events, rango: { desde: from, hasta: to } });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+router.get('/me/entrenamientos/:entrenamientoId/bitacora', authMiddleware, requireProfessor, async (req, res) => {
+  try {
+    const training = await requireAssignedTraining(req.user, req.params.entrenamientoId);
+    const { data, error } = await supabase.from('entrenamiento_bitacoras')
+      .select('id,objetivo,contenidos,observaciones,incidencias,intensidad,updated_at')
+      .eq('academia_id', req.user.academia_id).eq('entrenamiento_id', training.id).maybeSingle();
+    if (error) throw error;
+    res.json({ success: true, data: { entrenamiento: training, bitacora: data || null } });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+router.put('/me/entrenamientos/:entrenamientoId/bitacora', authMiddleware, requireProfessor, async (req, res) => {
+  try {
+    const training = await requireAssignedTraining(req.user, req.params.entrenamientoId);
+    const intensity = cleanText(req.body.intensidad) || 'Media';
+    if (!new Set(['Baja', 'Media', 'Alta']).has(intensity)) return res.status(400).json({ error: 'Intensidad inválida.' });
+    const payload = {
+      academia_id: req.user.academia_id,
+      entrenamiento_id: training.id,
+      categoria_id: training.categoria_id,
+      profesor_id: req.user.id,
+      objetivo: cleanLimitedText(req.body.objetivo, 500),
+      contenidos: cleanLimitedText(req.body.contenidos, 1500),
+      observaciones: cleanLimitedText(req.body.observaciones, 1500),
+      incidencias: cleanLimitedText(req.body.incidencias, 1500),
+      intensidad: intensity,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase.from('entrenamiento_bitacoras')
+      .upsert(payload, { onConflict: 'entrenamiento_id' })
+      .select('id,objetivo,contenidos,observaciones,incidencias,intensidad,updated_at').single();
+    if (error) throw error;
+    res.json({ success: true, message: 'Bitácora guardada.', data });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, async (req, res) => {
+  try {
+    const match = await requireAssignedMatch(req.user, req.params.partidoId);
+    const players = await getCategoryPlayers(req.user.academia_id, match.categoria_id);
+    const { data: preparation, error: preparationError } = await supabase.from('partido_preparaciones')
+      .select('id,sistema_juego,objetivo,indicaciones,hora_citacion,estado,updated_at')
+      .eq('academia_id', req.user.academia_id).eq('partido_id', match.id).maybeSingle();
+    if (preparationError) throw preparationError;
+    let plan = [];
+    if (preparation) {
+      const { data, error } = await supabase.from('partido_plan_jugadores')
+        .select('jugador_id,rol,posicion,orden').eq('preparacion_id', preparation.id).order('orden');
+      if (error) throw error;
+      plan = data || [];
+    }
+    const planByPlayer = new Map(plan.map((item) => [item.jugador_id, item]));
+    const roster = players.map((player) => {
+      const planned = planByPlayer.get(player.id);
+      return {
+        id: player.id,
+        nombre: player.nombre,
+        posicion_principal: player.posicion_principal,
+        posicion_cancha: player.posicion_cancha,
+        foto_url: player.foto_url,
+        avatar_url: player.avatar_url,
+        rol_plan: planned?.rol || null,
+        posicion_plan: planned?.posicion || '',
+        orden_plan: planned?.orden ?? null,
+      };
+    });
+    res.json({ success: true, data: { partido: match, preparacion: preparation || null, jugadores: roster } });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, async (req, res) => {
+  try {
+    const match = await requireAssignedMatch(req.user, req.params.partidoId);
+    if (match.fecha < todayInChile() || match.estado === 'Jugado') {
+      return res.status(409).json({ error: 'Solo puedes preparar partidos próximos que aún no se han jugado.' });
+    }
+    const plannedPlayers = Array.isArray(req.body.jugadores) ? req.body.jugadores : [];
+    if (plannedPlayers.length > 40) return res.status(400).json({ error: 'La planificación no puede superar 40 jugadores.' });
+    const ids = plannedPlayers.map((item) => String(item.jugador_id || '')).filter(Boolean);
+    if (ids.length !== uniqueIds(ids).length) return res.status(400).json({ error: 'Hay jugadores repetidos en la planificación.' });
+    if (plannedPlayers.some((item) => !item.jugador_id || !new Set(['Titular', 'Suplente']).has(item.rol))) {
+      return res.status(400).json({ error: 'Cada jugador debe quedar como Titular o Suplente.' });
+    }
+    const roster = await getCategoryPlayers(req.user.academia_id, match.categoria_id);
+    const rosterIds = new Set(roster.map((player) => player.id));
+    if (ids.some((id) => !rosterIds.has(id))) return res.status(403).json({ error: 'La planificación contiene un jugador ajeno a tu categoría.' });
+    const status = cleanText(req.body.estado) || 'Borrador';
+    if (!new Set(['Borrador', 'Lista']).has(status)) return res.status(400).json({ error: 'Estado de preparación inválido.' });
+    if (status === 'Lista' && !plannedPlayers.some((item) => item.rol === 'Titular')) {
+      return res.status(400).json({ error: 'Para marcar la preparación como lista debes definir al menos un titular.' });
+    }
+    const callTime = cleanText(req.body.hora_citacion);
+    if (callTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(callTime)) return res.status(400).json({ error: 'Hora de citación inválida.' });
+    const sanitizedPlayers = plannedPlayers.map((item, index) => ({
+      jugador_id: String(item.jugador_id),
+      rol: item.rol,
+      posicion: cleanLimitedText(item.posicion, 60),
+      orden: Math.min(Math.max(Number.isInteger(item.orden) ? item.orden : index, 0), 99),
+    }));
+    const { data, error } = await supabase.rpc('save_partido_preparacion', {
+      p_academia_id: req.user.academia_id,
+      p_partido_id: match.id,
+      p_categoria_id: match.categoria_id,
+      p_profesor_id: req.user.id,
+      p_sistema_juego: cleanLimitedText(req.body.sistema_juego, 80),
+      p_objetivo: cleanLimitedText(req.body.objetivo, 700),
+      p_indicaciones: cleanLimitedText(req.body.indicaciones, 2500),
+      p_hora_citacion: callTime || null,
+      p_estado: status,
+      p_jugadores: sanitizedPlayers,
+    });
+    if (error) throw error;
+    res.json({ success: true, message: status === 'Lista' ? 'Preparación lista para el partido.' : 'Borrador de partido guardado.', preparacion_id: data });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
 router.get('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProfessor, async (req, res) => {
   try {
     const date = cleanText(req.query.fecha) || new Date().toISOString().slice(0, 10);
@@ -342,8 +629,18 @@ router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requirePro
     const rows = items.map((item) => ({ entrenamiento_id: training.id, jugador_id: item.jugador_id, estado: item.estado, registrado_por: req.user.id, actualizado_at: new Date().toISOString() }));
     const { error: attendanceError } = await supabase.from('asistencias').upsert(rows, { onConflict: 'entrenamiento_id,jugador_id' });
     if (attendanceError) throw attendanceError;
+    let activatedAlerts = 0;
+    try {
+      activatedAlerts = await refreshAttendanceAlerts({
+        academyId: req.user.academia_id,
+        categoryId: req.params.categoriaId,
+        playerIds: items.map((item) => String(item.jugador_id)),
+      });
+    } catch (alertError) {
+      console.error('No se pudieron actualizar las alertas de asistencia:', alertError.message);
+    }
     await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id);
-    res.json({ success: true, message: `Asistencia guardada: ${items.length} jugadores.`, entrenamiento_id: training.id });
+    res.json({ success: true, message: `Asistencia guardada: ${items.length} jugadores.`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message });
   }
