@@ -4,9 +4,17 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const authIdentityMiddleware = require('../middleware/authIdentity');
 const { requireSuperadmin, requireOwnAcademyOrSuperadmin } = require('../middleware/authorization');
+const { PLAN_DEFINITIONS, getAcademyEntitlements, resolvePlanCode, getPlanProfessorLimit } = require('../services/planCatalog');
 const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage() });
+
+const PLAN_LABELS = {
+  formacion: 'Formación',
+  competencia: 'Competencia',
+  alto_rendimiento: 'Alto Rendimiento',
+};
+const cleanPlanCode = (value, fallback = 'formacion') => PLAN_DEFINITIONS[value] ? value : fallback;
 
 // ====================================================================
 // 🚀 NUEVA RUTA: REGISTRO PÚBLICO AUTOMÁTICO (SELF-SERVICE)
@@ -173,6 +181,18 @@ router.get('/mi-academia', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/mi-plan', authMiddleware, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('academias')
+      .select('id,nombre,plan,plan_codigo,max_profesores,licencia_apoderados,estado')
+      .eq('id', req.user.academia_id).single();
+    if (error) throw error;
+    res.json({ success: true, data: getAcademyEntitlements(data) });
+  } catch (error) {
+    res.status(500).json({ error: 'No fue posible consultar el plan de tu academia.' });
+  }
+});
+
 router.put('/mi-academia', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -208,7 +228,7 @@ router.get('/', authMiddleware, requireSuperadmin, async (req, res) => {
 });
 
 router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async (req, res) => {
-  const { nombre, direccion, telefono, correo_academia, nombre_director, director_email, plan } = req.body;
+  const { nombre, direccion, telefono, correo_academia, nombre_director, director_email } = req.body;
   let createdAuthUser = null;
 
   try {
@@ -229,9 +249,16 @@ router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async
       logoUrl = publicUrlData.publicUrl;
     }
 
+    const planCode = cleanPlanCode(req.body.plan_codigo || resolvePlanCode({ plan: req.body.plan }));
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
-      .insert([{ nombre, logo: logoUrl, direccion, telefono, correo_academia, nombre_director, director_email, plan, estado: 'Activa', jugadores_count: 0 }])
+      .insert([{
+        nombre, logo: logoUrl, direccion, telefono, correo_academia, nombre_director, director_email,
+        plan: PLAN_LABELS[planCode], plan_codigo: planCode,
+        max_profesores: getPlanProfessorLimit(planCode),
+        licencia_apoderados: req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true,
+        estado: 'Activa', jugadores_count: 0,
+      }])
       .select().single();
 
     if (dbError) throw dbError;
@@ -250,10 +277,20 @@ router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async
 
 router.put('/:id', authMiddleware, requireSuperadmin, upload.single('logo'), async (req, res) => {
   const { id } = req.params;
-  const { nombre, direccion, telefono, correo_academia, nombre_director, director_email, plan, estado } = req.body;
+  const { nombre, direccion, telefono, correo_academia, nombre_director, director_email, estado } = req.body;
 
   try {
-    let updateData = { nombre, direccion, telefono, correo_academia, nombre_director, director_email, plan, estado };
+    const { data: current, error: currentError } = await supabase.from('academias')
+      .select('plan,plan_codigo').eq('id', id).single();
+    if (currentError) throw currentError;
+    const planCode = cleanPlanCode(req.body.plan_codigo || resolvePlanCode({ plan: req.body.plan }), current.plan_codigo || 'formacion');
+    let updateData = {
+      nombre, direccion, telefono, correo_academia, nombre_director, director_email, estado,
+      plan: PLAN_LABELS[planCode],
+      plan_codigo: planCode,
+      max_profesores: getPlanProfessorLimit(planCode),
+      licencia_apoderados: req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true,
+    };
     if (req.file) {
       const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
       await supabase.storage.from('logos-escuelas').upload(fileName, req.file.buffer, { contentType: req.file.mimetype });

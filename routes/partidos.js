@@ -5,17 +5,38 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
+const normalizeTime = (value) => {
+  const time = String(value || '').trim().slice(0, 5);
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(time) ? time : null;
+};
+const subtractMinutes = (time, amount) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  const total = (hours * 60 + minutes - amount + 1440) % 1440;
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+const validateSchedule = (matchTimeValue, callTimeValue) => {
+  const matchTime = normalizeTime(matchTimeValue);
+  if (!matchTime) throw Object.assign(new Error('Selecciona una hora de partido válida.'), { status: 400 });
+  const callTime = normalizeTime(callTimeValue) || subtractMinutes(matchTime, 60);
+  const [matchHour, matchMinute] = matchTime.split(':').map(Number);
+  const [callHour, callMinute] = callTime.split(':').map(Number);
+  if (callHour * 60 + callMinute >= matchHour * 60 + matchMinute) {
+    throw Object.assign(new Error('La citación debe ser anterior a la hora del partido.'), { status: 400 });
+  }
+  return { matchTime, callTime };
+};
 
 // 1. CREAR PARTIDO + EGRESOS AUTOMÁTICOS (ARBITRAJE / CANCHA) 🔥
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { 
-      torneo_id, categoria_id, es_amistoso, rival, fecha, hora, 
+      torneo_id, categoria_id, es_amistoso, rival, fecha, hora, hora_citacion,
       ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, monto_arbitraje_jugador,
       costo_arbitraje_total, costo_cancha // Opcionales de egresos
     } = req.body;
 
+    const { matchTime, callTime } = validateSchedule(hora, hora_citacion);
     const { data, error } = await supabase
       .from('partidos')
       .insert([{
@@ -25,7 +46,8 @@ router.post('/', authMiddleware, async (req, res) => {
         es_amistoso: es_amistoso || false,
         rival,
         fecha,
-        hora: hora || '00:00',
+        hora: matchTime,
+        hora_citacion: callTime,
         ubicacion: ubicacion || '',
         link_maps: link_maps || '',
         color_uniforme: color_uniforme || 'Titular',
@@ -72,7 +94,7 @@ router.post('/', authMiddleware, async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('❌ Error al crear partido:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.status || 500).json({ success: false, error: error.message });
   }
 });
 
@@ -111,11 +133,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { 
-      torneo_id, categoria_id, es_amistoso, rival, fecha, hora, 
+      torneo_id, categoria_id, es_amistoso, rival, fecha, hora, hora_citacion,
       ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, 
       monto_arbitraje_jugador, estado
     } = req.body;
 
+    const { matchTime, callTime } = validateSchedule(hora, hora_citacion);
     const { data, error } = await supabase
       .from('partidos')
       .update({
@@ -124,7 +147,8 @@ router.put('/:id', authMiddleware, async (req, res) => {
         es_amistoso: es_amistoso || false,
         rival,
         fecha,
-        hora: hora || '00:00',
+        hora: matchTime,
+        hora_citacion: callTime,
         ubicacion: ubicacion || '',
         link_maps: link_maps || '',
         color_uniforme: color_uniforme || 'Titular',
@@ -142,7 +166,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     console.error('❌ Error al editar partido:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error.status || 500).json({ success: false, error: error.message });
   }
 });
 
@@ -280,7 +304,8 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
         `🏷️ *Categoría:* ${partido.categorias?.nombre || 'General'}\n` +
         `${condicionTag}\n` +
         `📅 *Fecha:* ${partido.fecha}\n` +
-        `⏰ *Hora:* ${partido.hora} hrs\n` +
+        `📣 *Citación:* ${partido.hora_citacion || subtractMinutes(String(partido.hora).slice(0, 5), 60)} hrs\n` +
+        `⏰ *Inicio del partido:* ${partido.hora} hrs\n` +
         `🏟️ *Lugar:* ${partido.ubicacion || 'Por confirmar'}` +
         `${mapsTexto}\n` +
         `👕 *Uniforme:* ${partido.color_uniforme}` +

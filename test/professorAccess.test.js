@@ -1,10 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { isProfessor, isAllowedProfessorRequest } = require('../middleware/professorAccess');
+const { isProfessor, isGuardian, isAllowedProfessorRequest, isAllowedGuardianRequest } = require('../middleware/professorAccess');
 
 test('normaliza el rol profesor', () => {
   assert.equal(isProfessor({ rol: 'Profesor' }), true);
   assert.equal(isProfessor({ rol: 'director' }), false);
+});
+
+test('un apoderado solo puede usar su portal privado', () => {
+  assert.equal(isGuardian({ rol: 'Apoderado' }), true);
+  assert.equal(isAllowedGuardianRequest({ originalUrl: '/api/apoderados/me' }), true);
+  assert.equal(isAllowedGuardianRequest({ originalUrl: '/api/apoderados/me?seccion=pagos' }), true);
+  assert.equal(isAllowedGuardianRequest({ originalUrl: '/api/cambiar-password' }), true);
+  assert.equal(isAllowedGuardianRequest({ originalUrl: '/api/jugadores' }), false);
+  assert.equal(isAllowedGuardianRequest({ originalUrl: '/api/finanzas/resumen' }), false);
 });
 
 test('un profesor solo puede usar su portal y cambiar su contraseña', () => {

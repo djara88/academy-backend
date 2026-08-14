@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const supabase = require('./config/supabase');
 const authMiddleware = require('./middleware/auth');
+const { requireFeature } = require('./middleware/planAccess');
+const { FEATURES } = require('./services/planCatalog');
 
 const app = express();
 const allowedOrigins = new Set([
@@ -88,12 +90,14 @@ const finanzasRoutes = require('./routes/finanzas');
 const entrenamientosRoutes = require('./routes/entrenamientos');
 const uniformesRoutes = require('./routes/uniformes');
 const profesoresRoutes = require('./routes/profesores');
+const apoderadosRoutes = require('./routes/apoderados');
+const dashboardRoutes = require('./routes/dashboard');
 
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
-app.use('/api/evaluaciones', evaluacionRoutes);
-app.use('/api/ficha-medica', fichaMedicaRoutes);
-app.use('/api/torneos', torneoRoutes);
+app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
+app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
+app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
 app.use('/api/partidos', partidoRoutes);
 app.use('/api/academias', academiaRoutes);
 app.use('/api/matriculas', matriculaRoutes);
@@ -102,6 +106,8 @@ app.use('/api/finanzas', finanzasRoutes);
 app.use('/api/entrenamientos', entrenamientosRoutes);
 app.use('/api/uniformes', uniformesRoutes);
 app.use('/api/profesores', profesoresRoutes);
+app.use('/api/apoderados', apoderadosRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {

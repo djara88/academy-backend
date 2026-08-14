@@ -1,6 +1,6 @@
 const supabase = require('../config/supabase');
 const { isMasterAdminEmail } = require('./masterAdmin');
-const { isProfessor, isAllowedProfessorRequest } = require('./professorAccess');
+const { isProfessor, isGuardian, isAllowedProfessorRequest, isAllowedGuardianRequest } = require('./professorAccess');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -57,6 +57,11 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
+    if (isGuardian(req.user) && !isAllowedGuardianRequest(req)) {
+      return res.status(403).json({
+        error: 'Tu perfil de apoderado solo puede acceder a la información de tus jugadores vinculados.',
+      });
+    }
     next();
   } catch (error) {
     console.error('❌ Error en middleware auth:', error);

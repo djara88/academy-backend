@@ -7,6 +7,8 @@ const { getProfessorLimit } = require('../services/planLimits');
 const { sendProfessorAccessEmail } = require('../services/accessEmail');
 const { toProfessorPlayer } = require('../services/professorPlayerView');
 const { buildAttendanceAlertRows } = require('../services/attendanceAlerts');
+const { requireFeature } = require('../middleware/planAccess');
+const { FEATURES } = require('../services/planCatalog');
 
 const router = express.Router();
 const ATTENDANCE_STATES = new Set(['Presente', 'Ausente', 'Justificado']);
@@ -109,7 +111,7 @@ const requireAssignedTraining = async (user, trainingId) => {
 
 const requireAssignedMatch = async (user, matchId) => {
   const { data: match, error } = await supabase.from('partidos')
-    .select('id,academia_id,categoria_id,rival,fecha,hora,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre)')
+    .select('id,academia_id,categoria_id,rival,fecha,hora,hora_citacion,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre)')
     .eq('id', matchId).eq('academia_id', user.academia_id).maybeSingle();
   if (error) throw error;
   if (!match) throw Object.assign(new Error('Partido no encontrado.'), { status: 404 });
@@ -419,7 +421,7 @@ router.get('/me/agenda', authMiddleware, requireProfessor, async (req, res) => {
         .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds)
         .gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
       supabase.from('partidos')
-        .select('id,categoria_id,rival,fecha,hora,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre)')
+        .select('id,categoria_id,rival,fecha,hora,hora_citacion,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre)')
         .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds)
         .gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
     ]);
@@ -491,12 +493,12 @@ router.put('/me/entrenamientos/:entrenamientoId/bitacora', authMiddleware, requi
   }
 });
 
-router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, async (req, res) => {
+router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, ...requireFeature(FEATURES.MATCH_PREPARATION), async (req, res) => {
   try {
     const match = await requireAssignedMatch(req.user, req.params.partidoId);
     const players = await getCategoryPlayers(req.user.academia_id, match.categoria_id);
     const { data: preparation, error: preparationError } = await supabase.from('partido_preparaciones')
-      .select('id,sistema_juego,objetivo,indicaciones,hora_citacion,estado,updated_at')
+      .select('id,sistema_juego,objetivo,indicaciones,estado,updated_at')
       .eq('academia_id', req.user.academia_id).eq('partido_id', match.id).maybeSingle();
     if (preparationError) throw preparationError;
     let plan = [];
@@ -527,7 +529,7 @@ router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfess
   }
 });
 
-router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, async (req, res) => {
+router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, ...requireFeature(FEATURES.MATCH_PREPARATION), async (req, res) => {
   try {
     const match = await requireAssignedMatch(req.user, req.params.partidoId);
     if (match.fecha < todayInChile() || match.estado === 'Jugado') {
@@ -548,8 +550,6 @@ router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfess
     if (status === 'Lista' && !plannedPlayers.some((item) => item.rol === 'Titular')) {
       return res.status(400).json({ error: 'Para marcar la preparación como lista debes definir al menos un titular.' });
     }
-    const callTime = cleanText(req.body.hora_citacion);
-    if (callTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(callTime)) return res.status(400).json({ error: 'Hora de citación inválida.' });
     const sanitizedPlayers = plannedPlayers.map((item, index) => ({
       jugador_id: String(item.jugador_id),
       rol: item.rol,
@@ -564,7 +564,6 @@ router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfess
       p_sistema_juego: cleanLimitedText(req.body.sistema_juego, 80),
       p_objetivo: cleanLimitedText(req.body.objetivo, 700),
       p_indicaciones: cleanLimitedText(req.body.indicaciones, 2500),
-      p_hora_citacion: callTime || null,
       p_estado: status,
       p_jugadores: sanitizedPlayers,
     });
