@@ -235,6 +235,10 @@ router.patch('/:id/estado', authMiddleware, requireDirector, async (req, res) =>
     if (active && !professor.activo) {
       const usage = await getAcademyProfessorUsage(req.user.academia_id);
       if (usage.used >= usage.max) return res.status(409).json({ error: `No quedan cupos en tu plan (${usage.max}).` });
+      const { count: assignmentCount, error: assignmentError } = await supabase.from('profesor_categorias')
+        .select('id', { count: 'exact', head: true }).eq('profesor_id', professorId).eq('activo', true);
+      if (assignmentError) throw assignmentError;
+      if (!assignmentCount) return res.status(409).json({ error: 'Asigna al menos una categoría antes de reactivar este acceso.' });
     }
     const { error: updateError } = await supabase.from('usuarios').update({ activo: active }).eq('id', professorId);
     if (updateError) throw updateError;
