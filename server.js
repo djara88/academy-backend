@@ -92,6 +92,8 @@ const uniformesRoutes = require('./routes/uniformes');
 const profesoresRoutes = require('./routes/profesores');
 const apoderadosRoutes = require('./routes/apoderados');
 const dashboardRoutes = require('./routes/dashboard');
+const saasAdminRoutes = require('./routes/saasAdmin');
+const subscriptionRoutes = require('./routes/subscriptions');
 
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
@@ -108,6 +110,8 @@ app.use('/api/uniformes', uniformesRoutes);
 app.use('/api/profesores', profesoresRoutes);
 app.use('/api/apoderados', apoderadosRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/saas-admin', saasAdminRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {

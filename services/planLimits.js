@@ -1,5 +1,5 @@
 const { getAcademyEntitlements, normalizePlanText } = require('./planCatalog');
-const DEFAULT_PROFESSOR_LIMIT = 2;
+const DEFAULT_PROFESSOR_LIMIT = 3;
 const normalizePlan = normalizePlanText;
 
 const getProfessorLimit = (academy = {}) => {

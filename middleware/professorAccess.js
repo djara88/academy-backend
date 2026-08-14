@@ -28,12 +28,12 @@ const requireGuardian = (req, res, next) => {
 
 const isAllowedProfessorRequest = (req) => {
   const path = req.originalUrl?.split('?')[0] || '';
-  return path.startsWith('/api/profesores/me') || path === '/api/cambiar-password';
+  return path.startsWith('/api/profesores/me') || path === '/api/academias/mi-plan' || path === '/api/cambiar-password';
 };
 
 const isAllowedGuardianRequest = (req) => {
   const path = req.originalUrl?.split('?')[0] || '';
-  return path.startsWith('/api/apoderados/me') || path === '/api/cambiar-password';
+  return path.startsWith('/api/apoderados/me') || path === '/api/academias/mi-plan' || path === '/api/cambiar-password';
 };
 
 module.exports = {

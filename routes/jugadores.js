@@ -6,6 +6,9 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
+const { getAcademyEntitlements } = require('../services/planCatalog');
+const { FEATURES } = require('../services/planCatalog');
+const { requireFeature } = require('../middleware/planAccess');
 
 const esTallaValidaApoderado = (talla) => {
   if (!talla) return false;
@@ -102,6 +105,18 @@ router.get('/', authMiddleware, async (req, res) => {
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const playerLimit = getAcademyEntitlements(req.academy || {}).limits.players;
+    if (Number.isInteger(playerLimit)) {
+      const { count, error: countError } = await supabase.from('jugadores')
+        .select('id', { count: 'exact', head: true }).eq('academia_id', academia_id);
+      if (countError) throw countError;
+      if (Number(count || 0) >= playerLimit) {
+        return res.status(403).json({
+          error: `Tu plan permite hasta ${playerLimit} jugadores. Actualiza el plan para continuar.`,
+          code: 'PLAYER_LIMIT_REACHED', limit: playerLimit,
+        });
+      }
+    }
     const { 
       tutor, nombre, rut, tipo_alumno, certificado_medico, sexo, fecha_nacimiento, posicion_cancha, 
       talla_uniforme, talla_apoderado, numero_camiseta, nombre_camiseta, 
@@ -298,7 +313,7 @@ router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
+router.get('/:jugador_id/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { jugador_id } = req.params;
@@ -316,7 +331,7 @@ router.get('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
+router.post('/:jugador_id/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { jugador_id } = req.params;
@@ -329,7 +344,7 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
+router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEATURES.EXPORTS), async (req, res) => {
   try {
     const { academia_id } = req.user;
     const academyName = await getAcademyName(academia_id);

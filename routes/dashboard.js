@@ -2,7 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
-const { getAcademyEntitlements } = require('../services/planCatalog');
+const { FEATURES, getAcademyEntitlements } = require('../services/planCatalog');
 
 const router = express.Router();
 const todayInChile = () => new Intl.DateTimeFormat('en-CA', {
@@ -75,7 +75,7 @@ router.get('/resumen', authMiddleware, requireDirector, async (req, res) => {
           uniformes_pendientes: pendingUniforms,
         },
         prioridades: {
-          alertas_asistencia: alertsResult.data || [],
+          alertas_asistencia: entitlements.features.includes(FEATURES.ATTENDANCE_ALERTS) ? alertsResult.data || [] : [],
           categorias_sin_profesor: categoriesWithoutProfessor,
         },
         proximos_partidos: matchesResult.data || [],

@@ -5,6 +5,8 @@ const authMiddleware = require('../middleware/auth');
 const authIdentityMiddleware = require('../middleware/authIdentity');
 const { requireSuperadmin, requireOwnAcademyOrSuperadmin } = require('../middleware/authorization');
 const { PLAN_DEFINITIONS, getAcademyEntitlements, resolvePlanCode, getPlanProfessorLimit } = require('../services/planCatalog');
+const { BILLING_PLANS, GUARDIAN_ADDON_UF } = require('../services/billingCatalog');
+const { getSubscriptionState } = require('../services/subscriptionAccess');
 const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -15,6 +17,10 @@ const PLAN_LABELS = {
   alto_rendimiento: 'Alto Rendimiento',
 };
 const cleanPlanCode = (value, fallback = 'formacion') => PLAN_DEFINITIONS[value] ? value : fallback;
+const trialWindow = () => {
+  const start = new Date();
+  return { start: start.toISOString(), end: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString() };
+};
 
 // ====================================================================
 // 🚀 NUEVA RUTA: REGISTRO PÚBLICO AUTOMÁTICO (SELF-SERVICE)
@@ -39,14 +45,18 @@ router.post('/registro-publico', async (req, res) => {
 
     createdAuthUser = authData.user;
 
+    const trial = trialWindow();
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
-      .insert([{ 
-        nombre: nombre_academia, 
-        nombre_director: nombre_director, 
-        director_email: email, 
-        plan: 'Prueba 15 Días', 
-        estado: 'Activa', 
+      .insert([{
+        nombre: nombre_academia,
+        nombre_director: nombre_director,
+        director_email: email,
+        plan: 'Prueba 15 Días', plan_codigo: 'formacion',
+        max_profesores: 30, max_jugadores: 1000,
+        subscription_status: 'trialing', trial_started_at: trial.start, trial_ends_at: trial.end,
+        plan_price_uf: 0, guardian_price_uf: 0,
+        estado: 'Activa',
         jugadores_count: 0
       }])
       .select()
@@ -137,11 +147,15 @@ router.post('/completar-google', authIdentityMiddleware, upload.single('logo'), 
       }
     }
 
+    const trial = trialWindow();
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
-      .insert([{ 
+      .insert([{
         nombre: nombre_academia, direccion, logo: logoUrl,
-        nombre_director, director_email: email, plan: 'Prueba 15 Días', 
+        nombre_director, director_email: email, plan: 'Prueba 15 Días', plan_codigo: 'formacion',
+        max_profesores: 30, max_jugadores: 1000,
+        subscription_status: 'trialing', trial_started_at: trial.start, trial_ends_at: trial.end,
+        plan_price_uf: 0, guardian_price_uf: 0,
         estado: 'Activa', jugadores_count: 0
       }])
       .select()
@@ -151,7 +165,7 @@ router.post('/completar-google', authIdentityMiddleware, upload.single('logo'), 
 
     const { error: userTableError } = await supabase.from('usuarios').insert([{
       id: auth_id, academia_id: nuevaAcademia.id,
-      nombre_completo: nombre_director, rol: 'director', requiere_cambio_password: false 
+      nombre_completo: nombre_director, rol: 'director', requiere_cambio_password: false
     }]);
 
     if (userTableError) throw userTableError;
@@ -184,10 +198,10 @@ router.get('/mi-academia', authMiddleware, async (req, res) => {
 router.get('/mi-plan', authMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase.from('academias')
-      .select('id,nombre,plan,plan_codigo,max_profesores,licencia_apoderados,estado')
+      .select('id,nombre,plan,plan_codigo,max_profesores,max_jugadores,licencia_apoderados,estado,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_uf,guardian_price_uf')
       .eq('id', req.user.academia_id).single();
     if (error) throw error;
-    res.json({ success: true, data: getAcademyEntitlements(data) });
+    res.json({ success: true, data: { ...getAcademyEntitlements(data), subscription: getSubscriptionState(data) } });
   } catch (error) {
     res.status(500).json({ error: 'No fue posible consultar el plan de tu academia.' });
   }
@@ -232,7 +246,7 @@ router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async
   let createdAuthUser = null;
 
   try {
-    const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!"; 
+    const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!";
 
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email: director_email, password: tempPassword, email_confirm: true
@@ -250,13 +264,18 @@ router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async
     }
 
     const planCode = cleanPlanCode(req.body.plan_codigo || resolvePlanCode({ plan: req.body.plan }));
+    const billingPlan = BILLING_PLANS[planCode];
+    const guardianLicense = req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true;
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
       .insert([{
         nombre, logo: logoUrl, direccion, telefono, correo_academia, nombre_director, director_email,
         plan: PLAN_LABELS[planCode], plan_codigo: planCode,
-        max_profesores: getPlanProfessorLimit(planCode),
-        licencia_apoderados: req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true,
+        max_profesores: getPlanProfessorLimit(planCode), max_jugadores: billingPlan.playerLimit || 100000,
+        licencia_apoderados: guardianLicense,
+        subscription_status: 'active', plan_price_uf: billingPlan.priceUf,
+        guardian_price_uf: guardianLicense ? GUARDIAN_ADDON_UF : 0,
+        next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         estado: 'Activa', jugadores_count: 0,
       }])
       .select().single();
@@ -281,16 +300,30 @@ router.put('/:id', authMiddleware, requireSuperadmin, upload.single('logo'), asy
 
   try {
     const { data: current, error: currentError } = await supabase.from('academias')
-      .select('plan,plan_codigo').eq('id', id).single();
+      .select('plan,plan_codigo,subscription_status').eq('id', id).single();
     if (currentError) throw currentError;
     const planCode = cleanPlanCode(req.body.plan_codigo || resolvePlanCode({ plan: req.body.plan }), current.plan_codigo || 'formacion');
-    let updateData = {
-      nombre, direccion, telefono, correo_academia, nombre_director, director_email, estado,
-      plan: PLAN_LABELS[planCode],
-      plan_codigo: planCode,
-      max_profesores: getPlanProfessorLimit(planCode),
-      licencia_apoderados: req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true,
-    };
+    const billingPlan = BILLING_PLANS[planCode];
+    const guardianLicense = req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true;
+    const activateSubscription = req.body.activate_subscription === 'true';
+    let updateData = { nombre, direccion, telefono, correo_academia, nombre_director, director_email, estado };
+    // Una edición de datos institucionales nunca debe convertir silenciosamente
+    // una prueba Full en un plan pagado. La activación requiere una acción explícita.
+    if (activateSubscription || current.subscription_status !== 'trialing') {
+      Object.assign(updateData, {
+        plan: PLAN_LABELS[planCode],
+        plan_codigo: planCode,
+        max_profesores: getPlanProfessorLimit(planCode), max_jugadores: billingPlan.playerLimit || 100000,
+        licencia_apoderados: guardianLicense,
+        plan_price_uf: billingPlan.priceUf,
+        guardian_price_uf: guardianLicense ? GUARDIAN_ADDON_UF : 0,
+      });
+      updateData.subscription_status = req.body.subscription_status || 'active';
+      updateData.blocked_at = null;
+      updateData.blocked_reason = null;
+      updateData.estado = estado === 'Inactiva' ? 'Inactiva' : 'Activa';
+      updateData.next_billing_date = req.body.next_billing_date || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    }
     if (req.file) {
       const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
       await supabase.storage.from('logos-escuelas').upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
@@ -321,9 +354,9 @@ router.post('/:id/reset-password', authMiddleware, requireSuperadmin, async (req
     const { data: academia, error: acaError } = await supabase.from('academias').select('director_email, nombre_director').eq('id', id).single();
     if (acaError) throw new Error('Academia no encontrada');
 
-    const newPassword = Math.random().toString(36).substring(2, 10) + "X9#"; 
+    const newPassword = Math.random().toString(36).substring(2, 10) + "X9#";
     const { data: userData } = await supabase.from('usuarios').select('id').eq('academia_id', id).single();
-    
+
     if (userData && userData.id) {
       await supabase.auth.admin.updateUserById(userData.id, { password: newPassword });
       await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', userData.id);
@@ -354,7 +387,7 @@ router.get('/:id', authMiddleware, requireOwnAcademyOrSuperadmin, async (req, re
 router.put('/:id/terminos', authMiddleware, requireOwnAcademyOrSuperadmin, async (req, res) => {
   const { id } = req.params;
   const { terminos_condiciones } = req.body;
-  
+
   try {
     const { data, error } = await supabase
       .from('academias')

@@ -34,14 +34,18 @@ const PLAN_DEFINITIONS = Object.freeze({
     code: PLAN_CODES.FORMACION,
     name: 'Formación',
     audience: 'Academias que necesitan ordenar su operación diaria y crecer con control.',
-    professorLimit: 2,
+    professorLimit: 3,
+    playerLimit: 100,
+    priceUf: 0.75,
     features: BASE_FEATURES,
   },
   [PLAN_CODES.COMPETENCIA]: {
     code: PLAN_CODES.COMPETENCIA,
     name: 'Competencia',
     audience: 'Academias con varias categorías, torneos y trabajo técnico coordinado.',
-    professorLimit: 6,
+    professorLimit: 10,
+    playerLimit: 300,
+    priceUf: 1.5,
     features: [
       ...BASE_FEATURES,
       FEATURES.TOURNAMENTS,
@@ -55,7 +59,9 @@ const PLAN_DEFINITIONS = Object.freeze({
     code: PLAN_CODES.ALTO_RENDIMIENTO,
     name: 'Alto Rendimiento',
     audience: 'Organizaciones que requieren trazabilidad, rendimiento y operación avanzada.',
-    professorLimit: 15,
+    professorLimit: 30,
+    playerLimit: null,
+    priceUf: 2.5,
     features: [
       ...BASE_FEATURES,
       FEATURES.TOURNAMENTS,
@@ -93,23 +99,27 @@ const getPlanDefinition = (academy = {}) => PLAN_DEFINITIONS[resolvePlanCode(aca
 
 const getAcademyEntitlements = (academy = {}) => {
   const plan = getPlanDefinition(academy);
-  // La prueba histórica conserva acceso completo para no romper academias ya activas.
+  // La prueba de 15 días expone el producto completo para demostrar su valor.
   const trial = isTrialPlan(academy);
   const baseFeatures = trial
     ? PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO].features
     : plan.features;
   const features = new Set(baseFeatures);
-  if (academy.licencia_apoderados === true) features.add(FEATURES.GUARDIANS);
+  if (trial || academy.licencia_apoderados === true) features.add(FEATURES.GUARDIANS);
 
   const manualProfessorLimit = Number(academy.max_profesores);
   return {
     plan: { code: plan.code, name: plan.name, audience: plan.audience, trial },
     limits: {
-      professors: Number.isInteger(manualProfessorLimit) && manualProfessorLimit > 0
-        ? manualProfessorLimit
-        : plan.professorLimit,
+      professors: trial
+        ? PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO].professorLimit
+        : Number.isInteger(manualProfessorLimit) && manualProfessorLimit > 0
+          ? manualProfessorLimit
+          : plan.professorLimit,
+      players: trial ? null : plan.playerLimit,
     },
-    addOns: { guardians: academy.licencia_apoderados === true },
+    addOns: { guardians: trial || academy.licencia_apoderados === true, guardiansIncludedByTrial: trial },
+    pricing: { planUf: plan.priceUf, guardiansUf: 0.35 },
     features: [...features],
   };
 };

@@ -171,7 +171,7 @@ router.get('/', authMiddleware, requireDirector, async (req, res) => {
   }
 });
 
-router.get('/alertas/asistencia', authMiddleware, requireDirector, async (req, res) => {
+router.get('/alertas/asistencia', authMiddleware, requireDirector, ...requireFeature(FEATURES.ATTENDANCE_ALERTS), async (req, res) => {
   try {
     const { data, error } = await supabase.from('alertas_asistencia')
       .select('id,racha,detectada_at,ultima_ausencia,jugadores(id,nombre,foto_url,avatar_url),categorias(id,nombre)')
@@ -184,7 +184,7 @@ router.get('/alertas/asistencia', authMiddleware, requireDirector, async (req, r
   }
 });
 
-router.patch('/alertas/asistencia/:id/revisada', authMiddleware, requireDirector, async (req, res) => {
+router.patch('/alertas/asistencia/:id/revisada', authMiddleware, requireDirector, ...requireFeature(FEATURES.ATTENDANCE_ALERTS), async (req, res) => {
   try {
     const { data, error } = await supabase.from('alertas_asistencia')
       .update({ activa: false, revisada_at: new Date().toISOString(), revisada_por: req.user.id, updated_at: new Date().toISOString() })

@@ -173,7 +173,7 @@ router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (re
       ...(playerCategoryResult.data || []).map((item) => item.categoria_id),
     ]);
     const today = new Date().toISOString().slice(0, 10);
-    const [matchesResult, attendanceResult, chargesResult] = await Promise.all([
+    const [matchesResult, attendanceResult, chargesResult, paymentConfigResult] = await Promise.all([
       categoryIds.length ? supabase.from('partidos')
         .select('id,rival,fecha,hora,hora_citacion,ubicacion,condicion,color_uniforme,categoria_id,categorias(nombre)')
         .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds).gte('fecha', today)
@@ -185,10 +185,14 @@ router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (re
         .select('id,jugador_id,concepto,monto,monto_pagado,estado,fecha_vencimiento')
         .eq('academia_id', req.user.academia_id).in('jugador_id', playerIds)
         .order('fecha_vencimiento', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
+      supabase.from('configuracion_financiera')
+        .select('acepta_efectivo,acepta_transferencia,acepta_pago_online,transferencia_banco,transferencia_tipo_cuenta,transferencia_numero,transferencia_rut,transferencia_correo,link_pago_online')
+        .eq('academia_id', req.user.academia_id).maybeSingle(),
     ]);
     if (matchesResult.error) throw matchesResult.error;
     if (attendanceResult.error) throw attendanceResult.error;
     if (chargesResult.error) throw chargesResult.error;
+    if (paymentConfigResult.error) throw paymentConfigResult.error;
     const pending = (chargesResult.data || []).reduce((sum, charge) => sum + Math.max(Number(charge.monto || 0) - Number(charge.monto_pagado || 0), 0), 0);
     res.json({
       success: true,
@@ -198,7 +202,7 @@ router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (re
         jugadores: players.map(({ tutor_id: _tutor, apoderado_id: _guardian, tutor_principal_id: _principal, ...player }) => player),
         proximos_partidos: matchesResult.data || [],
         asistencias_recientes: attendanceResult.data || [],
-        finanzas: { saldo_pendiente: pending, cobros: chargesResult.data || [] },
+        finanzas: { saldo_pendiente: pending, cobros: chargesResult.data || [], metodos_pago: paymentConfigResult.data || null },
       },
     });
   } catch (error) {

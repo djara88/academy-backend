@@ -15,9 +15,22 @@ test('el portal de apoderados nunca se incluye sin licencia adicional', () => {
   assert.equal(licensed.features.includes(FEATURES.GUARDIANS), true);
 });
 
-test('la prueba conserva todas las funciones base sin ampliar el cupo de profesores', () => {
+test('la prueba Full habilita todas las funciones, apoderados y cupos premium', () => {
   const trial = getAcademyEntitlements({ plan: 'Prueba 15 Días', plan_codigo: 'formacion', max_profesores: 2 });
   assert.equal(trial.plan.trial, true);
   assert.equal(trial.features.includes(FEATURES.ADVANCED_ANALYTICS), true);
-  assert.equal(trial.limits.professors, 2);
+  assert.equal(trial.features.includes(FEATURES.GUARDIANS), true);
+  assert.equal(trial.limits.professors, 30);
+  assert.equal(trial.limits.players, null);
+});
+
+test('los planes comerciales restringen módulos y cupos de forma distinta', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
+  assert.equal(formation.features.includes(FEATURES.TOURNAMENTS), false);
+  assert.equal(competition.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(competition.features.includes(FEATURES.MEDICAL), false);
+  assert.equal(highPerformance.features.includes(FEATURES.MEDICAL), true);
+  assert.deepEqual([formation.limits.players, competition.limits.players, highPerformance.limits.players], [100, 300, null]);
 });
