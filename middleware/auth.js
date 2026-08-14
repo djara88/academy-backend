@@ -23,7 +23,9 @@ const authMiddleware = async (req, res, next) => {
       return res.status(500).json({ error: 'Error al validar el usuario' });
     }
 
-    if (!usuario && isMasterAdminEmail(user.email)) {
+    // La identidad propietaria siempre prevalece sobre cualquier perfil accidental
+    // que pudiera existir en `usuarios`, evitando perder el panel maestro.
+    if (isMasterAdminEmail(user.email)) {
       req.user = {
         id: user.id,
         email: user.email,
