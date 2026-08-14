@@ -3,14 +3,19 @@ const express = require('express');
 const router = express.Router();
 const whatsappService = require('../services/whatsappService');
 const supabase = require('../config/supabase');
+const { academyMessage, getAcademyName } = require('../services/academyIdentity');
+const authMiddleware = require('../middleware/auth');
+const { requireAcademyParamAccess } = require('../middleware/academyAccess');
 
 // Destructuración segura desde el objeto importado para evitar dependencias circulares
 const { conectarAcademia, enviarMensaje } = whatsappService;
 
+const requireAcademyAccess = requireAcademyParamAccess('academiaId');
+
 // ========================================================
 // 1. CONSULTAR ESTADO / OBTENER QR
 // ========================================================
-router.get('/estado/:academiaId', async (req, res) => {
+router.get('/estado/:academiaId', authMiddleware, requireAcademyAccess, async (req, res) => {
   const { academiaId } = req.params;
 
   try {
@@ -36,7 +41,7 @@ router.get('/estado/:academiaId', async (req, res) => {
 // ========================================================
 // 2. ENVIAR MENSAJE INDIVIDUAL
 // ========================================================
-router.post('/enviar/:academiaId', async (req, res) => {
+router.post('/enviar/:academiaId', authMiddleware, requireAcademyAccess, async (req, res) => {
   const { academiaId } = req.params;
   const { numero, mensaje } = req.body;
 
@@ -45,7 +50,8 @@ router.post('/enviar/:academiaId', async (req, res) => {
   }
 
   try {
-    const resultado = await enviarMensaje(academiaId, numero, mensaje);
+    const academyName = await getAcademyName(academiaId);
+    const resultado = await enviarMensaje(academiaId, numero, academyMessage(academyName, mensaje));
     res.json({ success: true, resultado });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -61,6 +67,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
 
   try {
     const { academiaId } = req.params;
+    const academyName = await getAcademyName(academiaId);
     const body = req.body;
 
     console.log(`📩 [WEBHOOK RECIBIDO] Academia: ${academiaId}`);
@@ -176,7 +183,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
       }
 
       if (respuestaPart) {
-        await enviarMensaje(academiaId, telefonoLimpio, respuestaPart);
+        await enviarMensaje(academiaId, telefonoLimpio, academyMessage(academyName, respuestaPart));
         console.log(`💬 Respuesta de citación enviada a ${telefonoLimpio}`);
       }
 
@@ -228,7 +235,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
           const costoStr = Number(torneo.costo_inscripcion).toLocaleString('es-CL');
           respuesta = `¡Excelente! 🎉 Has confirmed asistencia para *${torneo.nombre}*.\n\n` +
                       `💰 Valor inscripción: $${costoStr}\n` +
-                      `Pronto la academia te enviará los datos para la transferencia.`;
+                      `Pronto ${academyName} te enviará los datos para la transferencia.`;
         } else {
           nuevoPaso = 'FINALIZADO';
           respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
@@ -251,7 +258,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
         updateData.numero_cuotas = cuotas;
         nuevoPaso = 'FINALIZADO';
         respuesta = `¡Perfecto! Registramos la participación en *${cuotas} cuota(s)*. 💳\n` +
-                    `Pronto la academia te enviará los detalles de cobro. ¡Gracias!`;
+                    `Pronto ${academyName} te enviará los detalles de cobro. ¡Gracias!`;
       }
     }
 
@@ -270,7 +277,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
 
     // Envío del mensaje de respuesta automática
     if (respuesta) {
-      await enviarMensaje(academiaId, telefonoLimpio, respuesta);
+      await enviarMensaje(academiaId, telefonoLimpio, academyMessage(academyName, respuesta));
       console.log(`💬 Respuesta automática enviada con éxito a ${telefonoLimpio}`);
     }
 

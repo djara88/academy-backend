@@ -4,6 +4,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
+const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 
 // 1. CREAR TORNEO + EGRESO ORGANIZACIÓN (SI APLICA)
 router.post('/', authMiddleware, async (req, res) => {
@@ -148,6 +149,7 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
 router.post('/:id/convocar', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const torneo_id = req.params.id;
     const { jugadoresIds } = req.body;
 
@@ -259,15 +261,15 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
         numLimpio = '56' + numLimpio;
       }
 
-      const mensajeTexto = `🏆 *CONVOCATORIA A TORNEO*\n\n` +
-        `Hola! Nos comunicamos de la academia.\n` +
+      const mensajeTexto = academyMessage(academyName, `🏆 *CONVOCATORIA A TORNEO*\n\n` +
+        `Hola, te escribimos de *${academyName}*.\n` +
         `*${jugador.nombre}* ha sido convocado/a para participar en:\n` +
         `⚽ *${torneo.nombre}*\n\n` +
         `💰 *Valor inscripción:* ${costoFormateado}\n` +
         (torneo.permite_cuotas ? `💳 *Opción de pago:* Hasta ${torneo.max_cuotas} cuotas.\n\n` : `\n`) +
         `Por favor responde a este mensaje:\n` +
         `1️⃣ Para *CONFIRMAR* asistencia.\n` +
-        `2️⃣ Para *RECHAZAR* la invitación.`;
+        `2️⃣ Para *RECHAZAR* la invitación.`);
 
       try {
         await enviarMensaje(academia_id, numLimpio, mensajeTexto);
