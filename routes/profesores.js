@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector, requireProfessor } = require('../middleware/professorAccess');
 const { getProfessorLimit } = require('../services/planLimits');
 const { sendProfessorAccessEmail } = require('../services/accessEmail');
+const { toProfessorPlayer } = require('../services/professorPlayerView');
 
 const router = express.Router();
 const ATTENDANCE_STATES = new Set(['Presente', 'Ausente', 'Justificado']);
@@ -63,7 +64,7 @@ const getCategoryPlayers = async (academyId, categoryId) => {
   if (linkError) throw linkError;
 
   const linkedIds = uniqueIds((links || []).map((link) => link.jugador_id));
-  const select = 'id,nombre,posicion_cancha,posicion_principal,foto_url,avatar_url';
+  const select = 'id,nombre,posicion_cancha,posicion_principal,foto_url,avatar_url,alerta_medica,telefono_emergencia,contacto_emergencia_telefono';
   const queries = [
     supabase.from('jugadores').select(select).eq('academia_id', academyId).eq('categoria_id', categoryId),
   ];
@@ -73,7 +74,9 @@ const getCategoryPlayers = async (academyId, categoryId) => {
 
   const byId = new Map();
   results.flatMap(({ data }) => data || []).forEach((player) => byId.set(player.id, player));
-  return [...byId.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  return [...byId.values()]
+    .map(toProfessorPlayer)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 };
 
 router.get('/', authMiddleware, requireDirector, async (req, res) => {
