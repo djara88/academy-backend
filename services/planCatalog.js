@@ -36,7 +36,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     audience: 'Academias que necesitan ordenar su operación diaria y crecer con control.',
     professorLimit: 3,
     playerLimit: 100,
-    priceUf: 0.75,
+    priceClp: 30000,
     features: BASE_FEATURES,
   },
   [PLAN_CODES.COMPETENCIA]: {
@@ -45,7 +45,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     audience: 'Academias con varias categorías, torneos y trabajo técnico coordinado.',
     professorLimit: 10,
     playerLimit: 300,
-    priceUf: 1.5,
+    priceClp: 60000,
     features: [
       ...BASE_FEATURES,
       FEATURES.TOURNAMENTS,
@@ -61,7 +61,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     audience: 'Organizaciones que requieren trazabilidad, rendimiento y operación avanzada.',
     professorLimit: 30,
     playerLimit: null,
-    priceUf: 2.5,
+    priceClp: 100000,
     features: [
       ...BASE_FEATURES,
       FEATURES.TOURNAMENTS,
@@ -119,7 +119,7 @@ const getAcademyEntitlements = (academy = {}) => {
       players: trial ? null : plan.playerLimit,
     },
     addOns: { guardians: trial || academy.licencia_apoderados === true, guardiansIncludedByTrial: trial },
-    pricing: { planUf: plan.priceUf, guardiansUf: 0.35 },
+    pricing: { planClp: plan.priceClp, guardiansClp: 15000 },
     features: [...features],
   };
 };

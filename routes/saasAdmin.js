@@ -3,7 +3,6 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireSuperadmin } = require('../middleware/authorization');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
-const { getUfValue } = require('../services/ufService');
 const flow = require('../services/flowGateway');
 
 const router = express.Router();
@@ -21,11 +20,10 @@ router.get('/resumen', async (_req, res) => {
   try {
     await supabase.rpc('refrescar_pruebas_vencidas');
     const { start, end } = monthBounds();
-    const [academiesResult, chargesResult, movementsResult, uf] = await Promise.all([
-      supabase.from('academias').select('id,nombre,plan,plan_codigo,estado,created_at,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_uf,guardian_price_uf,licencia_apoderados,jugadores_count,max_profesores'),
+    const [academiesResult, chargesResult, movementsResult] = await Promise.all([
+      supabase.from('academias').select('id,nombre,plan,plan_codigo,estado,created_at,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_clp,guardian_price_clp,licencia_apoderados,jugadores_count,max_profesores'),
       supabase.from('plataforma_cobros').select('id,academia_id,total_clp,estado,fecha_vencimiento,pagado_at'),
       supabase.from('plataforma_movimientos').select('id,tipo,monto_clp,fecha').gte('fecha', start).lt('fecha', end),
-      getUfValue(),
     ]);
     if (academiesResult.error) throw academiesResult.error;
     if (chargesResult.error) throw chargesResult.error;
@@ -54,16 +52,16 @@ router.get('/resumen', async (_req, res) => {
     const income = movements.filter((item) => item.tipo === 'ingreso').reduce((sum, item) => sum + number(item.monto_clp), 0);
     const expenses = movements.filter((item) => item.tipo === 'egreso').reduce((sum, item) => sum + number(item.monto_clp), 0);
     const receivable = charges.filter((charge) => ['pendiente', 'vencido'].includes(charge.estado)).reduce((sum, item) => sum + number(item.total_clp), 0);
-    const mrrUf = active.reduce((sum, academy) => sum + number(academy.plan_price_uf) + number(academy.guardian_price_uf), 0);
+    const mrrClpNet = active.reduce((sum, academy) => sum + number(academy.plan_price_clp) + number(academy.guardian_price_clp), 0);
     res.json({ success: true, data: {
       kpis: {
         academies: academies.length, active: active.length, trials: trials.length,
         blocked: academies.filter((academy) => academy.subscription.blocked).length,
-        mrrUf, mrrClpGross: Math.round(mrrUf * uf.value * 1.19),
+        mrrClpNet, mrrClpGross: Math.round(mrrClpNet * 1.19),
         income, expenses, net: income - expenses, receivable,
         conversionRate: academies.length ? Math.round((active.length / academies.length) * 100) : 0,
       },
-      academies, alerts: alerts.slice(0, 30), uf,
+      academies, alerts: alerts.slice(0, 30),
       gateway: { provider: 'Flow', configured: flow.isConfigured() },
     } });
   } catch (error) {

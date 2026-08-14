@@ -5,7 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const authIdentityMiddleware = require('../middleware/authIdentity');
 const { requireSuperadmin, requireOwnAcademyOrSuperadmin } = require('../middleware/authorization');
 const { PLAN_DEFINITIONS, getAcademyEntitlements, resolvePlanCode, getPlanProfessorLimit } = require('../services/planCatalog');
-const { BILLING_PLANS, GUARDIAN_ADDON_UF } = require('../services/billingCatalog');
+const { BILLING_PLANS, GUARDIAN_ADDON_CLP } = require('../services/billingCatalog');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 const multer = require('multer');
 
@@ -55,7 +55,7 @@ router.post('/registro-publico', async (req, res) => {
         plan: 'Prueba 15 Días', plan_codigo: 'formacion',
         max_profesores: 30, max_jugadores: 1000,
         subscription_status: 'trialing', trial_started_at: trial.start, trial_ends_at: trial.end,
-        plan_price_uf: 0, guardian_price_uf: 0,
+        plan_price_clp: 0, guardian_price_clp: 0,
         estado: 'Activa',
         jugadores_count: 0
       }])
@@ -155,7 +155,7 @@ router.post('/completar-google', authIdentityMiddleware, upload.single('logo'), 
         nombre_director, director_email: email, plan: 'Prueba 15 Días', plan_codigo: 'formacion',
         max_profesores: 30, max_jugadores: 1000,
         subscription_status: 'trialing', trial_started_at: trial.start, trial_ends_at: trial.end,
-        plan_price_uf: 0, guardian_price_uf: 0,
+        plan_price_clp: 0, guardian_price_clp: 0,
         estado: 'Activa', jugadores_count: 0
       }])
       .select()
@@ -198,7 +198,7 @@ router.get('/mi-academia', authMiddleware, async (req, res) => {
 router.get('/mi-plan', authMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase.from('academias')
-      .select('id,nombre,plan,plan_codigo,max_profesores,max_jugadores,licencia_apoderados,estado,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_uf,guardian_price_uf')
+      .select('id,nombre,plan,plan_codigo,max_profesores,max_jugadores,licencia_apoderados,estado,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_clp,guardian_price_clp')
       .eq('id', req.user.academia_id).single();
     if (error) throw error;
     res.json({ success: true, data: { ...getAcademyEntitlements(data), subscription: getSubscriptionState(data) } });
@@ -273,8 +273,8 @@ router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async
         plan: PLAN_LABELS[planCode], plan_codigo: planCode,
         max_profesores: getPlanProfessorLimit(planCode), max_jugadores: billingPlan.playerLimit || 100000,
         licencia_apoderados: guardianLicense,
-        subscription_status: 'active', plan_price_uf: billingPlan.priceUf,
-        guardian_price_uf: guardianLicense ? GUARDIAN_ADDON_UF : 0,
+        subscription_status: 'active', plan_price_clp: billingPlan.priceClp,
+        guardian_price_clp: guardianLicense ? GUARDIAN_ADDON_CLP : 0,
         next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         estado: 'Activa', jugadores_count: 0,
       }])
@@ -315,8 +315,8 @@ router.put('/:id', authMiddleware, requireSuperadmin, upload.single('logo'), asy
         plan_codigo: planCode,
         max_profesores: getPlanProfessorLimit(planCode), max_jugadores: billingPlan.playerLimit || 100000,
         licencia_apoderados: guardianLicense,
-        plan_price_uf: billingPlan.priceUf,
-        guardian_price_uf: guardianLicense ? GUARDIAN_ADDON_UF : 0,
+        plan_price_clp: billingPlan.priceClp,
+        guardian_price_clp: guardianLicense ? GUARDIAN_ADDON_CLP : 0,
       });
       updateData.subscription_status = req.body.subscription_status || 'active';
       updateData.blocked_at = null;

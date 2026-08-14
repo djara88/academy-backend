@@ -7,16 +7,16 @@ alter table public.academias
   add column if not exists blocked_at timestamptz,
   add column if not exists blocked_reason text,
   add column if not exists next_billing_date date,
-  add column if not exists plan_price_uf numeric(8,2) not null default 0,
-  add column if not exists guardian_price_uf numeric(8,2) not null default 0;
+  add column if not exists plan_price_clp bigint not null default 0,
+  add column if not exists guardian_price_clp bigint not null default 0;
 
 alter table public.academias drop constraint if exists academias_subscription_status_check;
 alter table public.academias add constraint academias_subscription_status_check
   check (subscription_status in ('trialing', 'active', 'past_due', 'suspended', 'cancelled'));
-alter table public.academias drop constraint if exists academias_plan_price_uf_check;
-alter table public.academias add constraint academias_plan_price_uf_check check (plan_price_uf >= 0);
-alter table public.academias drop constraint if exists academias_guardian_price_uf_check;
-alter table public.academias add constraint academias_guardian_price_uf_check check (guardian_price_uf >= 0);
+alter table public.academias drop constraint if exists academias_plan_price_clp_check;
+alter table public.academias add constraint academias_plan_price_clp_check check (plan_price_clp >= 0);
+alter table public.academias drop constraint if exists academias_guardian_price_clp_check;
+alter table public.academias add constraint academias_guardian_price_clp_check check (guardian_price_clp >= 0);
 
 update public.academias
 set
@@ -38,22 +38,22 @@ set
     when coalesce(trial_ends_at, created_at + interval '15 days') <= now() then coalesce(blocked_reason, 'Prueba gratuita vencida')
     else null
   end,
-  plan_price_uf = 0,
-  guardian_price_uf = 0
+  plan_price_clp = 0,
+  guardian_price_clp = 0
 where lower(coalesce(plan, '')) like '%prueba%';
 
 update public.academias
 set
   subscription_status = 'active',
-  plan_price_uf = case plan_codigo
-    when 'competencia' then 1.50
-    when 'alto_rendimiento' then 2.50
-    else 0.75
+  plan_price_clp = case plan_codigo
+    when 'competencia' then 60000
+    when 'alto_rendimiento' then 100000
+    else 30000
   end,
-  guardian_price_uf = case when licencia_apoderados then 0.35 else 0 end,
+  guardian_price_clp = case when licencia_apoderados then 15000 else 0 end,
   next_billing_date = coalesce(next_billing_date, (current_date + interval '1 month')::date)
 where lower(coalesce(plan, '')) not like '%prueba%'
-  and plan_price_uf = 0;
+  and plan_price_clp = 0;
 
 create index if not exists idx_academias_trial_ends_at
   on public.academias (trial_ends_at)
@@ -69,7 +69,6 @@ create table if not exists public.plataforma_cobros (
   periodo_fin date,
   subtotal_clp bigint not null default 0 check (subtotal_clp >= 0),
   addon_clp bigint not null default 0 check (addon_clp >= 0),
-  uf_value numeric(12,2),
   target_plan_code text check (target_plan_code is null or target_plan_code in ('formacion', 'competencia', 'alto_rendimiento')),
   target_guardian_license boolean not null default false,
   total_clp bigint generated always as (subtotal_clp + addon_clp) stored,
