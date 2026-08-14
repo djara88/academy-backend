@@ -418,11 +418,12 @@ router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { jugador_id } = req.params;
-    const { estado_financiero, alerta_medica, insignias } = req.body;
+    const { estado_financiero, alerta_medica, telefono_emergencia, insignias } = req.body;
     
     const updateData = {};
     if (estado_financiero !== undefined) updateData.estado_financiero = estado_financiero;
-    if (alerta_medica !== undefined) updateData.alerta_medica = alerta_medica;
+    if (alerta_medica !== undefined) updateData.alerta_medica = String(alerta_medica || '').trim().slice(0, 300);
+    if (telefono_emergencia !== undefined) updateData.telefono_emergencia = String(telefono_emergencia || '').trim().slice(0, 40);
     
     let nuevaInsigniaDetectada = null;
     if (insignias !== undefined) {
