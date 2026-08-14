@@ -1,4 +1,5 @@
 const supabase = require('../config/supabase');
+const { isMasterAdminEmail } = require('./masterAdmin');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -16,7 +17,23 @@ const authMiddleware = async (req, res, next) => {
       .eq('id', user.id)
       .maybeSingle();
 
-    if (userError || !usuario) {
+    if (userError) {
+      console.error('❌ Error al consultar usuario:', userError);
+      return res.status(500).json({ error: 'Error al validar el usuario' });
+    }
+
+    if (!usuario && isMasterAdminEmail(user.email)) {
+      req.user = {
+        id: user.id,
+        email: user.email,
+        academia_id: null,
+        rol: 'superadmin',
+        nombre_completo: 'Control Maestro SaaS',
+      };
+      return next();
+    }
+
+    if (!usuario) {
       return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
     }
 
