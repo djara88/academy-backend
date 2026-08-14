@@ -108,6 +108,7 @@ router.get('/', authMiddleware, async (req, res) => {
 // 3. EDITAR PARTIDO
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
     const { 
       torneo_id, categoria_id, es_amistoso, rival, fecha, hora, 
       ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, 
@@ -132,6 +133,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
         ...(estado && { estado })
       })
       .eq('id', req.params.id)
+      .eq('academia_id', academia_id)
       .select('*, torneos(nombre), categorias(nombre)')
       .single();
 
@@ -146,10 +148,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
 // 4. ELIMINAR PARTIDO
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
     const { error } = await supabase
       .from('partidos')
       .delete()
-      .eq('id', req.params.id);
+      .eq('id', req.params.id)
+      .eq('academia_id', academia_id);
 
     if (error) throw error;
     res.json({ success: true, message: 'Partido eliminado correctamente.' });
@@ -169,6 +173,7 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       .from('partidos')
       .select('*, torneos(nombre), categorias(nombre)')
       .eq('id', partido_id)
+      .eq('academia_id', academia_id)
       .single();
 
     if (errPartido || !partido) throw new Error('No se encontró el partido.');
@@ -187,12 +192,14 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
     const { data: jugadores } = await supabase
       .from('jugadores')
       .select('*')
+      .eq('academia_id', academia_id)
       .in('id', jugadorIds);
 
     const tutorIds = jugadores.map(j => j.tutor_id || j.apoderado_id || j.tutor_principal_id).filter(Boolean);
     let tutoresMap = {};
     if (tutorIds.length > 0) {
-      const { data: tutores } = await supabase.from('tutores').select('*').in('id', tutorIds);
+      const { data: tutores } = await supabase.from('tutores').select('*')
+        .eq('academia_id', academia_id).in('id', tutorIds);
       if (tutores) tutores.forEach(t => { tutoresMap[t.id] = t; });
     }
 
@@ -230,8 +237,17 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       }));
 
       try {
-        await supabase.from('cobros').insert(cobrosPartidos);
-        await supabase.from('jugadores').update({ estado_financiero: 'Moroso' }).in('id', jugadorIds);
+        const { error: errCobros } = await supabase
+          .from('cobros')
+          .upsert(cobrosPartidos, {
+            onConflict: 'academia_id,jugador_id,partido_id',
+            ignoreDuplicates: true
+          });
+        if (errCobros) throw errCobros;
+        await supabase.from('jugadores')
+          .update({ estado_financiero: 'Moroso' })
+          .eq('academia_id', academia_id)
+          .in('id', jugadorIds);
       } catch (errFin) {
         console.error('⚠️ Detalle creando cobros de partido:', errFin.message);
       }
@@ -363,6 +379,7 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
         estado: 'Jugado'
       })
       .eq('id', partido_id)
+      .eq('academia_id', academia_id)
       .select('*, torneos(nombre), categorias(nombre)')
       .single();
 
@@ -392,12 +409,14 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
       const { data: jugadores } = await supabase
         .from('jugadores')
         .select('id, nombre, tutor_id')
+        .eq('academia_id', academia_id)
         .in('id', jugadorIds);
 
       const tutorIds = (jugadores || []).map(j => j.tutor_id).filter(Boolean);
       const { data: tutores } = await supabase
         .from('tutores')
         .select('id, telefono, nombre_completo')
+        .eq('academia_id', academia_id)
         .in('id', tutorIds);
 
       const tutorMap = {};

@@ -139,6 +139,7 @@ router.post('/catalogo', authMiddleware, async (req, res) => {
 // ====================================================================
 router.put('/catalogo/:id', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
     const { id } = req.params;
     const { nombre, precio, aplica_numero, aplica_nombre_estampado, tipo_operacion, stock_disponible } = req.body;
 
@@ -153,6 +154,7 @@ router.put('/catalogo/:id', authMiddleware, async (req, res) => {
         stock_disponible: tipo_operacion === 'Stock' ? (Number(stock_disponible) || 0) : 0
       })
       .eq('id', id)
+      .eq('academia_id', academia_id)
       .select()
       .single();
 
@@ -169,7 +171,9 @@ router.put('/catalogo/:id', authMiddleware, async (req, res) => {
 router.delete('/catalogo/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error } = await supabase.from('prendas_catalogo').delete().eq('id', id);
+    const { error } = await supabase.from('prendas_catalogo').delete()
+      .eq('id', id)
+      .eq('academia_id', req.user.academia_id);
     if (error) throw error;
     res.json({ success: true, message: 'Prenda eliminada del catálogo.' });
   } catch (error) {
@@ -184,6 +188,11 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const { jugador_id, prenda_id, prenda_nombre, talla, numero_estampado, nombre_estampado, monto, generar_cobro, estado_pago } = req.body;
+
+    const { data: jugador, error: errJugador } = await supabase.from('jugadores')
+      .select('id').eq('id', jugador_id).eq('academia_id', academia_id).maybeSingle();
+    if (errJugador) throw errJugador;
+    if (!jugador) return res.status(404).json({ success: false, error: 'Jugador no encontrado en la academia.' });
 
     let cobroId = null;
     const precioFinal = Number(monto) || 0;
@@ -203,6 +212,7 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
         }])
         .select().single();
 
+      if (errCobro) throw errCobro;
       if (cobroCreado) cobroId = cobroCreado.id;
     }
 
@@ -226,9 +236,11 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
     if (errPedido) throw errPedido;
 
     if (prenda_id) {
-      const { data: prendaData } = await supabase.from('prendas_catalogo').select('tipo_operacion, stock_disponible').eq('id', prenda_id).single();
+      const { data: prendaData } = await supabase.from('prendas_catalogo')
+        .select('tipo_operacion, stock_disponible').eq('id', prenda_id).eq('academia_id', academia_id).single();
       if (prendaData && prendaData.tipo_operacion === 'Stock' && prendaData.stock_disponible > 0) {
-        await supabase.from('prendas_catalogo').update({ stock_disponible: prendaData.stock_disponible - 1 }).eq('id', prenda_id);
+        await supabase.from('prendas_catalogo').update({ stock_disponible: prendaData.stock_disponible - 1 })
+          .eq('id', prenda_id).eq('academia_id', academia_id);
       }
     }
 
@@ -247,6 +259,32 @@ router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
     const { id } = req.params;
     const { estado_entrega, estado_pago } = req.body;
 
+    const { data: pedidoActual, error: errPedidoActual } = await supabase
+      .from('pedidos_indumentaria')
+      .select('*, cobro:cobros!pedidos_indumentaria_cobro_id_fkey(id, monto, monto_pagado, estado)')
+      .eq('id', id)
+      .eq('academia_id', academia_id)
+      .maybeSingle();
+
+    if (errPedidoActual) throw errPedidoActual;
+    if (!pedidoActual) return res.status(404).json({ success: false, error: 'Pedido no encontrado.' });
+
+    if (estado_pago === 'Pagado' && pedidoActual.cobro) {
+      const saldo = Math.max(Number(pedidoActual.cobro.monto || 0) - Number(pedidoActual.cobro.monto_pagado || 0), 0);
+      if (saldo > 0) {
+        const { error: errPago } = await supabase.rpc('registrar_pago_cobro', {
+          p_academia_id: academia_id,
+          p_cobro_id: pedidoActual.cobro.id,
+          p_monto: saldo,
+          p_metodo_pago: 'Registro desde Uniformes',
+          p_observaciones: `Pago de ${pedidoActual.prenda_nombre}`,
+          p_idempotency_key: `uniforme-${id}-pago-total`,
+          p_usuario_id: req.user.id
+        });
+        if (errPago) throw errPago;
+      }
+    }
+
     const updateData = {};
     if (estado_entrega) {
       updateData.estado_entrega = estado_entrega;
@@ -260,13 +298,15 @@ router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
       .from('pedidos_indumentaria')
       .update(updateData)
       .eq('id', id)
+      .eq('academia_id', academia_id)
       .select('*, jugadores(nombre, tutor_id)')
       .single();
 
     if (error) throw error;
 
     if (estado_entrega === 'Listo para Entrega' && pedido.jugadores?.tutor_id) {
-      const { data: tutor } = await supabase.from('tutores').select('telefono, nombre_completo').eq('id', pedido.jugadores.tutor_id).single();
+      const { data: tutor } = await supabase.from('tutores').select('telefono, nombre_completo')
+        .eq('id', pedido.jugadores.tutor_id).eq('academia_id', academia_id).single();
       if (tutor && tutor.telefono) {
         let numLimpio = tutor.telefono.replace(/\D/g, '');
         if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;

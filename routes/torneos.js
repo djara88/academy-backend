@@ -71,10 +71,12 @@ router.get('/', authMiddleware, async (req, res) => {
 // 3. OBTENER UN TORNEO
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
     const { data, error } = await supabase
       .from('torneos')
       .select('*')
       .eq('id', req.params.id)
+      .eq('academia_id', academia_id)
       .single();
 
     if (error) throw error;
@@ -88,8 +90,13 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // 4. OBTENER PARTICIPANTES
 router.get('/:id/participantes', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
     const torneo_id = req.params.id;
     const { categoria_id } = req.query;
+
+    const { data: torneo } = await supabase.from('torneos').select('id')
+      .eq('id', torneo_id).eq('academia_id', academia_id).maybeSingle();
+    if (!torneo) return res.status(404).json({ success: false, error: 'Torneo no encontrado.' });
 
     const { data, error } = await supabase
       .from('torneo_participantes')
@@ -152,6 +159,7 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
       .from('torneos')
       .select('*')
       .eq('id', torneo_id)
+      .eq('academia_id', academia_id)
       .single();
 
     if (errTorneo || !torneo) throw new Error('No se encontró la información del torneo.');
@@ -159,6 +167,7 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
     const { data: jugadores, error: errJugadores } = await supabase
       .from('jugadores')
       .select('*')
+      .eq('academia_id', academia_id)
       .in('id', jugadoresIds);
 
     if (errJugadores) throw errJugadores;
@@ -172,6 +181,7 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
       const { data: tutores } = await supabase
         .from('tutores')
         .select('*')
+        .eq('academia_id', academia_id)
         .in('id', tutorIds);
 
       if (tutores) {
@@ -216,8 +226,17 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
       }));
 
       try {
-        await supabase.from('cobros').insert(cobrosTorneo);
-        await supabase.from('jugadores').update({ estado_financiero: 'Moroso' }).in('id', jugadoresIds);
+        const { error: errCobros } = await supabase
+          .from('cobros')
+          .upsert(cobrosTorneo, {
+            onConflict: 'academia_id,jugador_id,torneo_id',
+            ignoreDuplicates: true
+          });
+        if (errCobros) throw errCobros;
+        await supabase.from('jugadores')
+          .update({ estado_financiero: 'Moroso' })
+          .eq('academia_id', academia_id)
+          .in('id', jugadoresIds);
       } catch (errFin) {
         console.error('⚠️ Detalle creando cobros de torneo:', errFin.message);
       }
