@@ -26,6 +26,16 @@ app.get('/', (req, res) => {
   res.send('API de Syncademia funcionando 🚀');
 });
 
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'syncademia-backend',
+    features: { profesores: true },
+    commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
+    checked_at: new Date().toISOString(),
+  });
+});
+
 // ============================
 // 🔥 CAMBIAR CLAVE OBLIGATORIA (BLINDADO)
 // ============================
