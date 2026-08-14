@@ -1,7 +1,7 @@
 {
-  "name": "academy-backend",
+  "name": "syncademia-backend",
   "version": "1.0.0",
-  "description": "Backend multi-tenant para Academia de Fútbol",
+  "description": "Backend multiacademia de Syncademia para gestión de academias deportivas",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

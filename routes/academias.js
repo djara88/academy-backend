@@ -69,17 +69,18 @@ router.post('/registro-publico', async (req, res) => {
             'content-type': 'application/json'
           },
           body: JSON.stringify({
-            sender: { name: "AcademiaPro", email: brevoSenderEmail },
+            sender: { name: "Syncademia", email: brevoSenderEmail },
             to: [{ email: email }],
-            subject: "¡Bienvenido a AcademiaPro! 🚀",
+            subject: "¡Bienvenido a Syncademia! 🚀",
             htmlContent: `
               <div style="font-family: sans-serif; color: #333;">
-                <h2>¡Hola ${nombre_director}! Bienvenido a AcademiaPro</h2>
+                <h2>¡Hola ${nombre_director}! Bienvenido a Syncademia</h2>
                 <p>Tu academia <strong>${nombre_academia}</strong> ha sido creada con éxito.</p>
                 <p>Tienes 15 días de prueba gratis para disfrutar de todas las funcionalidades.</p>
                 <p>Ya puedes iniciar sesión utilizando tu correo y la contraseña que creaste.</p>
                 <p>¡Mucho éxito en tu gestión!</p>
-                <p>El equipo de AcademiaPro</p>
+                <p>El equipo de Syncademia</p>
+                <p><em>Gestión de academias deportivas, tu ecosistema de élite.</em></p>
               </div>
             `
           })

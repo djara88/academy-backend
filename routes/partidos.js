@@ -4,6 +4,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
+const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 
 // 1. CREAR PARTIDO + EGRESOS AUTOMÁTICOS (ARBITRAJE / CANCHA) 🔥
 router.post('/', authMiddleware, async (req, res) => {
@@ -167,6 +168,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 router.post('/:id/citacion', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const partido_id = req.params.id;
 
     const { data: partido, error: errPartido } = await supabase
@@ -270,8 +272,8 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
       let numLimpio = telefono.replace(/\D/g, '');
       if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;
 
-      const mensaje = `📋 *CITACIÓN A PARTIDO*\n\n` +
-        `Hola! Nos comunicamos de la academia.\n` +
+      const mensaje = academyMessage(academyName, `📋 *CITACIÓN A PARTIDO*\n\n` +
+        `Hola, te escribimos de *${academyName}*.\n` +
         `*${j.nombre}* ha sido citado/a para el próximo encuentro:\n\n` +
         `${tipoTexto}\n` +
         `⚽ *Rival:* vs ${partido.rival}\n` +
@@ -285,7 +287,7 @@ router.post('/:id/citacion', authMiddleware, async (req, res) => {
         `${arbitrajeTexto}\n\n` +
         `Por favor responde a este mensaje:\n` +
         `1️⃣ Para *CONFIRMAR* asistencia.\n` +
-        `2️⃣ Si *NO PODRÁ ASISTIR*.`;
+        `2️⃣ Si *NO PODRÁ ASISTIR*.`);
 
       try {
         await enviarMensaje(academia_id, numLimpio, mensaje);
@@ -365,6 +367,7 @@ router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
 router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const partido_id = req.params.id;
     const { goles_favor, goles_contra, estadisticas, enviarWhatsapp } = req.body;
 
@@ -436,7 +439,7 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
         mensajeFormativo = 'El trabajo duro y el compañerismo nos enseñan que cada partido es una oportunidad para crecer juntos. ¡Gran esfuerzo del plantel!';
       } else {
         resultadoEmoji = '💪 ¡A SEGUIR MEJORANDO!';
-        mensajeFormativo = 'En nuestra escuela, los resultados no definen nuestro valor, sino nuestro esfuerzo y resiliencia. De cada tropiezo aprendemos y nos levantamos más fuertes.';
+        mensajeFormativo = `En ${academyName}, los resultados no definen nuestro valor, sino nuestro esfuerzo y resiliencia. De cada tropiezo aprendemos y nos levantamos más fuertes.`;
       }
 
       for (const st of estadisticas) {
@@ -458,16 +461,16 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
             ? '✔️ Destacada participación, compromiso y entrega en cancha.\n' 
             : '';
 
-          const mensajePersonalizado = `📊 *REPORTE OFICIAL DEL ENCUENTRO*\n\n` +
+          const mensajePersonalizado = academyMessage(academyName, `📊 *REPORTE OFICIAL DEL ENCUENTRO*\n\n` +
             `Hola ${tutor.nombre_completo || 'Apoderado'},\n` +
             `Compartimos el resumen del partido de la categoría *${partido.categorias?.nombre || ''}*:\n\n` +
-            `⚽ *Marcador Final:* Nuestra Academia ${numGolesFavor} - ${numGolesContra} ${partido.rival}\n` +
+            `⚽ *Marcador Final:* ${academyName} ${numGolesFavor} - ${numGolesContra} ${partido.rival}\n` +
             `${resultadoEmoji}\n\n` +
             `🏃‍♂️ *Desempeño Individual de ${jug.nombre}:*\n` +
             `${golesTxt}${asistenciasTxt}${amarillasTxt}${rojasTxt}${mvpTxt}${sinEventos}\n` +
             `🌱 *Reflexión Formativa:*\n` +
             `_${mensajeFormativo}_\n\n` +
-            `¡Gracias por acompañar y apoyar siempre su desarrollo deportivo! ⚽👏`;
+            `¡Gracias por acompañar y apoyar siempre su desarrollo deportivo! ⚽👏`);
 
           try {
             await enviarMensaje(academia_id, numLimpio, mensajePersonalizado);

@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
+const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 
 // ====================================================================
 // 1. REGISTRAR UN ENTRENAMIENTO Y SU LISTA DE ASISTENCIA (INDIVIDUAL O TODAS LAS CATEGORÍAS)
@@ -119,6 +120,7 @@ router.get('/suspendidas', authMiddleware, async (req, res) => {
 router.post('/reagendar-notificar', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const { categoria_id, fecha, hora, lugar, clase_cancelada_id, motivo_original } = req.body;
 
     if (!categoria_id || !fecha || !hora) {
@@ -173,13 +175,13 @@ router.post('/reagendar-notificar', authMiddleware, async (req, res) => {
             let numLimpio = tutor.telefono.replace(/\D/g, '');
             if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;
 
-            const mensaje = `📢 *CITACIÓN A CLASE DE RECUPERACIÓN*\n\n` +
+            const mensaje = academyMessage(academyName, `📢 *CITACIÓN A CLASE DE RECUPERACIÓN*\n\n` +
               `Hola ${tutor.nombre_completo || 'Apoderado'},\n` +
               `Te informamos que la clase suspendida (${motivo_original || 'Sustitución'}) de la categoría *${entRecuperacion.categorias?.nombre || ''}* ha sido reagendada:\n\n` +
               `📅 *Fecha:* ${fechaFormateada}\n` +
               `⏰ *Hora:* ${hora} hrs\n` +
               `📍 *Lugar:* ${lugar || 'Cancha Principal'}\n\n` +
-              `¡Contamos con la asistencia de tu hijo/a! ⚽💪`;
+              `¡Contamos con la asistencia de tu hijo/a! ⚽💪`);
 
             try {
               await enviarMensaje(academia_id, numLimpio, mensaje);
@@ -302,6 +304,7 @@ router.get('/metricas', authMiddleware, async (req, res) => {
 router.post('/reporte-mensual', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const { categoria_id, mes, anio } = req.body;
 
     const mesStr = String(mes || '01').padStart(2, '0');
@@ -373,7 +376,7 @@ router.post('/reporte-mensual', authMiddleware, async (req, res) => {
         let numLimpio = telefonoFinal.replace(/\D/g, '');
         if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = '56' + numLimpio;
 
-        const mensaje = `📊 *REPORTE DE ASISTENCIA MENSUAL*\n\n` +
+        const mensaje = academyMessage(academyName, `📊 *REPORTE DE ASISTENCIA MENSUAL*\n\n` +
           `Hola ${nombreTutor},\n` +
           `Te enviamos el resumen de *${data.nombre}* correspondiente a *${mesNombre} ${anioStr}*:\n\n` +
           `✔️ *Presente:* ${data.presentes} clases\n` +
@@ -381,7 +384,7 @@ router.post('/reporte-mensual', authMiddleware, async (req, res) => {
           `📝 *Justificado:* ${data.justificados} clases\n\n` +
           `📈 *Asistencia Total: ${porcentaje}%*\n` +
           `${mensajeExtra}\n\n` +
-          `¡Gracias por confiar en nuestra academia! ⚽`;
+          `¡Gracias por confiar en ${academyName}! ⚽`);
 
         try {
           await enviarMensaje(academia_id, numLimpio, mensaje);

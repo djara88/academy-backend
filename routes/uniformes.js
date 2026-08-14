@@ -4,6 +4,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
+const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 
 // Función auxiliar para validar que sea una talla real de apoderado
 const esTallaValidaApoderado = (talla) => {
@@ -256,6 +257,7 @@ router.post('/pedidos', authMiddleware, async (req, res) => {
 router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const { id } = req.params;
     const { estado_entrega, estado_pago } = req.body;
 
@@ -314,13 +316,13 @@ router.put('/pedidos/:id/actualizar', authMiddleware, async (req, res) => {
         const numText = pedido.numero_estampado ? `#${pedido.numero_estampado}` : 'Sin número';
         const nomText = pedido.nombre_estampado ? `("${pedido.nombre_estampado}")` : '';
 
-        const mensaje = `👕 *INDUMENTARIA LISTA PARA RETIRO*\n\n` +
+        const mensaje = academyMessage(academyName, `👕 *INDUMENTARIA LISTA PARA RETIRO*\n\n` +
           `Hola ${tutor.nombre_completo || 'Apoderado'},\n` +
           `Te informamos que la prenda de *${pedido.jugadores.nombre}* ya está disponible en la cancha:\n\n` +
           `📦 *Prenda:* ${pedido.prenda_nombre}\n` +
           `📏 *Talla:* ${pedido.talla}\n` +
           `🔢 *Detalles:* ${numText} ${nomText}\n\n` +
-          `Puedes solicitarla con el profesor a cargo durante el próximo entrenamiento. ⚽💪`;
+          `Puedes solicitarla con el profesor a cargo durante el próximo entrenamiento. ⚽💪`);
 
         try {
           await enviarMensaje(academia_id, numLimpio, mensaje);

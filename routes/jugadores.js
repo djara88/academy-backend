@@ -5,6 +5,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
+const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 
 const esTallaValidaApoderado = (talla) => {
   if (!talla) return false;
@@ -330,13 +331,23 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, async (req, res) => {
 
 router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
   try {
+    const { academia_id } = req.user;
+    const academyName = await getAcademyName(academia_id);
     const { jugador_id } = req.params;
     const { pdf_base64, comentarios } = req.body;
 
-    const { data: jugador, error: errJugador } = await supabase.from('jugadores').select('nombre, tutor_id').eq('id', jugador_id).single();
+    const { data: jugador, error: errJugador } = await supabase.from('jugadores')
+      .select('nombre, tutor_id')
+      .eq('id', jugador_id)
+      .eq('academia_id', academia_id)
+      .single();
     if (errJugador || !jugador.tutor_id) throw new Error('Jugador o tutor no encontrado.');
 
-    const { data: tutor, error: errTutor } = await supabase.from('tutores').select('email, nombre_completo').eq('id', jugador.tutor_id).single();
+    const { data: tutor, error: errTutor } = await supabase.from('tutores')
+      .select('email, nombre_completo')
+      .eq('id', jugador.tutor_id)
+      .eq('academia_id', academia_id)
+      .single();
     if (errTutor || !tutor.email) throw new Error('El apoderado no tiene un correo registrado.');
 
     const base64Content = pdf_base64.split('base64,')[1];
@@ -349,15 +360,15 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, async (req, res) => {
       method: 'POST',
       headers: { 'accept': 'application/json', 'api-key': brevoApiKey, 'content-type': 'application/json' },
       body: JSON.stringify({
-        sender: { name: "AcademiaPro Deportes", email: brevoSenderEmail },
+        sender: { name: academyName, email: brevoSenderEmail },
         to: [{ email: tutor.email, name: tutor.nombre_completo }],
-        subject: `Informe de Evolución Deportiva - ${jugador.nombre} ⚽`,
+        subject: `${academyName} | Informe de Evolución Deportiva - ${jugador.nombre} ⚽`,
         htmlContent: `
           <div style="font-family: sans-serif; color: #333;">
             <h2>Hola ${tutor.nombre_completo},</h2>
             <p>Adjuntamos el informe de evolución deportiva más reciente de <strong>${jugador.nombre}</strong>.</p>
             ${comentarios ? `<div style="background-color: #f4f4f4; padding: 15px; border-radius: 8px; margin: 20px 0;"><p><strong>Comentarios del profesor:</strong><br/>${comentarios}</p></div>` : ''}
-            <p>Un saludo afectuoso,<br/>El equipo de la Academia</p>
+            <p>Un saludo afectuoso,<br/>El equipo de <strong>${academyName}</strong></p>
           </div>
         `,
         attachment: [{ name: `Informe_${jugador.nombre.replace(/\s+/g, '_')}.pdf`, content: base64Content }]
@@ -417,7 +428,11 @@ router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
     if (insignias !== undefined) {
       updateData.insignias = insignias;
       
-      const { data: jugadorAntiguo } = await supabase.from('jugadores').select('insignias').eq('id', jugador_id).single();
+      const { data: jugadorAntiguo } = await supabase.from('jugadores')
+        .select('insignias')
+        .eq('id', jugador_id)
+        .eq('academia_id', academia_id)
+        .single();
       
       const cantidadAntes = jugadorAntiguo?.insignias ? jugadorAntiguo.insignias.length : 0;
       if (insignias.length > cantidadAntes) {
@@ -425,17 +440,27 @@ router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
       }
     }
 
-    const { data, error } = await supabase.from('jugadores').update(updateData).eq('id', jugador_id).select().single();
+    const { data, error } = await supabase.from('jugadores')
+      .update(updateData)
+      .eq('id', jugador_id)
+      .eq('academia_id', academia_id)
+      .select()
+      .single();
     if (error) throw error;
 
     if (nuevaInsigniaDetectada && data?.tutor_id) {
-      supabase.from('tutores').select('telefono, nombre_completo').eq('id', data.tutor_id).single()
+      const academyName = await getAcademyName(academia_id);
+      supabase.from('tutores')
+        .select('telefono, nombre_completo')
+        .eq('id', data.tutor_id)
+        .eq('academia_id', academia_id)
+        .single()
         .then(({ data: tutor }) => {
           if (tutor && tutor.telefono) {
             const telefonoLimpio = tutor.telefono.replace(/\D/g, '');
             const nombreInsignia = nuevaInsigniaDetectada.nombre || nuevaInsigniaDetectada;
             
-            const mensaje = `🏆 *¡Noticia desde la Academia!*\n\nHola ${tutor.nombre_completo},\nNos llena de orgullo informarte que hoy el cuerpo técnico le ha otorgado a *${data.nombre}* el siguiente reconocimiento:\n\n🌟 *${nombreInsignia}*\n\n¡Sigan apoyando su crecimiento deportivo! ⚽💪`;
+            const mensaje = academyMessage(academyName, `🏆 *¡Nuevo reconocimiento deportivo!*\n\nHola ${tutor.nombre_completo},\nNos llena de orgullo informarte que hoy el cuerpo técnico de *${academyName}* le ha otorgado a *${data.nombre}* el siguiente reconocimiento:\n\n🌟 *${nombreInsignia}*\n\n¡Sigan apoyando su crecimiento deportivo! ⚽💪`);
             
             enviarMensaje(academia_id, telefonoLimpio, mensaje)
               .then(() => console.log(`✅ WhatsApp de reconocimiento enviado al apoderado de ${data.nombre}`))
