@@ -1,5 +1,6 @@
 const supabase = require('../config/supabase');
 const { isMasterAdminEmail } = require('./masterAdmin');
+const { isProfessor, isAllowedProfessorRequest } = require('./professorAccess');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -37,13 +38,24 @@ const authMiddleware = async (req, res, next) => {
       return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
     }
 
+    if (usuario.activo === false) {
+      return res.status(403).json({ error: 'Tu acceso está desactivado. Contacta a la dirección de tu academia.' });
+    }
+
     req.user = {
       id: user.id,
       email: user.email,
       academia_id: usuario.academia_id,
       rol: usuario.rol,
       nombre_completo: usuario.nombre_completo,
+      activo: usuario.activo !== false,
     };
+
+    if (isProfessor(req.user) && !isAllowedProfessorRequest(req)) {
+      return res.status(403).json({
+        error: 'Tu perfil de profesor solo puede acceder a las categorías que te asignó la dirección.',
+      });
+    }
 
     next();
   } catch (error) {

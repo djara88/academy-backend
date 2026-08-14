@@ -77,6 +77,7 @@ const whatsappRoutes = require('./routes/whatsapp');
 const finanzasRoutes = require('./routes/finanzas');
 const entrenamientosRoutes = require('./routes/entrenamientos');
 const uniformesRoutes = require('./routes/uniformes');
+const profesoresRoutes = require('./routes/profesores');
 
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
@@ -90,6 +91,7 @@ app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/finanzas', finanzasRoutes);
 app.use('/api/entrenamientos', entrenamientosRoutes);
 app.use('/api/uniformes', uniformesRoutes);
+app.use('/api/profesores', profesoresRoutes);
 
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
