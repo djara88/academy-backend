@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const authIdentityMiddleware = require('../middleware/authIdentity');
+const { requireSuperadmin, requireOwnAcademyOrSuperadmin } = require('../middleware/authorization');
 const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -97,10 +99,22 @@ router.post('/registro-publico', async (req, res) => {
 // ====================================================================
 // 🚀 NUEVA RUTA: COMPLETAR PERFIL CON GOOGLE
 // ====================================================================
-router.post('/completar-google', upload.single('logo'), async (req, res) => {
+router.post('/completar-google', authIdentityMiddleware, upload.single('logo'), async (req, res) => {
   try {
-    const { auth_id, email, nombre_director, nombre_academia, direccion } = req.body;
+    const { nombre_director, nombre_academia, direccion } = req.body;
+    const auth_id = req.authUser.id;
+    const email = req.authUser.email;
     let logoUrl = null;
+
+    const { data: usuarioExistente, error: existingUserError } = await supabase
+      .from('usuarios')
+      .select('id')
+      .eq('id', auth_id)
+      .maybeSingle();
+    if (existingUserError) throw existingUserError;
+    if (usuarioExistente) {
+      return res.status(409).json({ error: 'El usuario ya tiene un perfil configurado.' });
+    }
 
     if (req.file) {
       const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
@@ -186,13 +200,13 @@ router.put('/mi-academia', authMiddleware, async (req, res) => {
 // RUTAS DE ADMINISTRACIÓN
 // ====================================================================
 
-router.get('/', async (req, res) => {
+router.get('/', authMiddleware, requireSuperadmin, async (req, res) => {
   const { data, error } = await supabase.from('academias').select('*').order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: 'Error de Supabase' });
   res.json(data || []);
 });
 
-router.post('/', upload.single('logo'), async (req, res) => {
+router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async (req, res) => {
   const { nombre, direccion, telefono, correo_academia, nombre_director, director_email, plan } = req.body;
   let createdAuthUser = null;
 
@@ -233,7 +247,7 @@ router.post('/', upload.single('logo'), async (req, res) => {
   }
 });
 
-router.put('/:id', upload.single('logo'), async (req, res) => {
+router.put('/:id', authMiddleware, requireSuperadmin, upload.single('logo'), async (req, res) => {
   const { id } = req.params;
   const { nombre, direccion, telefono, correo_academia, nombre_director, director_email, plan, estado } = req.body;
 
@@ -252,7 +266,7 @@ router.put('/:id', upload.single('logo'), async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware, requireSuperadmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { error } = await supabase.from('academias').delete().eq('id', id);
@@ -263,7 +277,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/reset-password', async (req, res) => {
+router.post('/:id/reset-password', authMiddleware, requireSuperadmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { data: academia, error: acaError } = await supabase.from('academias').select('director_email, nombre_director').eq('id', id).single();
@@ -287,7 +301,7 @@ router.post('/:id/reset-password', async (req, res) => {
 // ====================================================================
 
 // Obtener datos y términos de una academia específica
-router.get('/:id', async (req, res) => {
+router.get('/:id', authMiddleware, requireOwnAcademyOrSuperadmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { data, error } = await supabase.from('academias').select('*').eq('id', id).single();
@@ -299,7 +313,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Actualizar los términos de una academia
-router.put('/:id/terminos', async (req, res) => {
+router.put('/:id/terminos', authMiddleware, requireOwnAcademyOrSuperadmin, async (req, res) => {
   const { id } = req.params;
   const { terminos_condiciones } = req.body;
   
