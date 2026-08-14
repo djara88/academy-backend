@@ -134,7 +134,10 @@ router.post('/', authMiddleware, async (req, res) => {
       talla_uniforme, talla_apoderado: requiereCamisetaApoderado ? String(tallaApoderadoFinal).toUpperCase() : null,
       numero_camiseta: numero_camiseta ? parseInt(numero_camiseta) : null,
       nombre_camiseta, monto_matricula, abono_matricula, monto_mensualidad, foto_base64, estado_uniforme: 'Pendiente',
-      estado_financiero: 'Al Día',
+      estado_financiero: (
+        (Number(monto_matricula) || 0) + costoCamisetaApoderado > (Number(abono_matricula) || 0)
+        || (Number(monto_mensualidad) || 0) > 0
+      ) ? 'Moroso' : 'Al Día',
       alerta_medica: '',
       insignias: []
     }]).select().single();
@@ -161,26 +164,38 @@ router.post('/', authMiddleware, async (req, res) => {
         ? `Matrícula Inicial (Incluye Camiseta Apoderado Talla ${String(tallaApoderadoFinal).toUpperCase()})` 
         : 'Matrícula Inicial';
 
-      let estMatricula = 'Pendiente';
-      if (abonoInicial >= totalMatriculaConCamiseta) estMatricula = 'Pagado';
-      else if (abonoInicial > 0) estMatricula = 'Parcial';
-
-      await supabase.from('cobros').insert([{
+      const { data: cobroMatricula, error: errCobroMatricula } = await supabase.from('cobros').insert([{
         academia_id,
         jugador_id: newJugador.id,
         concepto: conceptoMatricula,
         tipo_concepto: 'Matrícula',
         monto: totalMatriculaConCamiseta,
-        monto_pagado: abonoInicial,
-        estado: estMatricula,
+        monto_pagado: 0,
+        estado: 'Pendiente',
         fecha_vencimiento: new Date().toISOString().split('T')[0]
-      }]);
+      }]).select().single();
+
+      if (errCobroMatricula) throw errCobroMatricula;
+
+      if (abonoInicial > 0) {
+        const abonoAplicable = Math.min(abonoInicial, totalMatriculaConCamiseta);
+        const { error: errPagoInicial } = await supabase.rpc('registrar_pago_cobro', {
+          p_academia_id: academia_id,
+          p_cobro_id: cobroMatricula.id,
+          p_monto: abonoAplicable,
+          p_metodo_pago: 'Sin registrar',
+          p_observaciones: 'Abono registrado durante la matrícula',
+          p_idempotency_key: `matricula-${newJugador.id}-abono-inicial`,
+          p_usuario_id: req.user.id
+        });
+        if (errPagoInicial) throw errPagoInicial;
+      }
     }
 
     // E. REGISTRO EN FINANZAS: COBRO DE PRIMERA MENSUALIDAD 🔥
     const baseMensualidad = Number(monto_mensualidad) || 0;
     if (baseMensualidad > 0) {
-      await supabase.from('cobros').insert([{
+      const { error: errCobroMensualidad } = await supabase.from('cobros').insert([{
         academia_id,
         jugador_id: newJugador.id,
         concepto: 'Mensualidad Inicial',
@@ -190,6 +205,7 @@ router.post('/', authMiddleware, async (req, res) => {
         estado: 'Pendiente',
         fecha_vencimiento: new Date().toISOString().split('T')[0]
       }]);
+      if (errCobroMensualidad) throw errCobroMensualidad;
     }
 
     // F. REGISTRO EN UNIFORMES / TALLER

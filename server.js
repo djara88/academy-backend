@@ -5,7 +5,18 @@ const supabase = require('./config/supabase');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
-app.use(cors());
+const allowedOrigins = new Set([
+  'https://academy-frontend-wheat.vercel.app',
+  'http://localhost:5173',
+  ...(process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean)
+]);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('Origen no autorizado por CORS'));
+  }
+}));
 
 // 🔥 LÍMITES AUMENTADOS A 50MB PARA PERMITIR PDFs PESADOS
 app.use(express.json({ limit: '50mb' }));
@@ -13,59 +24,6 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.get('/', (req, res) => {
   res.send('API de Academia Multi-tenant funcionando 🚀');
-});
-
-// ============================
-// LOGIN CON CREACIÓN AUTOMÁTICA
-// ============================
-app.post('/api/login', async (req, res) => {
-  const { email, password } = req.body;
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  
-  if (error) {
-    return res.status(401).json({ error: error.message });
-  }
-
-  const token = data.session.access_token;
-  const userId = data.user.id;
-
-  let { data: userData, error: userError } = await supabase
-    .from('usuarios')
-    .select('*')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (userError || !userData) {
-    const { count } = await supabase.from('usuarios').select('*', { count: 'exact', head: true });
-    const isFirstUser = count === 0;
-
-    const { data: inserted, error: insertError } = await supabase
-      .from('usuarios')
-      .insert([{
-        id: userId,
-        academia_id: '11111111-1111-1111-1111-111111111111',
-        nombre_completo: data.user.user_metadata?.full_name || email.split('@')[0],
-        rol: isFirstUser ? 'superadmin' : 'profesor',
-        requiere_cambio_password: false
-      }])
-      .select()
-      .single();
-
-    if (insertError) return res.status(500).json({ error: 'Error al crear usuario' });
-    userData = inserted;
-  }
-
-  res.json({
-    token,
-    user: {
-      id: userData.id,
-      email: data.user.email,
-      nombre_completo: userData.nombre_completo,
-      rol: userData.rol,
-      academia_id: userData.academia_id,
-      requiere_cambio_password: userData.requiere_cambio_password
-    }
-  });
 });
 
 // ============================
