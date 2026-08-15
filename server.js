@@ -3,15 +3,31 @@ const express = require('express');
 const cors = require('cors');
 const supabase = require('./config/supabase');
 const authMiddleware = require('./middleware/auth');
+const { createRateLimiter } = require('./middleware/rateLimit');
 const { requireFeature } = require('./middleware/planAccess');
 const { FEATURES } = require('./services/planCatalog');
 
 const app = express();
+app.disable('x-powered-by');
+// Render termina TLS antes de llegar a Node. Un salto permite usar la IP real para rate limiting.
+app.set('trust proxy', 1);
+
 const allowedOrigins = new Set([
   'https://academy-frontend-wheat.vercel.app',
   'http://localhost:5173',
   ...(process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean)
 ]);
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  }
+  next();
+});
 
 app.use(cors({
   origin(origin, callback) {
@@ -20,26 +36,51 @@ app.use(cors({
   }
 }));
 
-// 🔥 LÍMITES AUMENTADOS A 50MB PARA PERMITIR PDFs PESADOS
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+const apiLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000,
+  max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
+});
+const sensitiveLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: Math.max(10, Number(process.env.SENSITIVE_RATE_LIMIT_MAX || 30)),
+  message: 'Demasiados intentos en esta operación. Espera unos minutos antes de reintentar.',
+});
+const registrationLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: Math.max(3, Number(process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
+  message: 'Se alcanzó temporalmente el límite de registros desde esta conexión.',
+});
 
-app.get('/', (req, res) => {
+app.use('/api', apiLimiter);
+app.use('/api/cambiar-password', sensitiveLimiter);
+app.use('/api/subscriptions/checkout', sensitiveLimiter);
+app.use('/api/subscriptions/inform-paid', sensitiveLimiter);
+app.use('/api/academias/registro-publico', registrationLimiter);
+
+// El JSON normal no necesita 50 MB. Los archivos multipart mantienen sus límites por ruta.
+const bodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
+
+app.get('/', (_req, res) => {
   res.send('API de Syncademia funcionando 🚀');
 });
 
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
+  const memory = process.memoryUsage();
   res.json({
     status: 'ok',
     service: 'syncademia-backend',
     features: { profesores: true },
     commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
+    uptime_seconds: Math.round(process.uptime()),
+    memory_rss_mb: Math.round(memory.rss / 1024 / 1024),
     checked_at: new Date().toISOString(),
   });
 });
 
 // ============================
-// 🔥 CAMBIAR CLAVE OBLIGATORIA (BLINDADO)
+// CAMBIAR CLAVE OBLIGATORIA (BLINDADO)
 // ============================
 app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
   try {
@@ -62,9 +103,9 @@ app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
     if (dbError) throw dbError;
 
     if (!data || data.length === 0) {
-      console.warn(`⚠️ OJO: Se cambió la clave en Auth, pero no se encontró la fila en la tabla 'usuarios' para el ID: ${userId}`);
+      console.warn(`⚠️ Se cambió la clave en Auth, pero no se encontró la fila en usuarios para el ID: ${userId}`);
     } else {
-      console.log(`✅ Marca de cambio de contraseña removida con éxito para el usuario: ${userId}`);
+      console.log(`✅ Marca de cambio de contraseña removida para el usuario: ${userId}`);
     }
 
     res.json({ success: true });
@@ -113,7 +154,45 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/saas-admin', saasAdminRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 
+app.use((error, _req, res, next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'La solicitud supera el tamaño máximo permitido.' });
+  }
+  if (error?.message === 'Origen no autorizado por CORS') {
+    return res.status(403).json({ error: 'Origen no autorizado.' });
+  }
+  return next(error);
+});
+
 const port = process.env.PORT || 8080;
-app.listen(port, '0.0.0.0', () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
 });
+
+// Evita que una llamada lenta retenga recursos indefinidamente en una instancia pequeña.
+server.requestTimeout = Math.max(15000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000));
+server.headersTimeout = Math.min(server.requestTimeout, Math.max(5000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 15000)));
+server.keepAliveTimeout = Math.max(1000, Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || 5000));
+
+let shuttingDown = false;
+const gracefulShutdown = (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🛑 ${signal} recibido. Cerrando conexiones de forma ordenada...`);
+
+  const forceTimer = setTimeout(() => {
+    console.error('⚠️ Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
+    server.closeAllConnections?.();
+    process.exit(1);
+  }, 25000);
+  forceTimer.unref?.();
+
+  server.close(() => {
+    clearTimeout(forceTimer);
+    console.log('✅ Servidor HTTP cerrado correctamente.');
+    process.exit(0);
+  });
+};
+
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
