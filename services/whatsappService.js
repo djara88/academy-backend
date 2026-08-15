@@ -2,12 +2,23 @@
 
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
 const API_KEY = process.env.EVOLUTION_API_KEY;
+const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET;
 const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
 
 const getHeaders = () => ({
   'Content-Type': 'application/json',
   'apikey': API_KEY
 });
+
+const getWebhookHeaders = () => {
+  if (!WEBHOOK_SECRET || WEBHOOK_SECRET.length < 32) {
+    throw new Error('WHATSAPP_WEBHOOK_SECRET no está configurado o es demasiado corto');
+  }
+
+  return {
+    'X-Syncademia-Webhook-Secret': WEBHOOK_SECRET,
+  };
+};
 
 const parseResponse = async (response) => {
   const text = await response.text();
@@ -24,6 +35,7 @@ const configurarWebhook = async (academiaId) => {
 
   const instanceName = `academia_${academiaId}`;
   const webhookUrl = `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`;
+  const webhookHeaders = getWebhookHeaders();
 
   try {
     const response = await fetch(`${EVOLUTION_URL}/webhook/set/${instanceName}`, {
@@ -35,7 +47,8 @@ const configurarWebhook = async (academiaId) => {
           url: webhookUrl,
           byEvents: false,
           base64: false,
-          events: ['MESSAGES_UPSERT']
+          events: ['MESSAGES_UPSERT'],
+          headers: webhookHeaders,
         }
       })
     });
@@ -43,12 +56,13 @@ const configurarWebhook = async (academiaId) => {
     const responseText = await response.text();
 
     if (response.ok) {
-      console.log(`🔗 Webhook configurado con éxito para ${instanceName} -> ${webhookUrl}`);
+      console.log(`🔗 Webhook seguro configurado con éxito para ${instanceName}`);
     } else {
       console.warn(`⚠️ No se pudo configurar el webhook para ${instanceName} (HTTP ${response.status}): ${responseText}`);
     }
   } catch (error) {
     console.error(`❌ Error configurando webhook para ${instanceName}:`, error.message);
+    throw error;
   }
 };
 
@@ -79,7 +93,8 @@ const conectarAcademia = async (academiaId) => {
             url: `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`,
             byEvents: false,
             base64: false,
-            events: ['MESSAGES_UPSERT']
+            events: ['MESSAGES_UPSERT'],
+            headers: getWebhookHeaders(),
           }
         })
       });
