@@ -6,6 +6,7 @@ const authMiddleware = require('./middleware/auth');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { requireFeature } = require('./middleware/planAccess');
 const { FEATURES } = require('./services/planCatalog');
+const { validatePassword } = require('./services/passwordPolicy');
 
 const app = express();
 app.disable('x-powered-by');
@@ -65,6 +66,19 @@ const bodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: bodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
+// La política se aplica en el servidor, no solo en el formulario web. Esto cubre
+// llamadas directas al API y mantiene el registro consistente con el cambio de clave.
+app.use('/api/academias/registro-publico', (req, res, next) => {
+  const validation = validatePassword(req.body?.password);
+  if (!validation.valid) {
+    return res.status(400).json({
+      error: validation.message,
+      code: 'WEAK_PASSWORD',
+    });
+  }
+  return next();
+});
+
 app.get('/', (_req, res) => {
   res.send('API de Syncademia funcionando 🚀');
 });
@@ -92,6 +106,14 @@ app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
 
     if (!userId) {
       return res.status(400).json({ error: 'No se pudo identificar el ID del usuario en el token.' });
+    }
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({
+        error: passwordValidation.message,
+        code: 'WEAK_PASSWORD',
+      });
     }
 
     const { error: authError } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
