@@ -12,7 +12,6 @@ const { requireWebhookSecret } = require('../middleware/webhookAuth');
 const { conectarAcademia, enviarMensaje } = whatsappService;
 
 const requireAcademyAccess = requireAcademyParamAccess('academiaId');
-const maskPhone = (phone) => phone ? `***${String(phone).slice(-4)}` : 'desconocido';
 
 // ========================================================
 // 1. CONSULTAR ESTADO / OBTENER QR
@@ -72,7 +71,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
     const academyName = await getAcademyName(academiaId);
     const body = req.body;
 
-    console.log(`📩 [WEBHOOK AUTENTICADO] Academia: ${academiaId}`);
+    console.log('📩 Webhook de WhatsApp autenticado.');
 
     // Tolerancia a múltiples formatos de payload de Evolution API (v1 y v2)
     const payload = body.data || body;
@@ -111,7 +110,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
     const telefonoLimpio = remoteJid.split('@')[0].replace(/\D/g, '');
     const ultimos8Digitos = telefonoLimpio.slice(-8);
 
-    console.log(`💬 Mensaje recibido de ${maskPhone(telefonoLimpio)} para academia ${academiaId}`);
+    console.log('💬 Mensaje de WhatsApp recibido y validado.');
 
     // =========================================================
     // ⚽ BLOQUE A: COMPROBAR CITACIONES DE PARTIDOS PRIMERO
@@ -137,7 +136,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
       let nuevoPasoPart = citacion.paso_bot;
       let updateDataPart = {};
 
-      console.log(`🎯 Citación de partido hallada en la academia correcta (ID: ${citacion.id})`);
+      console.log('🎯 Citación de partido encontrada dentro de la academia autorizada.');
 
       if (citacion.paso_bot === 'ESPERANDO_CITACION') {
         if (text === '1') {
@@ -194,7 +193,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
 
       if (respuestaPart) {
         await enviarMensaje(academiaId, telefonoLimpio, academyMessage(academyName, respuestaPart));
-        console.log(`💬 Respuesta de citación enviada a ${maskPhone(telefonoLimpio)}`);
+        console.log('💬 Respuesta de citación enviada.');
       }
 
       return; // Finalizamos aquí para no entrar al flujo de Torneos
@@ -217,7 +216,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
     }
 
     if (!participaciones || participaciones.length === 0) {
-      console.log(`⚠️ No hay convocatorias ni citaciones pendientes para ${maskPhone(telefonoLimpio)} en la academia indicada.`);
+      console.log('ℹ️ No hay convocatorias ni citaciones pendientes para el mensaje recibido.');
       return;
     }
 
@@ -233,7 +232,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
     let nuevoPaso = participacion.paso_bot;
     let updateData = {};
 
-    console.log(`🎯 Convocatoria hallada en la academia correcta (ID: ${participacion.id})`);
+    console.log('🎯 Convocatoria encontrada dentro de la academia autorizada.');
 
     // MÁQUINA DE ESTADOS TORNEOS
     if (participacion.paso_bot === 'ESPERANDO_PARTICIPACION') {
@@ -296,11 +295,11 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
     // Envío del mensaje de respuesta automática
     if (respuesta) {
       await enviarMensaje(academiaId, telefonoLimpio, academyMessage(academyName, respuesta));
-      console.log(`💬 Respuesta automática enviada con éxito a ${maskPhone(telefonoLimpio)}`);
+      console.log('💬 Respuesta automática de WhatsApp enviada con éxito.');
     }
 
   } catch (err) {
-    console.error('❌ Error crítico procesando webhook:', err);
+    console.error('❌ Error procesando webhook de WhatsApp:', err?.message || 'Error desconocido');
   }
 });
 

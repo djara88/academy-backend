@@ -106,14 +106,14 @@ app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
     if (dbError) throw dbError;
 
     if (!data || data.length === 0) {
-      console.warn(`⚠️ Se cambió la clave en Auth, pero no se encontró la fila en usuarios para el ID: ${userId}`);
+      console.warn('⚠️ Se cambió la clave en Auth, pero no se encontró la fila correspondiente en usuarios.');
     } else {
-      console.log(`✅ Marca de cambio de contraseña removida para el usuario: ${userId}`);
+      console.log('✅ Marca de cambio de contraseña removida correctamente.');
     }
 
     res.json({ success: true });
   } catch (error) {
-    console.error('❌ Error al actualizar contraseña:', error);
+    console.error('❌ Error al actualizar contraseña:', error?.message || 'Error desconocido');
     res.status(500).json({ error: 'Error interno al actualizar la contraseña' });
   }
 });
