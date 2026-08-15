@@ -14,7 +14,14 @@ const maxLogoMb = Math.max(1, Number(process.env.MAX_LOGO_MB || 5));
 const allowedLogoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: maxLogoMb * 1024 * 1024, files: 1 },
+  limits: {
+    fileSize: maxLogoMb * 1024 * 1024,
+    files: 1,
+    fields: 20,
+    parts: 21,
+    fieldNameSize: 100,
+    fieldNestingDepth: 2,
+  },
   fileFilter: (_req, file, callback) => {
     if (!allowedLogoTypes.has(file.mimetype)) {
       const error = new Error('El logo debe ser JPG, PNG o WEBP.');
