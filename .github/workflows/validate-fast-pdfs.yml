@@ -17,6 +17,39 @@ jobs:
         with:
           ref: agent/redesign-fast-pdfs
 
+      - name: Aplicar pulido visual final
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('services/premiumPdf.js')
+          s = p.read_text()
+          old = """const drawTerms = (doc, terms, theme) => {\n  const x = doc.page.margins.left;\n  const boxY = doc.y;\n  const maxHeight = 170;\n  doc.roundedRect(x, boxY, contentWidth(doc), maxHeight, 12).fill(LIGHT).strokeColor(BORDER).lineWidth(0.7).stroke();\n  const text = terms || 'La academia no mantiene términos adicionales de matrícula configurados en Syncademia. Cualquier reglamento o condición complementaria debe ser informado por los canales oficiales de la academia.';\n  const fontSize = text.length > 2300 ? 7.2 : text.length > 1400 ? 7.8 : 8.6;\n  doc.fillColor(TEXT).font('Helvetica').fontSize(fontSize)\n    .text(text, x + 14, boxY + 14, { width: contentWidth(doc) - 28, height: maxHeight - 28, lineGap: 2.5, ellipsis: text.length > 3300 });\n  doc.y = boxY + maxHeight + 14;\n};"""
+          new = """const drawTerms = (doc, terms, theme) => {\n  const x = doc.page.margins.left;\n  const boxY = doc.y;\n  const text = terms || 'La academia no mantiene términos adicionales de matrícula configurados en Syncademia. Cualquier reglamento o condición complementaria debe ser informado por los canales oficiales de la academia.';\n  const fontSize = text.length > 2300 ? 7.2 : text.length > 1400 ? 7.8 : 8.6;\n  doc.font('Helvetica').fontSize(fontSize);\n  const measured = doc.heightOfString(text, { width: contentWidth(doc) - 28, lineGap: 2.5 });\n  const boxHeight = Math.min(170, Math.max(78, measured + 30));\n  doc.roundedRect(x, boxY, contentWidth(doc), boxHeight, 12).fill(LIGHT).strokeColor(BORDER).lineWidth(0.7).stroke();\n  doc.fillColor(TEXT).font('Helvetica').fontSize(fontSize)\n    .text(text, x + 14, boxY + 14, { width: contentWidth(doc) - 28, height: boxHeight - 28, lineGap: 2.5, ellipsis: measured > boxHeight - 28 });\n  doc.y = boxY + boxHeight + 14;\n};"""
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          s = s.replace("const drawRankCard = (bx, title, items, fill, icon, color) => {", "const drawRankCard = (bx, title, items, fill, color) => {")
+          s = s.replace(".text(`${icon} ${title}`, bx + 13, strengthY + 13, { width: colW - 26 });", ".text(title, bx + 13, strengthY + 13, { width: colW - 26 });")
+          s = s.replace("drawRankCard(x, 'FORTALEZAS', strengths, '#ECFDF5', '★', SUCCESS);", "drawRankCard(x, 'FORTALEZAS', strengths, '#ECFDF5', SUCCESS);")
+          s = s.replace("drawRankCard(x + colW + colGap, 'PRÓXIMOS FOCOS', focuses, '#FFF7ED', '→', WARNING);", "drawRankCard(x + colW + colGap, 'PRÓXIMOS FOCOS', focuses, '#FFF7ED', WARNING);")
+          p.write_text(s)
+
+          route = Path('routes/documentos.js')
+          r = route.read_text()
+          r = r.replace('.limit(8)', '.limit(2)', 1)
+          route.write_text(r)
+          PY
+
+      - name: Guardar pulido funcional
+        run: |
+          if git diff --quiet services/premiumPdf.js routes/documentos.js; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/premiumPdf.js routes/documentos.js
+          git commit -m "Pulir diseño y consulta de documentos premium"
+          git push origin HEAD:agent/redesign-fast-pdfs
+
       - name: Instalar dependencias
         run: npm install
 
