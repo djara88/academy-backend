@@ -257,12 +257,12 @@ const drawConsentRows = (doc, consentimientos, theme, y = doc.y) => {
 };
 
 const drawFooter = (doc, academia, page, pages) => {
-  const y = doc.page.height - 27;
+  const y = pageBottom(doc) - 14;
   const x = doc.page.margins.left;
   doc.moveTo(x, y - 7).lineTo(doc.page.width - doc.page.margins.right, y - 7).strokeColor(BORDER).lineWidth(0.5).stroke();
   doc.fillColor('#94A3B8').font('Helvetica').fontSize(6.8)
-    .text(`${cleanText(academia.nombre, 'Academia Deportiva')} · Documento generado por Syncademia`, x, y, { width: contentWidth(doc) - 80 });
-  doc.text(`${page}/${pages}`, doc.page.width - doc.page.margins.right - 50, y, { width: 50, align: 'right' });
+    .text(`${cleanText(academia.nombre, 'Academia Deportiva')} · Documento generado por Syncademia`, x, y, { width: contentWidth(doc) - 80, lineBreak: false });
+  doc.text(`${page}/${pages}`, doc.page.width - doc.page.margins.right - 50, y, { width: 50, align: 'right', lineBreak: false });
 };
 
 const isInvalidEnrollmentTerms = (value) => {
