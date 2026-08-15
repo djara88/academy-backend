@@ -30,8 +30,8 @@ const parseResponse = async (response) => {
   const text = await response.text();
   try {
     return JSON.parse(text);
-  } catch (e) {
-    console.error(`❌ Respuesta no válida de Evolution API (HTTP ${response.status}):`, text);
+  } catch (_error) {
+    console.error(`❌ Evolution API devolvió una respuesta no válida (HTTP ${response.status}).`);
     throw new Error(`Servidor de WhatsApp respondió con error HTTP ${response.status}.`);
   }
 };
@@ -59,15 +59,13 @@ const configurarWebhook = async (academiaId) => {
       })
     });
 
-    const responseText = await response.text();
-
     if (response.ok) {
-      console.log(`🔗 Webhook seguro configurado con éxito para ${instanceName}`);
+      console.log('🔗 Webhook seguro de WhatsApp configurado con éxito.');
     } else {
-      console.warn(`⚠️ No se pudo configurar el webhook para ${instanceName} (HTTP ${response.status}): ${responseText}`);
+      console.warn(`⚠️ No se pudo configurar un webhook de WhatsApp (HTTP ${response.status}).`);
     }
   } catch (error) {
-    console.error(`❌ Error configurando webhook para ${instanceName}:`, error.message);
+    console.error('❌ Error configurando webhook de WhatsApp:', error?.message || 'Error desconocido');
     throw error;
   }
 };
@@ -91,7 +89,7 @@ const conectarAcademia = async (academiaId) => {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
-          instanceName: instanceName,
+          instanceName,
           qrcode: true,
           integration: 'WHATSAPP-BAILEYS',
           webhook: {
@@ -111,10 +109,10 @@ const conectarAcademia = async (academiaId) => {
       method: 'GET',
       headers: getHeaders()
     });
-    
+
     return await parseResponse(connectResponse);
   } catch (error) {
-    console.error(`❌ Error al conectar WhatsApp para academia ${academiaId}:`, error.message);
+    console.error('❌ Error al conectar una instancia de WhatsApp:', error?.message || 'Error desconocido');
     throw error;
   }
 };
@@ -144,7 +142,7 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
 
     return data;
   } catch (error) {
-    console.error(`❌ Error enviando mensaje (Academia ${academiaId}):`, error.message);
+    console.error('❌ Error enviando un mensaje de WhatsApp:', error?.message || 'Error desconocido');
     throw error;
   }
 };
@@ -169,7 +167,7 @@ const sincronizarWebhooksActivos = async () => {
 
     console.log(`🔐 Webhooks seguros sincronizados para ${(academias || []).length} academia(s) activa(s).`);
   } catch (error) {
-    console.error('❌ No fue posible sincronizar los webhooks seguros al iniciar:', error.message);
+    console.error('❌ No fue posible sincronizar los webhooks seguros al iniciar:', error?.message || 'Error desconocido');
   }
 };
 
