@@ -1,0 +1,100 @@
+name: Harden enrollment and import
+on:
+  push:
+    branches: [agent/prematricula-import-report-v2]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/prematricula-import-report-v2
+      - name: Endurecer importaciones
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('routes/importaciones.js')
+          s = p.read_text()
+          s = s.replace("const authMiddleware = require('../middleware/auth');", "const authMiddleware = require('../middleware/auth');\nconst { getAcademyEntitlements } = require('../services/planCatalog');")
+          s = s.replace("""  const playerRuts = [...new Set(normalized.map((r) => r.rut_alumno).filter(Boolean))];
+  let existingRuts = new Set();
+  if (playerRuts.length) {
+    const { data } = await supabase.from('jugadores').select('rut').eq('academia_id', academiaId).in('rut', playerRuts);
+    existingRuts = new Set((data || []).map((r) => normalizeRut(r.rut)));
+  }""", """  const { data: existingPlayers, error: existingError } = await supabase.from('jugadores').select('rut').eq('academia_id', academiaId);
+  if (existingError) throw existingError;
+  const existingRuts = new Set((existingPlayers || []).map((r) => normalizeRut(r.rut)).filter(Boolean));""")
+          marker = "const validateRows = async (academiaId, rows) => {"
+          helper = """const getPlayerCapacity = async (academiaId) => {
+  const [{ data: academy, error: academyError }, { count, error: countError }] = await Promise.all([
+    supabase.from('academias').select('*').eq('id', academiaId).single(),
+    supabase.from('jugadores').select('id', { count: 'exact', head: true }).eq('academia_id', academiaId),
+  ]);
+  if (academyError || countError) throw academyError || countError;
+  const limit = getAcademyEntitlements(academy || {}).limits.players;
+  const current = Number(count || 0);
+  return { limit, current, remaining: Number.isInteger(limit) ? Math.max(0, limit - current) : null };
+};
+
+"""
+          if helper not in s:
+              s = s.replace(marker, helper + marker)
+          s = s.replace("""    const data = await validateRows(req.user.academia_id, rows);
+    const valid = data.filter((r) => r.valido).length;
+    res.json({ success: true, summary: { total: data.length, valid, errors: data.length - valid, warnings: data.filter((r) => r.warnings.length).length }, data });""", """    const [data, capacity] = await Promise.all([
+      validateRows(req.user.academia_id, rows),
+      getPlayerCapacity(req.user.academia_id),
+    ]);
+    const valid = data.filter((r) => r.valido).length;
+    res.json({ success: true, summary: {
+      total: data.length,
+      valid,
+      errors: data.length - valid,
+      warnings: data.filter((r) => r.warnings.length).length,
+      player_limit: capacity.limit,
+      current_players: capacity.current,
+      available_slots: capacity.remaining,
+      capacity_exceeded: capacity.remaining !== null && valid > capacity.remaining,
+    }, data });""")
+          s = s.replace("""    const validated = await validateRows(academiaId, rows);
+    const accepted = validated.filter((r) => r.valido);
+    if (!accepted.length) return res.status(400).json({ success: false, error: 'No hay filas válidas para importar.' });""", """    const [validated, capacity] = await Promise.all([
+      validateRows(academiaId, rows),
+      getPlayerCapacity(academiaId),
+    ]);
+    const accepted = validated.filter((r) => r.valido);
+    if (!accepted.length) return res.status(400).json({ success: false, error: 'No hay filas válidas para importar.' });
+    if (capacity.remaining !== null && accepted.length > capacity.remaining) {
+      return res.status(403).json({
+        success: false,
+        code: 'PLAYER_LIMIT_REACHED',
+        error: `Tu plan permite importar ${capacity.remaining} jugador(es) más. El archivo contiene ${accepted.length} filas válidas.`,
+        limit: capacity.limit,
+        current: capacity.current,
+        available_slots: capacity.remaining,
+      });
+    }""")
+          s = s.replace("""        if (categoryId) await supabase.from('jugador_categoria').insert([{ jugador_id: player.id, categoria_id: categoryId }]);""", """        if (categoryId) {
+          const { error: categoryLinkError } = await supabase.from('jugador_categoria').insert([{ jugador_id: player.id, categoria_id: categoryId }]);
+          if (categoryLinkError) throw categoryLinkError;
+        }""")
+          s = s.replace("""      } catch (rowError) {
+        failed += 1;
+        rowErrors.push({ fila: row.fila, error: rowError?.message || 'Error de importación' });
+      }""", """      } catch (rowError) {
+        failed += 1;
+        rowErrors.push({ fila: row.fila, error: rowError?.message || 'Error de importación' });
+      }""")
+          p.write_text(s)
+          PY
+      - name: Guardar endurecimiento
+        run: |
+          node --check routes/importaciones.js
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add routes/importaciones.js
+          git commit -m "Respetar cupos y robustecer importación masiva"
+          git push origin HEAD:agent/prematricula-import-report-v2
