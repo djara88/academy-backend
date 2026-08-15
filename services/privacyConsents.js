@@ -9,9 +9,9 @@ const CONSENT_DEFINITIONS = {
   },
   datos_salud: {
     obligatorio: false,
-    titulo: 'Autorización para datos de salud y emergencia',
-    finalidad: 'Gestionar información mínima de salud y contacto de emergencia necesaria para responder ante situaciones deportivas o de seguridad del alumno.',
-    contenido: 'Autorizo expresamente el tratamiento de la información de salud y emergencia que entregue respecto del alumno, exclusivamente para finalidades de seguridad, prevención y respuesta ante emergencias vinculadas a su participación deportiva. Comprendo que esta información es sensible, que debe limitarse a lo estrictamente necesario y que podré solicitar su actualización o revocación, sin perjuicio de tratamientos que deban mantenerse por obligación legal.'
+    titulo: 'Información mínima de emergencia',
+    finalidad: 'Registrar únicamente antecedentes mínimos entregados voluntariamente por el apoderado para apoyar una respuesta segura ante una emergencia durante la actividad deportiva.',
+    contenido: 'Autorizo expresamente el registro de la información mínima de emergencia que entregue respecto del alumno para finalidades de seguridad y respuesta ante una contingencia vinculada a su participación deportiva. Comprendo que esta autorización no habilita a la academia ni a la plataforma para mantener una historia clínica, diagnósticos extensos ni antecedentes de salud que no sean estrictamente necesarios. Puedo solicitar su actualización o revocación para usos futuros, sin perjuicio de obligaciones legales aplicables.'
   },
   imagen_interna: {
     obligatorio: false,

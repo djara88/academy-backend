@@ -10,7 +10,6 @@ const { validatePassword } = require('./services/passwordPolicy');
 
 const app = express();
 app.disable('x-powered-by');
-// Render termina TLS antes de llegar a Node. Un salto permite usar la IP real para rate limiting.
 app.set('trust proxy', 1);
 
 const allowedOrigins = new Set([
@@ -40,8 +39,6 @@ app.use(cors({
 const apiLimiter = createRateLimiter({
   windowMs: 5 * 60 * 1000,
   max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
-  // Evolution concentra webhooks de varias academias en su propia IP.
-  // Ese endpoint ya está protegido por secreto y no debe compartir el contador del API humano.
   skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/'),
 });
 const sensitiveLimiter = createRateLimiter({
@@ -61,20 +58,14 @@ app.use('/api/subscriptions/checkout', sensitiveLimiter);
 app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
 
-// El JSON normal no necesita 50 MB. Los archivos multipart mantienen sus límites por ruta.
 const bodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: bodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
-// La política se aplica en el servidor, no solo en el formulario web. Esto cubre
-// llamadas directas al API y mantiene el registro consistente con el cambio de clave.
 app.use('/api/academias/registro-publico', (req, res, next) => {
   const validation = validatePassword(req.body?.password);
   if (!validation.valid) {
-    return res.status(400).json({
-      error: validation.message,
-      code: 'WEAK_PASSWORD',
-    });
+    return res.status(400).json({ error: validation.message, code: 'WEAK_PASSWORD' });
   }
   return next();
 });
@@ -96,53 +87,33 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// ============================
-// CAMBIAR CLAVE OBLIGATORIA (BLINDADO)
-// ============================
 app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
   try {
     const { newPassword } = req.body;
     const userId = req.user?.id || req.user?.sub || req.user?.userId;
-
-    if (!userId) {
-      return res.status(400).json({ error: 'No se pudo identificar el ID del usuario en el token.' });
-    }
+    if (!userId) return res.status(400).json({ error: 'No se pudo identificar el ID del usuario en el token.' });
 
     const passwordValidation = validatePassword(newPassword);
     if (!passwordValidation.valid) {
-      return res.status(400).json({
-        error: passwordValidation.message,
-        code: 'WEAK_PASSWORD',
-      });
+      return res.status(400).json({ error: passwordValidation.message, code: 'WEAK_PASSWORD' });
     }
 
     const { error: authError } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
     if (authError) throw authError;
 
-    const { data, error: dbError } = await supabase
-      .from('usuarios')
-      .update({ requiere_cambio_password: false })
-      .eq('id', userId)
-      .select();
-
+    const { data, error: dbError } = await supabase.from('usuarios')
+      .update({ requiere_cambio_password: false }).eq('id', userId).select();
     if (dbError) throw dbError;
-
-    if (!data || data.length === 0) {
-      console.warn('⚠️ Se cambió la clave en Auth, pero no se encontró la fila correspondiente en usuarios.');
-    } else {
-      console.log('✅ Marca de cambio de contraseña removida correctamente.');
-    }
-
+    if (!data || data.length === 0) console.warn('Se cambió la clave en Auth, pero no se encontró la fila correspondiente en usuarios.');
     res.json({ success: true });
   } catch (error) {
-    console.error('❌ Error al actualizar contraseña:', error?.message || 'Error desconocido');
+    console.error('Error al actualizar contraseña:', error?.message || 'Error desconocido');
     res.status(500).json({ error: 'Error interno al actualizar la contraseña' });
   }
 });
 
-// ============================
-// RUTAS DE LA APLICACIÓN
-// ============================
+const documentoJugadorRoutes = require('./routes/documentos');
+const consentimientoRoutes = require('./routes/consentimientos');
 const jugadorRoutes = require('./routes/jugadores');
 const tutorRoutes = require('./routes/tutores');
 const evaluacionRoutes = require('./routes/evaluaciones');
@@ -161,6 +132,10 @@ const dashboardRoutes = require('./routes/dashboard');
 const saasAdminRoutes = require('./routes/saasAdmin');
 const subscriptionRoutes = require('./routes/subscriptions');
 
+// Se monta antes de jugadores para reemplazar de forma compatible el endpoint
+// histórico de informe sin modificar la UI existente.
+app.use('/api/jugadores', documentoJugadorRoutes);
+app.use('/api/consentimientos', consentimientoRoutes);
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
@@ -180,12 +155,8 @@ app.use('/api/saas-admin', saasAdminRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 
 app.use((error, _req, res, next) => {
-  if (error?.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'La solicitud supera el tamaño máximo permitido.' });
-  }
-  if (error?.message === 'Origen no autorizado por CORS') {
-    return res.status(403).json({ error: 'Origen no autorizado.' });
-  }
+  if (error?.type === 'entity.too.large') return res.status(413).json({ error: 'La solicitud supera el tamaño máximo permitido.' });
+  if (error?.message === 'Origen no autorizado por CORS') return res.status(403).json({ error: 'Origen no autorizado.' });
   return next(error);
 });
 
@@ -194,7 +165,6 @@ const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
 });
 
-// Evita que una llamada lenta retenga recursos indefinidamente en una instancia pequeña.
 server.requestTimeout = Math.max(15000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000));
 server.headersTimeout = Math.min(server.requestTimeout, Math.max(5000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 15000)));
 server.keepAliveTimeout = Math.max(1000, Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || 5000));
@@ -203,18 +173,16 @@ let shuttingDown = false;
 const gracefulShutdown = (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`🛑 ${signal} recibido. Cerrando conexiones de forma ordenada...`);
-
+  console.log(`${signal} recibido. Cerrando conexiones de forma ordenada...`);
   const forceTimer = setTimeout(() => {
-    console.error('⚠️ Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
+    console.error('Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
     server.closeAllConnections?.();
     process.exit(1);
   }, 25000);
   forceTimer.unref?.();
-
   server.close(() => {
     clearTimeout(forceTimer);
-    console.log('✅ Servidor HTTP cerrado correctamente.');
+    console.log('Servidor HTTP cerrado correctamente.');
     process.exit(0);
   });
 };
