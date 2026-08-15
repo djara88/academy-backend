@@ -1,4 +1,5 @@
 const supabase = require('../config/supabase');
+const { getAcademyEntitlements } = require('./planCatalog');
 
 const isGuardianShirtSize = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -12,6 +13,30 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
   const finanzas = payload.finanzas || {};
   const evaluacion = payload.evaluacion || {};
   const emergencia = payload.emergencia || {};
+
+  const { data: academy, error: academyError } = await supabase.from('academias').select('*').eq('id', academiaId).single();
+  if (academyError || !academy) throw new Error('No fue posible validar el plan de la academia.');
+  const playerLimit = getAcademyEntitlements(academy).limits.players;
+  if (Number.isInteger(playerLimit)) {
+    const { count, error: countError } = await supabase.from('jugadores').select('id', { count: 'exact', head: true }).eq('academia_id', academiaId);
+    if (countError) throw countError;
+    if (Number(count || 0) >= playerLimit) {
+      const error = new Error(`El plan actual alcanzó su límite de ${playerLimit} jugadores.`);
+      error.code = 'PLAYER_LIMIT_REACHED';
+      throw error;
+    }
+  }
+
+  if (jugador.rut) {
+    const { data: existingPlayer, error: duplicateError } = await supabase.from('jugadores')
+      .select('id,nombre').eq('academia_id', academiaId).eq('rut', jugador.rut).limit(1).maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (existingPlayer) {
+      const error = new Error('Ya existe un alumno con ese RUT en la academia.');
+      error.code = 'PLAYER_ALREADY_EXISTS';
+      throw error;
+    }
+  }
 
   let tutorId = null;
   if (tutor.rut) {
@@ -133,7 +158,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
   }
 
   if (jugador.talla_uniforme || jugador.numero_camiseta || jugador.nombre_camiseta) {
-    await supabase.from('pedidos_indumentaria').insert([{
+    const { error } = await supabase.from('pedidos_indumentaria').insert([{
       academia_id: academiaId,
       jugador_id: newPlayer.id,
       prenda_id: null,
@@ -145,10 +170,11 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       estado_pago: 'Incluido en Matrícula',
       estado_entrega: 'Pendiente',
     }]);
+    if (error) throw error;
   }
 
   if (guardianShirt) {
-    await supabase.from('pedidos_indumentaria').insert([{
+    const { error } = await supabase.from('pedidos_indumentaria').insert([{
       academia_id: academiaId,
       jugador_id: newPlayer.id,
       prenda_id: null,
@@ -160,6 +186,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       estado_pago: 'Incluido en Matrícula',
       estado_entrega: 'Pendiente',
     }]);
+    if (error) throw error;
   }
 
   return { jugador: newPlayer, tutorId };
