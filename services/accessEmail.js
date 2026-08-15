@@ -1,3 +1,5 @@
+const { fetchWithTimeout } = require('./httpClient');
+
 const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[character]));
@@ -7,7 +9,7 @@ const sendProfessorAccessEmail = async ({ email, name, academyName, temporaryPas
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
   if (!apiKey || !senderEmail) return false;
 
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+  const response = await fetchWithTimeout('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
       accept: 'application/json',
@@ -27,7 +29,7 @@ const sendProfessorAccessEmail = async ({ email, name, academyName, temporaryPas
           <p>Syncademia · Gestión de academias deportivas, tu ecosistema de élite.</p>
         </div>`,
     }),
-  });
+  }, 10000);
 
   if (!response.ok) throw new Error(`Brevo respondió con estado ${response.status}`);
   return true;
@@ -37,7 +39,7 @@ const sendGuardianAccessEmail = async ({ email, name, academyName, temporaryPass
   const apiKey = process.env.BREVO_API_KEY;
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
   if (!apiKey || !senderEmail) return false;
-  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+  const response = await fetchWithTimeout('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: { accept: 'application/json', 'api-key': apiKey, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -53,7 +55,7 @@ const sendGuardianAccessEmail = async ({ email, name, academyName, temporaryPass
           <p>Syncademia · Gestión de academias deportivas, tu ecosistema de élite.</p>
         </div>`,
     }),
-  });
+  }, 10000);
   if (!response.ok) throw new Error(`Brevo respondió con estado ${response.status}`);
   return true;
 };

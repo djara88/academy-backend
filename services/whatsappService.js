@@ -1,16 +1,20 @@
 // services/whatsappService.js
 
 const supabase = require('../config/supabase');
+const { fetchWithTimeout } = require('./httpClient');
 
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
 const API_KEY = process.env.EVOLUTION_API_KEY;
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET;
 const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
+const EVOLUTION_TIMEOUT_MS = Math.max(3000, Number(process.env.EVOLUTION_TIMEOUT_MS || 12000));
 
 const getHeaders = () => ({
   'Content-Type': 'application/json',
   'apikey': API_KEY
 });
+
+const evolutionFetch = (url, options = {}) => fetchWithTimeout(url, options, EVOLUTION_TIMEOUT_MS);
 
 const getWebhookHeaders = () => {
   if (!WEBHOOK_SECRET || WEBHOOK_SECRET.length < 32) {
@@ -40,7 +44,7 @@ const configurarWebhook = async (academiaId) => {
   const webhookHeaders = getWebhookHeaders();
 
   try {
-    const response = await fetch(`${EVOLUTION_URL}/webhook/set/${instanceName}`, {
+    const response = await evolutionFetch(`${EVOLUTION_URL}/webhook/set/${instanceName}`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
@@ -78,12 +82,12 @@ const conectarAcademia = async (academiaId) => {
   try {
     await configurarWebhook(academiaId);
 
-    const stateResponse = await fetch(`${EVOLUTION_URL}/instance/connectionState/${instanceName}`, {
+    const stateResponse = await evolutionFetch(`${EVOLUTION_URL}/instance/connectionState/${instanceName}`, {
       headers: getHeaders()
     });
 
     if (stateResponse.status === 404) {
-      const createResponse = await fetch(`${EVOLUTION_URL}/instance/create`, {
+      const createResponse = await evolutionFetch(`${EVOLUTION_URL}/instance/create`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
@@ -103,7 +107,7 @@ const conectarAcademia = async (academiaId) => {
       return await parseResponse(createResponse);
     }
 
-    const connectResponse = await fetch(`${EVOLUTION_URL}/instance/connect/${instanceName}`, {
+    const connectResponse = await evolutionFetch(`${EVOLUTION_URL}/instance/connect/${instanceName}`, {
       method: 'GET',
       headers: getHeaders()
     });
@@ -123,7 +127,7 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
   const instanceName = `academia_${academiaId}`;
 
   try {
-    const response = await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
+    const response = await evolutionFetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
