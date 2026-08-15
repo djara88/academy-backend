@@ -6,11 +6,13 @@ const supabase = require('../config/supabase');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 const authMiddleware = require('../middleware/auth');
 const { requireAcademyParamAccess } = require('../middleware/academyAccess');
+const { requireWebhookSecret } = require('../middleware/webhookAuth');
 
 // Destructuración segura desde el objeto importado para evitar dependencias circulares
 const { conectarAcademia, enviarMensaje } = whatsappService;
 
 const requireAcademyAccess = requireAcademyParamAccess('academiaId');
+const maskPhone = (phone) => phone ? `***${String(phone).slice(-4)}` : 'desconocido';
 
 // ========================================================
 // 1. CONSULTAR ESTADO / OBTENER QR
@@ -61,8 +63,8 @@ router.post('/enviar/:academiaId', authMiddleware, requireAcademyAccess, async (
 // ========================================================
 // 🤖 3. EL CEREBRO DEL BOT: ESCUCHA Y RESPONDE EN TIEMPO REAL
 // ========================================================
-router.post('/webhook/:academiaId', async (req, res) => {
-  // Respondemos 200 OK de inmediato a WhatsApp
+router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
+  // Solo respondemos 200 después de autenticar el webhook.
   res.status(200).send('OK');
 
   try {
@@ -70,7 +72,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
     const academyName = await getAcademyName(academiaId);
     const body = req.body;
 
-    console.log(`📩 [WEBHOOK RECIBIDO] Academia: ${academiaId}`);
+    console.log(`📩 [WEBHOOK AUTENTICADO] Academia: ${academiaId}`);
 
     // Tolerancia a múltiples formatos de payload de Evolution API (v1 y v2)
     const payload = body.data || body;
@@ -109,14 +111,15 @@ router.post('/webhook/:academiaId', async (req, res) => {
     const telefonoLimpio = remoteJid.split('@')[0].replace(/\D/g, '');
     const ultimos8Digitos = telefonoLimpio.slice(-8);
 
-    console.log(`💬 Mensaje de ${telefonoLimpio}: "${text}" (Buscando coincidencia con %${ultimos8Digitos})`);
+    console.log(`💬 Mensaje recibido de ${maskPhone(telefonoLimpio)} para academia ${academiaId}`);
 
     // =========================================================
     // ⚽ BLOQUE A: COMPROBAR CITACIONES DE PARTIDOS PRIMERO
     // =========================================================
     const { data: citaciones, error: errCitacion } = await supabase
       .from('partido_citaciones')
-      .select('*, partidos(*)')
+      .select('*, partidos!inner(*)')
+      .eq('partidos.academia_id', academiaId)
       .like('telefono_apoderado', `%${ultimos8Digitos}%`)
       .neq('paso_bot', 'FINALIZADO')
       .order('created_at', { ascending: false });
@@ -124,11 +127,17 @@ router.post('/webhook/:academiaId', async (req, res) => {
     if (!errCitacion && citaciones && citaciones.length > 0) {
       const citacion = citaciones[0];
       const partido = citacion.partidos;
+
+      if (String(partido?.academia_id || '') !== String(academiaId)) {
+        console.warn('Webhook bloqueado: la citación no pertenece a la academia indicada.');
+        return;
+      }
+
       let respuestaPart = '';
       let nuevoPasoPart = citacion.paso_bot;
       let updateDataPart = {};
 
-      console.log(`🎯 Citación de Partido hallada (ID: ${citacion.id}) | Rival: "vs ${partido?.rival}" | Paso: ${citacion.paso_bot}`);
+      console.log(`🎯 Citación de partido hallada en la academia correcta (ID: ${citacion.id})`);
 
       if (citacion.paso_bot === 'ESPERANDO_CITACION') {
         if (text === '1') {
@@ -174,28 +183,30 @@ router.post('/webhook/:academiaId', async (req, res) => {
       const { error: errUpdateCit } = await supabase
         .from('partido_citaciones')
         .update(updateDataPart)
-        .eq('id', citacion.id);
+        .eq('id', citacion.id)
+        .eq('partido_id', citacion.partido_id);
 
       if (errUpdateCit) {
         console.error('❌ Error actualizando la citación en BD:', errUpdateCit);
       } else {
-        console.log(`✅ Citación actualizada en BD -> paso_bot: ${nuevoPasoPart}, respuesta: ${updateDataPart.respuesta || 'Motivo registrado'}`);
+        console.log(`✅ Citación actualizada en BD -> paso_bot: ${nuevoPasoPart}`);
       }
 
       if (respuestaPart) {
         await enviarMensaje(academiaId, telefonoLimpio, academyMessage(academyName, respuestaPart));
-        console.log(`💬 Respuesta de citación enviada a ${telefonoLimpio}`);
+        console.log(`💬 Respuesta de citación enviada a ${maskPhone(telefonoLimpio)}`);
       }
 
       return; // Finalizamos aquí para no entrar al flujo de Torneos
     }
 
     // =========================================================
-    // 🏆 BLOQUE B: CONVOCATORIAS DE TORNEOS (INTACTO)
+    // 🏆 BLOQUE B: CONVOCATORIAS DE TORNEOS
     // =========================================================
     const { data: participaciones, error } = await supabase
       .from('torneo_participantes')
-      .select('*, torneos(*)')
+      .select('*, torneos!inner(*)')
+      .eq('torneos.academia_id', academiaId)
       .like('telefono_apoderado', `%${ultimos8Digitos}%`)
       .neq('paso_bot', 'FINALIZADO')
       .order('created_at', { ascending: false });
@@ -206,17 +217,23 @@ router.post('/webhook/:academiaId', async (req, res) => {
     }
 
     if (!participaciones || participaciones.length === 0) {
-      console.log(`⚠️ No hay convocatorias ni citaciones pendientes para el número finalizado en %${ultimos8Digitos}`);
+      console.log(`⚠️ No hay convocatorias ni citaciones pendientes para ${maskPhone(telefonoLimpio)} en la academia indicada.`);
       return;
     }
 
     const participacion = participaciones[0];
     const torneo = participacion.torneos;
+
+    if (String(torneo?.academia_id || '') !== String(academiaId)) {
+      console.warn('Webhook bloqueado: la convocatoria no pertenece a la academia indicada.');
+      return;
+    }
+
     let respuesta = '';
     let nuevoPaso = participacion.paso_bot;
     let updateData = {};
 
-    console.log(`🎯 Convocatoria hallada (ID: ${participacion.id}) | Torneo: "${torneo?.nombre}" | Paso actual: ${participacion.paso_bot}`);
+    console.log(`🎯 Convocatoria hallada en la academia correcta (ID: ${participacion.id})`);
 
     // MÁQUINA DE ESTADOS TORNEOS
     if (participacion.paso_bot === 'ESPERANDO_PARTICIPACION') {
@@ -233,7 +250,7 @@ router.post('/webhook/:academiaId', async (req, res) => {
         } else if (torneo.costo_inscripcion > 0) {
           nuevoPaso = 'FINALIZADO';
           const costoStr = Number(torneo.costo_inscripcion).toLocaleString('es-CL');
-          respuesta = `¡Excelente! 🎉 Has confirmed asistencia para *${torneo.nombre}*.\n\n` +
+          respuesta = `¡Excelente! 🎉 Has confirmado asistencia para *${torneo.nombre}*.\n\n` +
                       `💰 Valor inscripción: $${costoStr}\n` +
                       `Pronto ${academyName} te enviará los datos para la transferencia.`;
         } else {
@@ -267,18 +284,19 @@ router.post('/webhook/:academiaId', async (req, res) => {
     const { error: errUpdate } = await supabase
       .from('torneo_participantes')
       .update(updateData)
-      .eq('id', participacion.id);
+      .eq('id', participacion.id)
+      .eq('torneo_id', participacion.torneo_id);
 
     if (errUpdate) {
       console.error('❌ Error actualizando la convocatoria en BD:', errUpdate);
     } else {
-      console.log(`✅ Convocatoria actualizada en BD -> paso_bot: ${nuevoPaso}, respuesta: ${updateData.respuesta_participacion || 'Cuotas seleccionadas'}`);
+      console.log(`✅ Convocatoria actualizada en BD -> paso_bot: ${nuevoPaso}`);
     }
 
     // Envío del mensaje de respuesta automática
     if (respuesta) {
       await enviarMensaje(academiaId, telefonoLimpio, academyMessage(academyName, respuesta));
-      console.log(`💬 Respuesta automática enviada con éxito a ${telefonoLimpio}`);
+      console.log(`💬 Respuesta automática enviada con éxito a ${maskPhone(telefonoLimpio)}`);
     }
 
   } catch (err) {
