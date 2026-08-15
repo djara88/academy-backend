@@ -8,9 +8,17 @@ const text = (value, max = 250) => String(value ?? '').trim().slice(0, max);
 const normalizeDocument = (value) => text(value, 40).replace(/\./g, '').replace(/\s/g, '').toUpperCase();
 const documentKey = (value) => normalizeDocument(value).replace(/[^0-9K]/g, '');
 const numberOrZero = (value) => {
-  const raw = String(value ?? '').replace(/\$/g, '').trim();
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const raw = String(value ?? '').replace(/[$\s]/g, '').trim();
   if (!raw) return 0;
-  const normalized = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw.replace(/\s/g, '');
+  let normalized = raw;
+  if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(raw)) {
+    normalized = raw.replace(/\./g, '').replace(',', '.');
+  } else if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw)) {
+    normalized = raw.replace(/,/g, '');
+  } else if (raw.includes(',')) {
+    normalized = raw.replace(/\./g, '').replace(',', '.');
+  }
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
