@@ -1,11 +1,11 @@
-const DEFAULT_MASTER_ADMIN_EMAIL = 'd.jarazerene@gmail.com';
-
 const getMasterAdminEmail = () => (
-  process.env.SUPERADMIN_EMAIL || DEFAULT_MASTER_ADMIN_EMAIL
-).trim().toLowerCase();
-
-const isMasterAdminEmail = (email) => (
-  String(email || '').trim().toLowerCase() === getMasterAdminEmail()
+  String(process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase()
 );
 
-module.exports = { isMasterAdminEmail };
+const isMasterAdminEmail = (email) => {
+  const configuredEmail = getMasterAdminEmail();
+  if (!configuredEmail) return false;
+  return String(email || '').trim().toLowerCase() === configuredEmail;
+};
+
+module.exports = { getMasterAdminEmail, isMasterAdminEmail };

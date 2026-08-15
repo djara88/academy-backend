@@ -3,6 +3,17 @@ const { isMasterAdminEmail } = require('./masterAdmin');
 const { isProfessor, isGuardian, isAllowedProfessorRequest, isAllowedGuardianRequest } = require('./professorAccess');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 
+const getAuthenticatorLevelFromToken = (token) => {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2) return 'aal1';
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return payload?.aal === 'aal2' ? 'aal2' : 'aal1';
+  } catch (_error) {
+    return 'aal1';
+  }
+};
+
 const authMiddleware = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -12,6 +23,12 @@ const authMiddleware = async (req, res, next) => {
     if (error || !user) {
       return res.status(401).json({ error: 'Token inválido' });
     }
+
+    // El token ya fue validado por Supabase Auth. Recién después de esa
+    // validación usamos el claim AAL para autorización MFA en rutas sensibles.
+    req.auth = {
+      aal: getAuthenticatorLevelFromToken(token),
+    };
 
     const { data: usuario, error: userError } = await supabase
       .from('usuarios')
@@ -104,3 +121,4 @@ const authMiddleware = async (req, res, next) => {
 };
 
 module.exports = authMiddleware;
+module.exports.getAuthenticatorLevelFromToken = getAuthenticatorLevelFromToken;

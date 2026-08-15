@@ -2,11 +2,12 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireSuperadmin } = require('../middleware/authorization');
+const { requireSuperadminMfa } = require('../middleware/requireMfa');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 const { activateChargePlan } = require('../services/subscriptionBilling');
 
 const router = express.Router();
-router.use(authMiddleware, requireSuperadmin);
+router.use(authMiddleware, requireSuperadmin, requireSuperadminMfa);
 
 const monthBounds = () => {
   const now = new Date();
