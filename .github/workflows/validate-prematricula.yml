@@ -18,5 +18,6 @@ jobs:
       - run: node --check routes/documentos.js
       - run: node --check services/enrollmentService.js
       - run: node --check services/playerReportV2.js
+      - run: node --check services/signedEnrollmentPdf.js
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
