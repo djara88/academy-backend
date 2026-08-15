@@ -1,0 +1,95 @@
+name: Security refresh
+
+on:
+  push:
+    branches:
+      - agent/security-release-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Regenerar lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Endurecer multipart y anonimizar logs
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'No se encontró patrón esperado en {path}: {old[:80]}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace(
+              'routes/academias.js',
+              "limits: { fileSize: maxLogoMb * 1024 * 1024, files: 1 },",
+              "limits: {\n    fileSize: maxLogoMb * 1024 * 1024,\n    files: 1,\n    fields: 20,\n    parts: 21,\n    fieldNameSize: 100,\n    fieldNestingDepth: 2,\n  },"
+          )
+
+          p = Path('routes/whatsapp.js')
+          text = p.read_text(encoding='utf-8')
+          replacements = {
+              "const maskPhone = (phone) => phone ? `***${String(phone).slice(-4)}` : 'desconocido';\n": "",
+              "console.log(`📩 [WEBHOOK AUTENTICADO] Academia: ${academiaId}`);": "console.log('📩 Webhook de WhatsApp autenticado.');",
+              "console.log(`💬 Mensaje recibido de ${maskPhone(telefonoLimpio)} para academia ${academiaId}`);": "console.log('💬 Mensaje de WhatsApp recibido y validado.');",
+              "console.log(`🎯 Citación de partido hallada en la academia correcta (ID: ${citacion.id})`);": "console.log('🎯 Citación de partido encontrada dentro de la academia autorizada.');",
+              "console.log(`💬 Respuesta de citación enviada a ${maskPhone(telefonoLimpio)}`);": "console.log('💬 Respuesta de citación enviada.');",
+              "console.log(`⚠️ No hay convocatorias ni citaciones pendientes para ${maskPhone(telefonoLimpio)} en la academia indicada.`);": "console.log('ℹ️ No hay convocatorias ni citaciones pendientes para el mensaje recibido.');",
+              "console.log(`🎯 Convocatoria hallada en la academia correcta (ID: ${participacion.id})`);": "console.log('🎯 Convocatoria encontrada dentro de la academia autorizada.');",
+              "console.log(`💬 Respuesta automática enviada con éxito a ${maskPhone(telefonoLimpio)}`);": "console.log('💬 Respuesta automática de WhatsApp enviada con éxito.');",
+              "console.error('❌ Error crítico procesando webhook:', err);": "console.error('❌ Error procesando webhook de WhatsApp:', err?.message || 'Error desconocido');",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'No se encontró patrón esperado en routes/whatsapp.js: {old}')
+              text = text.replace(old, new)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('server.js')
+          text = p.read_text(encoding='utf-8')
+          replacements = {
+              "console.warn(`⚠️ Se cambió la clave en Auth, pero no se encontró la fila en usuarios para el ID: ${userId}`);": "console.warn('⚠️ Se cambió la clave en Auth, pero no se encontró la fila correspondiente en usuarios.');",
+              "console.log(`✅ Marca de cambio de contraseña removida para el usuario: ${userId}`);": "console.log('✅ Marca de cambio de contraseña removida correctamente.');",
+              "console.error('❌ Error al actualizar contraseña:', error);": "console.error('❌ Error al actualizar contraseña:', error?.message || 'Error desconocido');",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'No se encontró patrón esperado en server.js: {old}')
+              text = text.replace(old, new)
+          p.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/security-refresh.yml').unlink()
+
+      - name: Instalar exactamente el lockfile
+        run: npm ci --ignore-scripts
+
+      - name: Ejecutar pruebas
+        run: npm test
+
+      - name: Auditar dependencias de producción
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Publicar lockfile y hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json routes/academias.js routes/whatsapp.js server.js .github/workflows/security-refresh.yml
+          git commit -m "Cerrar vulnerabilidad Multer y anonimizar logs"
+          git push
