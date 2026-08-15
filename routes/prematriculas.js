@@ -3,8 +3,8 @@ const crypto = require('crypto');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { CONSENT_DEFINITIONS, PRIVACY_VERSION, getConsentCatalog } = require('../services/privacyConsents');
-const { materializeEnrollment } = require('../services/enrollmentService');
+const { PRIVACY_VERSION, getConsentCatalog } = require('../services/privacyConsents');
+const { materializeEnrollment, cleanupMaterializedEnrollment } = require('../services/enrollmentService');
 const { selectEnrollmentTerms } = require('../services/premiumPdf');
 const { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');
 const { fetchWithTimeout } = require('../services/httpClient');
@@ -14,7 +14,9 @@ const TOKEN_TTL_DAYS = Math.max(2, Number(process.env.PREMATRICULA_TTL_DAYS || 7
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const safeText = (value, max = 5000) => String(value || '').trim().slice(0, max);
-const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
 const sendPrematriculaEmail = async ({ academia, tutor, jugador, link }) => {
   if (!tutor?.email || !process.env.BREVO_API_KEY || !process.env.BREVO_SENDER_EMAIL) return false;
@@ -71,9 +73,11 @@ const sendFinalEnrollmentEmail = async ({ academia, tutor, jugador, folio, pdfBu
 router.get('/', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('prematriculas')
     .select('id,estado,expires_at,sent_at,opened_at,signed_at,tutor_payload,jugador_payload,created_at,jugador_id')
-    .eq('academia_id', req.user.academia_id).order('created_at', { ascending: false }).limit(100);
+    .eq('academia_id', req.user.academia_id)
+    .order('created_at', { ascending: false })
+    .limit(100);
   if (error) return res.status(500).json({ success: false, error: 'No fue posible cargar las pre-matrículas.' });
-  res.json({ success: true, data });
+  return res.json({ success: true, data });
 });
 
 router.post('/', authMiddleware, async (req, res) => {
@@ -84,6 +88,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const finanzas = req.body?.finanzas || {};
     const evaluacion = req.body?.evaluacion || {};
     const emergencia = req.body?.emergencia || {};
+
     if (!safeText(tutor.nombre_completo, 180) || !safeText(tutor.email, 240) || !safeText(jugador.nombre, 180)) {
       return res.status(400).json({ success: false, error: 'Nombre del alumno, apoderado y correo son obligatorios.' });
     }
@@ -95,7 +100,9 @@ router.post('/', authMiddleware, async (req, res) => {
     const tokenHash = hashToken(token);
     const expiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000).toISOString();
     const termsSnapshot = selectEnrollmentTerms(academia) || 'La academia no mantiene condiciones adicionales de matrícula configuradas en Syncademia.';
-    const row = {
+    const consentCatalog = getConsentCatalog(academia?.nombre || 'la academia');
+
+    const { data: created, error } = await supabase.from('prematriculas').insert([{
       academia_id,
       estado: 'enviada',
       token_hash: tokenHash,
@@ -108,18 +115,18 @@ router.post('/', authMiddleware, async (req, res) => {
       emergencia_payload: emergencia,
       privacy_version: PRIVACY_VERSION,
       terms_snapshot: termsSnapshot,
+      consent_snapshot: consentCatalog,
       created_by: userId || null,
       updated_at: new Date().toISOString(),
-    };
-    const { data: created, error } = await supabase.from('prematriculas').insert([row]).select('id,estado,expires_at').single();
+    }]).select('id,estado,expires_at').single();
     if (error) throw error;
 
     const link = `${FRONTEND_URL}/prematricula/${token}`;
     const emailSent = await sendPrematriculaEmail({ academia, tutor, jugador, link });
-    res.status(201).json({ success: true, data: created, link, email_sent: emailSent });
+    return res.status(201).json({ success: true, data: created, link, email_sent: emailSent });
   } catch (error) {
     console.error('Error creando pre-matrícula:', error?.message || 'Error desconocido');
-    res.status(500).json({ success: false, error: 'No fue posible crear la pre-matrícula.' });
+    return res.status(500).json({ success: false, error: 'No fue posible crear la pre-matrícula.' });
   }
 });
 
@@ -128,16 +135,24 @@ router.get('/public/:token', async (req, res) => {
     const tokenHash = hashToken(req.params.token);
     const { data: pre, error } = await supabase.from('prematriculas').select('*').eq('token_hash', tokenHash).maybeSingle();
     if (error || !pre) return res.status(404).json({ success: false, error: 'Enlace de pre-matrícula no válido.' });
-    if (new Date(pre.expires_at).getTime() < Date.now() && !['firmada','cancelada'].includes(pre.estado)) {
+
+    if (new Date(pre.expires_at).getTime() < Date.now() && !['firmada', 'cancelada'].includes(pre.estado)) {
       await supabase.from('prematriculas').update({ estado: 'vencida', updated_at: new Date().toISOString() }).eq('id', pre.id);
       return res.status(410).json({ success: false, error: 'Este enlace de pre-matrícula ya venció.' });
     }
     if (pre.estado === 'cancelada') return res.status(410).json({ success: false, error: 'Esta pre-matrícula fue cancelada.' });
 
-    const { data: academia } = await supabase.from('academias').select('nombre,logo,logo_url,color_primario,color_secundario,direccion,telefono,director_email').eq('id', pre.academia_id).single();
-    if (pre.estado === 'enviada') await supabase.from('prematriculas').update({ estado: 'abierta', opened_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', pre.id).eq('estado', 'enviada');
+    const { data: academia } = await supabase.from('academias')
+      .select('nombre,logo,logo_url,color_primario,color_secundario,direccion,telefono,director_email')
+      .eq('id', pre.academia_id).single();
 
-    res.json({
+    if (pre.estado === 'enviada') {
+      await supabase.from('prematriculas').update({
+        estado: 'abierta', opened_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq('id', pre.id).eq('estado', 'enviada');
+    }
+
+    return res.json({
       success: true,
       data: {
         id: pre.id,
@@ -149,24 +164,29 @@ router.get('/public/:token', async (req, res) => {
         finanzas: pre.finanzas_payload,
         emergencia: pre.emergencia_payload,
         terms: pre.terms_snapshot,
-        privacy: getConsentCatalog(academia?.nombre || 'la academia'),
+        privacy: pre.consent_snapshot?.items ? pre.consent_snapshot : getConsentCatalog(academia?.nombre || 'la academia'),
         signed_at: pre.signed_at,
       },
     });
   } catch (_error) {
-    res.status(500).json({ success: false, error: 'No fue posible abrir la pre-matrícula.' });
+    return res.status(500).json({ success: false, error: 'No fue posible abrir la pre-matrícula.' });
   }
 });
 
 router.post('/public/:token/firmar', async (req, res) => {
   const tokenHash = hashToken(req.params.token);
   let pre = null;
+  let materialized = null;
+  let uploadedPath = null;
+  let finalized = false;
+
   try {
     const { data, error } = await supabase.from('prematriculas').select('*').eq('token_hash', tokenHash).maybeSingle();
     if (error || !data) return res.status(404).json({ success: false, error: 'Enlace no válido.' });
     pre = data;
+
     if (pre.estado === 'firmada') return res.status(409).json({ success: false, error: 'Esta pre-matrícula ya fue firmada.' });
-    if (!['enviada','abierta'].includes(pre.estado)) return res.status(409).json({ success: false, error: 'Esta pre-matrícula no está disponible para firma.' });
+    if (!['enviada', 'abierta'].includes(pre.estado)) return res.status(409).json({ success: false, error: 'Esta pre-matrícula no está disponible para firma.' });
     if (new Date(pre.expires_at).getTime() < Date.now()) return res.status(410).json({ success: false, error: 'El enlace de pre-matrícula venció.' });
 
     const decisions = req.body?.decisiones || {};
@@ -174,14 +194,31 @@ router.post('/public/:token/firmar', async (req, res) => {
     const signedByName = safeText(req.body?.firmante_nombre, 180);
     const signedByDocument = safeText(req.body?.firmante_documento, 80);
     const signature = safeText(req.body?.firma_data_url, 250000);
-    if (!acceptsTerms || decisions.aviso_privacidad !== true) return res.status(400).json({ success: false, error: 'Debe aceptar las condiciones de matrícula y confirmar el aviso de privacidad.' });
-    if (!signedByName || !signedByDocument || !signature.startsWith('data:image/png;base64,')) return res.status(400).json({ success: false, error: 'Nombre, documento y firma manuscrita son obligatorios.' });
 
-    const { data: locked, error: lockError } = await supabase.from('prematriculas').update({ estado: 'procesando', updated_at: new Date().toISOString() })
-      .eq('id', pre.id).in('estado', ['enviada','abierta']).select('id').maybeSingle();
+    if (!acceptsTerms || decisions.aviso_privacidad !== true) {
+      return res.status(400).json({ success: false, error: 'Debe aceptar las condiciones de matrícula y confirmar el aviso de privacidad.' });
+    }
+    if (!signedByName || !signedByDocument || !signature.startsWith('data:image/png;base64,')) {
+      return res.status(400).json({ success: false, error: 'Nombre, documento y firma manuscrita son obligatorios.' });
+    }
+
+    const { data: locked, error: lockError } = await supabase.from('prematriculas')
+      .update({ estado: 'procesando', updated_at: new Date().toISOString() })
+      .eq('id', pre.id)
+      .in('estado', ['enviada', 'abierta'])
+      .select('id')
+      .maybeSingle();
     if (lockError || !locked) return res.status(409).json({ success: false, error: 'La pre-matrícula está siendo procesada o ya cambió de estado.' });
 
-    const consentSnapshot = Object.fromEntries(Object.keys(CONSENT_DEFINITIONS).map((tipo) => [tipo, decisions[tipo] === true]));
+    const catalog = pre.consent_snapshot?.items ? pre.consent_snapshot : getConsentCatalog('la academia');
+    const catalogItems = Array.isArray(catalog.items) ? catalog.items : [];
+    const mandatoryMissing = catalogItems.some((item) => item.obligatorio === true && decisions[item.tipo] !== true);
+    if (mandatoryMissing) throw Object.assign(new Error('Falta confirmar una autorización obligatoria.'), { code: 'MANDATORY_CONSENT_MISSING' });
+
+    const consentDecisions = Object.fromEntries(catalogItems.map((item) => [item.tipo, decisions[item.tipo] === true]));
+    const signedAt = new Date().toISOString();
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim().slice(0, 80) || null;
+    const userAgent = safeText(req.headers['user-agent'], 500);
     const evidencePayload = JSON.stringify({
       prematricula_id: pre.id,
       academia_id: pre.academia_id,
@@ -190,59 +227,76 @@ router.post('/public/:token/firmar', async (req, res) => {
       finanzas: pre.finanzas_payload,
       terms: pre.terms_snapshot,
       terms_accepted: true,
-      privacy_version: pre.privacy_version,
-      decisions: consentSnapshot,
+      consent_catalog: catalog,
+      decisions: consentDecisions,
       signed_by_name: signedByName,
       signed_by_document: signedByDocument,
-      signed_at: new Date().toISOString(),
+      signed_at: signedAt,
+      ip,
+      user_agent: userAgent,
     });
     const evidenceHash = sha256(evidencePayload);
 
     const playerPayload = { ...(pre.jugador_payload || {}) };
-    if (!consentSnapshot.imagen_interna) playerPayload.foto_base64 = '';
-    const emergencyPayload = consentSnapshot.datos_salud ? (pre.emergencia_payload || {}) : {};
-    const materialized = await materializeEnrollment({
+    if (!consentDecisions.imagen_interna) playerPayload.foto_base64 = '';
+    const emergencyPayload = consentDecisions.datos_salud ? (pre.emergencia_payload || {}) : {};
+
+    materialized = await materializeEnrollment({
       academiaId: pre.academia_id,
       userId: pre.created_by,
       sourceKey: `prematricula-${pre.id}`,
-      payload: { tutor: pre.tutor_payload, jugador: playerPayload, finanzas: pre.finanzas_payload, evaluacion: pre.evaluacion_payload, emergencia: emergencyPayload },
+      payload: {
+        tutor: pre.tutor_payload,
+        jugador: playerPayload,
+        finanzas: pre.finanzas_payload,
+        evaluacion: pre.evaluacion_payload,
+        emergencia: emergencyPayload,
+      },
     });
 
-    const now = new Date().toISOString();
-    const consentRows = Object.keys(CONSENT_DEFINITIONS).map((tipo) => {
-      const definition = CONSENT_DEFINITIONS[tipo];
-      const accepted = consentSnapshot[tipo] === true;
+    const consentRows = catalogItems.map((definition) => {
+      const accepted = consentDecisions[definition.tipo] === true;
       return {
         academia_id: pre.academia_id,
         jugador_id: materialized.jugador.id,
         tutor_id: materialized.tutorId,
-        tipo,
+        tipo: definition.tipo,
         estado: accepted ? 'aceptado' : 'rechazado',
-        obligatorio: definition.obligatorio,
+        obligatorio: definition.obligatorio === true,
         version: pre.privacy_version,
         finalidad: definition.finalidad,
         contenido_snapshot: definition.contenido,
         representante_nombre: signedByName,
         canal: 'prematricula_digital',
         registrado_por: pre.created_by || null,
-        otorgado_at: accepted ? now : null,
+        otorgado_at: accepted ? signedAt : null,
         revocado_at: null,
       };
     });
-    const { error: consentError } = await supabase.from('consentimientos_alumnos').upsert(consentRows, { onConflict: 'jugador_id,tipo,version', ignoreDuplicates: false });
+
+    const { error: consentError } = await supabase.from('consentimientos_alumnos')
+      .upsert(consentRows, { onConflict: 'jugador_id,tipo,version', ignoreDuplicates: false });
     if (consentError) throw consentError;
 
-    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim().slice(0, 80) || null;
-    await supabase.from('jugadores').update({
+    const { error: playerEvidenceError } = await supabase.from('jugadores').update({
       terminos_aceptados: true,
-      fecha_aceptacion_terminos: now,
+      fecha_aceptacion_terminos: signedAt,
       terminos_condiciones: pre.terms_snapshot,
       firma_digital: signature,
       ip_aceptacion: ip,
     }).eq('id', materialized.jugador.id).eq('academia_id', pre.academia_id);
+    if (playerEvidenceError) throw playerEvidenceError;
 
-    const { data: academia } = await supabase.from('academias').select('*').eq('id', pre.academia_id).single();
-    const { data: tutor } = await supabase.from('tutores').select('*').eq('id', materialized.tutorId).single();
+    const [academyResult, tutorResult] = await Promise.all([
+      supabase.from('academias').select('*').eq('id', pre.academia_id).single(),
+      supabase.from('tutores').select('*').eq('id', materialized.tutorId).single(),
+    ]);
+    if (academyResult.error || tutorResult.error || !academyResult.data || !tutorResult.data) {
+      throw academyResult.error || tutorResult.error || new Error('No fue posible cargar los datos finales de matrícula.');
+    }
+    const academia = academyResult.data;
+    const tutor = tutorResult.data;
+
     const folio = `MAT-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
     const pdfBuffer = await generateSignedEnrollmentPdf({
       academia,
@@ -251,28 +305,82 @@ router.post('/public/:token/firmar', async (req, res) => {
       folio,
       terms: pre.terms_snapshot,
       consentimientos: consentRows,
-      firma: { nombre: signedByName, documento: signedByDocument, fecha: now, ip, evidence_sha256: evidenceHash, data_url: signature },
+      firma: {
+        nombre: signedByName,
+        documento: signedByDocument,
+        fecha: signedAt,
+        ip,
+        evidence_sha256: evidenceHash,
+        data_url: signature,
+      },
     });
     const documentHash = sha256(pdfBuffer);
     const fileName = `${pre.academia_id}/${folio}.pdf`;
-    const { error: uploadError } = await supabase.storage.from('matriculas-pdf').upload(fileName, pdfBuffer, { contentType: 'application/pdf', upsert: false });
+
+    const { error: uploadError } = await supabase.storage.from('matriculas-pdf')
+      .upload(fileName, pdfBuffer, { contentType: 'application/pdf', upsert: false });
     if (uploadError) throw uploadError;
-    const { data: signedUrlData, error: signedError } = await supabase.storage.from('matriculas-pdf').createSignedUrl(fileName, 15 * 60);
-    if (signedError) throw signedError;
+    uploadedPath = fileName;
+
+    const { data: signedUrlData, error: signedError } = await supabase.storage.from('matriculas-pdf')
+      .createSignedUrl(fileName, 15 * 60);
+    if (signedError || !signedUrlData?.signedUrl) throw signedError || new Error('No fue posible crear el enlace seguro.');
+
+    const finalConsentSnapshot = { ...catalog, decisions: consentDecisions };
+    const { data: finalizedRow, error: finalError } = await supabase.from('prematriculas').update({
+      estado: 'firmada',
+      signed_at: signedAt,
+      signed_by_name: signedByName,
+      signed_by_document: signedByDocument,
+      signed_ip: ip || null,
+      signed_user_agent: userAgent,
+      signature_data_url: signature,
+      consent_snapshot: finalConsentSnapshot,
+      evidence_sha256: evidenceHash,
+      final_document_path: fileName,
+      final_document_sha256: documentHash,
+      jugador_id: materialized.jugador.id,
+      tutor_id: materialized.tutorId,
+      updated_at: signedAt,
+    }).eq('id', pre.id).eq('estado', 'procesando').select('id').maybeSingle();
+    if (finalError || !finalizedRow) throw finalError || new Error('No fue posible confirmar el cierre de la pre-matrícula.');
+    finalized = true;
+
     const emailSent = await sendFinalEnrollmentEmail({ academia, tutor, jugador: materialized.jugador, folio, pdfBuffer });
-
-    await supabase.from('prematriculas').update({
-      estado: 'firmada', signed_at: now, signed_by_name: signedByName, signed_by_document: signedByDocument,
-      signed_ip: ip || null, signed_user_agent: safeText(req.headers['user-agent'], 500), signature_data_url: signature,
-      consent_snapshot: consentSnapshot, evidence_sha256: evidenceHash, final_document_path: fileName,
-      final_document_sha256: documentHash, jugador_id: materialized.jugador.id, tutor_id: materialized.tutorId, updated_at: now,
-    }).eq('id', pre.id);
-
-    res.status(201).json({ success: true, folio, url: signedUrlData.signedUrl, email_sent: emailSent, jugador_id: materialized.jugador.id });
+    return res.status(201).json({
+      success: true,
+      folio,
+      url: signedUrlData.signedUrl,
+      email_sent: emailSent,
+      jugador_id: materialized.jugador.id,
+      evidence_sha256: evidenceHash,
+    });
   } catch (error) {
-    if (pre?.id) await supabase.from('prematriculas').update({ estado: 'error', updated_at: new Date().toISOString() }).eq('id', pre.id).eq('estado', 'procesando');
+    if (!finalized && uploadedPath) {
+      await supabase.storage.from('matriculas-pdf').remove([uploadedPath]);
+    }
+    if (!finalized && materialized?.jugador?.id && pre?.academia_id) {
+      await cleanupMaterializedEnrollment({
+        academiaId: pre.academia_id,
+        jugadorId: materialized.jugador.id,
+        tutorId: materialized.tutorId,
+        tutorWasCreated: materialized.tutorWasCreated,
+      });
+    }
+
+    const permanent = error?.code === 'PLAYER_ALREADY_EXISTS';
+    if (pre?.id && !finalized) {
+      await supabase.from('prematriculas').update({
+        estado: permanent ? 'error' : 'abierta',
+        updated_at: new Date().toISOString(),
+      }).eq('id', pre.id).eq('estado', 'procesando');
+    }
+
     console.error('Error formalizando pre-matrícula:', error?.message || 'Error desconocido');
-    res.status(500).json({ success: false, error: 'No fue posible formalizar la pre-matrícula. La academia puede reintentar el proceso.' });
+    if (error?.code === 'PLAYER_LIMIT_REACHED') return res.status(403).json({ success: false, code: error.code, error: error.message });
+    if (error?.code === 'PLAYER_ALREADY_EXISTS') return res.status(409).json({ success: false, code: error.code, error: error.message });
+    if (error?.code === 'MANDATORY_CONSENT_MISSING') return res.status(400).json({ success: false, code: error.code, error: error.message });
+    return res.status(500).json({ success: false, error: 'No fue posible formalizar la pre-matrícula. Puedes reintentar sin crear registros duplicados.' });
   }
 });
 
