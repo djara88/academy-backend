@@ -42,7 +42,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
     const [{ data: academia, error: academiaError }, { data: evaluaciones, error: evalError }, { data: asistencias, error: asistError }] = await Promise.all([
       supabase.from('academias').select('*').eq('id', academia_id).single(),
       supabase.from('evaluaciones').select('id,created_at,datos_radar,comentarios_profesor')
-        .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(8),
+        .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(2),
       supabase.from('asistencias').select('estado').eq('jugador_id', jugador_id),
     ]);
     if (academiaError) throw academiaError;

@@ -281,13 +281,15 @@ const selectEnrollmentTerms = (academia = {}) => {
 const drawTerms = (doc, terms, theme) => {
   const x = doc.page.margins.left;
   const boxY = doc.y;
-  const maxHeight = 170;
-  doc.roundedRect(x, boxY, contentWidth(doc), maxHeight, 12).fill(LIGHT).strokeColor(BORDER).lineWidth(0.7).stroke();
   const text = terms || 'La academia no mantiene términos adicionales de matrícula configurados en Syncademia. Cualquier reglamento o condición complementaria debe ser informado por los canales oficiales de la academia.';
   const fontSize = text.length > 2300 ? 7.2 : text.length > 1400 ? 7.8 : 8.6;
+  doc.font('Helvetica').fontSize(fontSize);
+  const measured = doc.heightOfString(text, { width: contentWidth(doc) - 28, lineGap: 2.5 });
+  const boxHeight = Math.min(170, Math.max(78, measured + 30));
+  doc.roundedRect(x, boxY, contentWidth(doc), boxHeight, 12).fill(LIGHT).strokeColor(BORDER).lineWidth(0.7).stroke();
   doc.fillColor(TEXT).font('Helvetica').fontSize(fontSize)
-    .text(text, x + 14, boxY + 14, { width: contentWidth(doc) - 28, height: maxHeight - 28, lineGap: 2.5, ellipsis: text.length > 3300 });
-  doc.y = boxY + maxHeight + 14;
+    .text(text, x + 14, boxY + 14, { width: contentWidth(doc) - 28, height: boxHeight - 28, lineGap: 2.5, ellipsis: measured > boxHeight - 28 });
+  doc.y = boxY + boxHeight + 14;
 };
 
 const generateMatriculaPdf = async ({ academia, jugador, tutor, folio, consentimientos = [] }) => {
@@ -510,9 +512,9 @@ const generatePlayerReportPdf = async ({ academia, jugador, tutor, evaluaciones 
   const colGap = 12;
   const colW = (w - colGap) / 2;
   const strengthY = doc.y;
-  const drawRankCard = (bx, title, items, fill, icon, color) => {
+  const drawRankCard = (bx, title, items, fill, color) => {
     doc.roundedRect(bx, strengthY, colW, 112, 12).fill(fill).strokeColor(BORDER).lineWidth(0.6).stroke();
-    doc.fillColor(color).font('Helvetica-Bold').fontSize(9).text(`${icon} ${title}`, bx + 13, strengthY + 13, { width: colW - 26 });
+    doc.fillColor(color).font('Helvetica-Bold').fontSize(9).text(title, bx + 13, strengthY + 13, { width: colW - 26 });
     if (!items.length) {
       doc.fillColor(MUTED).font('Helvetica').fontSize(8).text('Aún no hay una evaluación registrada.', bx + 13, strengthY + 42, { width: colW - 26 });
       return;
@@ -522,8 +524,8 @@ const generatePlayerReportPdf = async ({ academia, jugador, tutor, evaluaciones 
       doc.fillColor(color).font('Helvetica-Bold').fontSize(8.2).text(`${item.score}/100`, bx + colW - 60, strengthY + 40 + idx * 21, { width: 46, align: 'right' });
     });
   };
-  drawRankCard(x, 'FORTALEZAS', strengths, '#ECFDF5', '★', SUCCESS);
-  drawRankCard(x + colW + colGap, 'PRÓXIMOS FOCOS', focuses, '#FFF7ED', '→', WARNING);
+  drawRankCard(x, 'FORTALEZAS', strengths, '#ECFDF5', SUCCESS);
+  drawRankCard(x + colW + colGap, 'PRÓXIMOS FOCOS', focuses, '#FFF7ED', WARNING);
   doc.y = strengthY + 126;
 
   drawSectionHeading(doc, 'Actividad y constancia', null, theme, doc.y);
