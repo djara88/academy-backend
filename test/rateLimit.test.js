@@ -2,12 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createRateLimiter } = require('../middleware/rateLimit');
 
-const call = (middleware, ip = '127.0.0.1') => {
+const call = (middleware, ip = '127.0.0.1', originalUrl = '/api/test') => {
   let nextCalled = false;
   let statusCode = 200;
   let payload = null;
   const headers = {};
-  const req = { ip, socket: { remoteAddress: ip } };
+  const req = { ip, originalUrl, socket: { remoteAddress: ip } };
   const res = {
     setHeader(name, value) { headers[name] = value; },
     status(code) { statusCode = code; return this; },
@@ -36,4 +36,17 @@ test('rate limiter mantiene contadores separados por IP', () => {
   assert.equal(call(limiter, '10.0.0.1').nextCalled, true);
   assert.equal(call(limiter, '10.0.0.2').nextCalled, true);
   assert.equal(call(limiter, '10.0.0.1').statusCode, 429);
+});
+
+test('rate limiter permite excluir endpoints autenticados por otro mecanismo', () => {
+  const limiter = createRateLimiter({
+    windowMs: 60000,
+    max: 1,
+    skip: (req) => req.originalUrl.startsWith('/api/whatsapp/webhook/'),
+  });
+
+  assert.equal(call(limiter, '10.0.0.3', '/api/whatsapp/webhook/academy').nextCalled, true);
+  assert.equal(call(limiter, '10.0.0.3', '/api/whatsapp/webhook/academy').nextCalled, true);
+  assert.equal(call(limiter, '10.0.0.3', '/api/normal').nextCalled, true);
+  assert.equal(call(limiter, '10.0.0.3', '/api/normal').statusCode, 429);
 });
