@@ -5,6 +5,7 @@ const supabase = require('./config/supabase');
 const authMiddleware = require('./middleware/auth');
 const { requireFeature } = require('./middleware/planAccess');
 const { FEATURES } = require('./services/planCatalog');
+const { configurarWebhook } = require('./services/whatsappService');
 
 const app = express();
 const allowedOrigins = new Set([
@@ -113,7 +114,32 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/saas-admin', saasAdminRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 
+const syncActiveAcademyWebhooks = async () => {
+  if (!process.env.EVOLUTION_API_URL || !process.env.EVOLUTION_API_KEY || !process.env.WHATSAPP_WEBHOOK_SECRET) {
+    console.warn('⚠️ Sincronización automática de webhooks omitida: configuración de Evolution/webhook incompleta.');
+    return;
+  }
+
+  try {
+    const { data: academias, error } = await supabase
+      .from('academias')
+      .select('id')
+      .eq('estado', 'Activa');
+
+    if (error) throw error;
+
+    for (const academia of academias || []) {
+      await configurarWebhook(academia.id);
+    }
+
+    console.log(`🔐 Webhooks seguros sincronizados para ${(academias || []).length} academia(s) activa(s).`);
+  } catch (error) {
+    console.error('❌ No fue posible sincronizar los webhooks seguros al iniciar:', error.message);
+  }
+};
+
 const port = process.env.PORT || 8080;
 app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
+  void syncActiveAcademyWebhooks();
 });
