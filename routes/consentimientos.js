@@ -40,8 +40,8 @@ router.post('/alumno', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'El apoderado debe confirmar que recibió el aviso de privacidad.' });
     }
 
-    const tipos = Object.keys(CONSENT_DEFINITIONS);
-    const rows = tipos.map((tipo) => {
+    const now = new Date().toISOString();
+    const rows = Object.keys(CONSENT_DEFINITIONS).map((tipo) => {
       const definition = CONSENT_DEFINITIONS[tipo];
       const estado = normalizeDecision(decisiones[tipo]);
       return {
@@ -57,17 +57,18 @@ router.post('/alumno', authMiddleware, async (req, res) => {
         representante_nombre: tutor.nombre_completo || null,
         canal: 'matricula_presencial',
         registrado_por: usuarioId || null,
-        otorgado_at: estado === 'aceptado' ? new Date().toISOString() : null,
+        otorgado_at: estado === 'aceptado' ? now : null,
         revocado_at: null,
       };
     });
 
-    const { error } = await supabase.from('consentimientos_alumnos').insert(rows);
+    const { error } = await supabase.from('consentimientos_alumnos')
+      .upsert(rows, { onConflict: 'jugador_id,tipo,version', ignoreDuplicates: false });
     if (error) throw error;
 
     await supabase.from('jugadores').update({
       terminos_aceptados: true,
-      fecha_aceptacion_terminos: new Date().toISOString(),
+      fecha_aceptacion_terminos: now,
       terminos_condiciones: CONSENT_DEFINITIONS.aviso_privacidad.contenido,
     }).eq('id', jugador_id).eq('academia_id', academia_id);
 
