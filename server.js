@@ -39,6 +39,9 @@ app.use(cors({
 const apiLimiter = createRateLimiter({
   windowMs: 5 * 60 * 1000,
   max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
+  // Evolution concentra webhooks de varias academias en su propia IP.
+  // Ese endpoint ya está protegido por secreto y no debe compartir el contador del API humano.
+  skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/'),
 });
 const sensitiveLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -54,7 +57,7 @@ const registrationLimiter = createRateLimiter({
 app.use('/api', apiLimiter);
 app.use('/api/cambiar-password', sensitiveLimiter);
 app.use('/api/subscriptions/checkout', sensitiveLimiter);
-app.use('/api/subscriptions/inform-paid', sensitiveLimiter);
+app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
 
 // El JSON normal no necesita 50 MB. Los archivos multipart mantienen sus límites por ruta.
