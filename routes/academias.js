@@ -7,9 +7,33 @@ const { requireSuperadmin, requireOwnAcademyOrSuperadmin } = require('../middlew
 const { PLAN_DEFINITIONS, getAcademyEntitlements, resolvePlanCode, getPlanProfessorLimit } = require('../services/planCatalog');
 const { BILLING_PLANS, GUARDIAN_ADDON_CLP } = require('../services/billingCatalog');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
+const { fetchWithTimeout } = require('../services/httpClient');
 const multer = require('multer');
 
-const upload = multer({ storage: multer.memoryStorage() });
+const maxLogoMb = Math.max(1, Number(process.env.MAX_LOGO_MB || 5));
+const allowedLogoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: maxLogoMb * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedLogoTypes.has(file.mimetype)) {
+      const error = new Error('El logo debe ser JPG, PNG o WEBP.');
+      error.code = 'INVALID_LOGO_TYPE';
+      return callback(error);
+    }
+    return callback(null, true);
+  },
+});
+const logoUpload = (req, res, next) => upload.single('logo')(req, res, (error) => {
+  if (!error) return next();
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: `El logo no puede superar ${maxLogoMb} MB.` });
+  }
+  if (error.code === 'INVALID_LOGO_TYPE') {
+    return res.status(400).json({ error: error.message });
+  }
+  return res.status(400).json({ error: 'No fue posible procesar el logo enviado.' });
+});
 
 const PLAN_LABELS = {
   formacion: 'Formación',
@@ -79,7 +103,7 @@ router.post('/registro-publico', async (req, res) => {
 
     if (brevoApiKey && brevoSenderEmail) {
       try {
-        await fetch('https://api.brevo.com/v3/smtp/email', {
+        await fetchWithTimeout('https://api.brevo.com/v3/smtp/email', {
           method: 'POST',
           headers: {
             'accept': 'application/json',
@@ -102,7 +126,7 @@ router.post('/registro-publico', async (req, res) => {
               </div>
             `
           })
-        });
+        }, 10000);
       } catch (fetchError) {
         console.error(`❌ Error al enviar correo de bienvenida:`, fetchError);
       }
@@ -118,7 +142,7 @@ router.post('/registro-publico', async (req, res) => {
 // ====================================================================
 // 🚀 NUEVA RUTA: COMPLETAR PERFIL CON GOOGLE
 // ====================================================================
-router.post('/completar-google', authIdentityMiddleware, upload.single('logo'), async (req, res) => {
+router.post('/completar-google', authIdentityMiddleware, logoUpload, async (req, res) => {
   try {
     const { nombre_director, nombre_academia, direccion } = req.body;
     const auth_id = req.authUser.id;
@@ -241,7 +265,7 @@ router.get('/', authMiddleware, requireSuperadmin, async (req, res) => {
   res.json(data || []);
 });
 
-router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async (req, res) => {
+router.post('/', authMiddleware, requireSuperadmin, logoUpload, async (req, res) => {
   const { nombre, direccion, telefono, correo_academia, nombre_director, director_email } = req.body;
   let createdAuthUser = null;
 
@@ -294,7 +318,7 @@ router.post('/', authMiddleware, requireSuperadmin, upload.single('logo'), async
   }
 });
 
-router.put('/:id', authMiddleware, requireSuperadmin, upload.single('logo'), async (req, res) => {
+router.put('/:id', authMiddleware, requireSuperadmin, logoUpload, async (req, res) => {
   const { id } = req.params;
   const { nombre, direccion, telefono, correo_academia, nombre_director, director_email, estado } = req.body;
 
