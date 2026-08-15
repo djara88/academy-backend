@@ -20,8 +20,43 @@ const sanitizeFilePart = (value) => String(value || 'alumno')
   .replace(/^_+|_+$/g, '')
   .slice(0, 80) || 'alumno';
 
+const sendReportEmail = async ({ academia, tutor, jugador, pdfBuffer }) => {
+  if (!tutor?.email || !process.env.BREVO_API_KEY || !process.env.BREVO_SENDER_EMAIL) return false;
+  try {
+    const response = await fetchWithTimeout('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: academia.nombre || 'Academia Deportiva', email: process.env.BREVO_SENDER_EMAIL },
+        to: [{ email: tutor.email, name: tutor.nombre_completo || tutor.nombre || '' }],
+        subject: `${academia.nombre || 'Academia'} | Informe de evolución deportiva - ${jugador.nombre}`,
+        htmlContent: `
+          <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.55;max-width:640px;margin:auto">
+            <h2 style="color:#111827">Informe de evolución deportiva</h2>
+            <p>Hola ${escapeHtml(tutor.nombre_completo || tutor.nombre || 'apoderado/a')},</p>
+            <p>Adjuntamos el informe actualizado de <strong>${escapeHtml(jugador.nombre)}</strong>, preparado por <strong>${escapeHtml(academia.nombre || 'la academia')}</strong>.</p>
+            <p>Encontrarás su evolución técnica, actividad del período, fortalezas, próximos focos y la observación del cuerpo técnico.</p>
+            <p style="margin-top:24px">Gracias por acompañar su proceso deportivo.</p>
+            <p><strong>${escapeHtml(academia.nombre || 'Academia Deportiva')}</strong></p>
+          </div>`,
+        attachment: [{ name: `Informe_${sanitizeFilePart(jugador.nombre)}.pdf`, content: pdfBuffer.toString('base64') }],
+      }),
+    }, 10000);
+    if (!response.ok) console.warn(`Brevo rechazó informe de alumno (HTTP ${response.status}).`);
+    return response.ok;
+  } catch (error) {
+    console.warn('No fue posible enviar informe del alumno:', error?.code || error?.message || 'error externo');
+    return false;
+  }
+};
+
 router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEATURES.EXPORTS), async (req, res) => {
   try {
+    const startedAt = Date.now();
     const { academia_id } = req.user;
     const { jugador_id } = req.params;
     const comentarios = String(req.body?.comentarios || '').trim().slice(0, 4000);
@@ -42,7 +77,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
     const [{ data: academia, error: academiaError }, { data: evaluaciones, error: evalError }, { data: asistencias, error: asistError }] = await Promise.all([
       supabase.from('academias').select('*').eq('id', academia_id).single(),
       supabase.from('evaluaciones').select('id,created_at,datos_radar,comentarios_profesor')
-        .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(8),
+        .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(2),
       supabase.from('asistencias').select('estado').eq('jugador_id', jugador_id),
     ]);
     if (academiaError) throw academiaError;
@@ -85,48 +120,25 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
 
     const stamp = new Date().toISOString().slice(0, 10);
     const fileName = `${academia_id}/${jugador_id}/${stamp}_${Date.now()}.pdf`;
-    const { error: uploadError } = await supabase.storage.from('informes-alumnos')
+    const uploadPromise = supabase.storage.from('informes-alumnos')
       .upload(fileName, pdfBuffer, { contentType: 'application/pdf', upsert: false });
-    if (uploadError) throw uploadError;
+    const emailPromise = sendReportEmail({ academia, tutor, jugador, pdfBuffer });
+
+    const [uploadResult, emailSent] = await Promise.all([uploadPromise, emailPromise]);
+    if (uploadResult.error) throw uploadResult.error;
 
     const { data: signedData, error: signedError } = await supabase.storage.from('informes-alumnos')
       .createSignedUrl(fileName, 15 * 60);
-    if (signedError) throw signedError;
-
-    let emailSent = false;
-    if (tutor?.email && process.env.BREVO_API_KEY && process.env.BREVO_SENDER_EMAIL) {
-      const response = await fetchWithTimeout('https://api.brevo.com/v3/smtp/email', {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'api-key': process.env.BREVO_API_KEY,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          sender: { name: academia.nombre || 'Academia Deportiva', email: process.env.BREVO_SENDER_EMAIL },
-          to: [{ email: tutor.email, name: tutor.nombre_completo || tutor.nombre || '' }],
-          subject: `${academia.nombre || 'Academia'} | Informe de evolución deportiva - ${jugador.nombre}`,
-          htmlContent: `
-            <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.55;max-width:640px;margin:auto">
-              <h2 style="color:#111827">Informe de evolución deportiva</h2>
-              <p>Hola ${escapeHtml(tutor.nombre_completo || tutor.nombre || 'apoderado/a')},</p>
-              <p>Adjuntamos el informe actualizado de <strong>${escapeHtml(jugador.nombre)}</strong>, preparado por <strong>${escapeHtml(academia.nombre || 'la academia')}</strong>.</p>
-              <p>El documento resume su evolución, indicadores del período, reconocimientos y observaciones del cuerpo técnico.</p>
-              <p style="margin-top:24px">Gracias por acompañar su proceso deportivo.</p>
-              <p><strong>${escapeHtml(academia.nombre || 'Academia Deportiva')}</strong></p>
-            </div>`,
-          attachment: [{ name: `Informe_${sanitizeFilePart(jugador.nombre)}.pdf`, content: pdfBuffer.toString('base64') }],
-        }),
-      }, 10000);
-      emailSent = response.ok;
-      if (!response.ok) console.error('No fue posible enviar el informe premium por correo.');
-    }
+    if (signedError || !signedData?.signedUrl) throw new Error('No fue posible crear el enlace seguro del informe.');
 
     res.json({
       success: true,
       url: signedData.signedUrl,
       email_sent: emailSent,
       expires_in_seconds: 900,
+      document_generation_ms: pdfBuffer.generationMs || null,
+      total_processing_ms: Date.now() - startedAt,
+      pdf_size_bytes: pdfBuffer.length,
     });
   } catch (error) {
     console.error('Error generando informe premium:', error?.message || 'Error desconocido');
