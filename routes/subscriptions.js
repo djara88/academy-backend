@@ -7,6 +7,7 @@ const { BILLING_PLANS, GUARDIAN_ADDON_CLP, VAT_RATE, calculateGrossClp, getBilli
 const router = express.Router();
 const mercadoPagoLink = () => String(process.env.MERCADO_PAGO_PAYMENT_LINK || 'https://link.mercadopago.cl/smproweb').trim();
 const mercadoPagoConfigured = () => /^https:\/\/link\.mercadopago\.cl\/[A-Za-z0-9._-]+$/i.test(mercadoPagoLink());
+const clean = (value, max = 160) => String(value || '').trim().replace(/[\r\n|]+/g, ' ').slice(0, max);
 
 router.get('/plans', authMiddleware, async (req, res) => {
   const plans = Object.values(BILLING_PLANS).map((plan) => ({
@@ -83,13 +84,46 @@ router.post('/checkout', authMiddleware, requireDirector, async (req, res) => {
   }
 });
 
+router.patch('/payment-notice/:chargeId', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const { data: charge, error: findError } = await supabase.from('plataforma_cobros')
+      .select('id,estado,notas')
+      .eq('id', req.params.chargeId)
+      .eq('academia_id', req.user.academia_id)
+      .maybeSingle();
+
+    if (findError) throw findError;
+    if (!charge) return res.status(404).json({ error: 'Cobro no encontrado.' });
+    if (charge.estado === 'pagado') return res.json({ success: true, alreadyPaid: true });
+
+    const payer = clean(req.body.payer_name, 120);
+    const reference = clean(req.body.reference, 120);
+    const notice = [
+      `Cliente informó pago Mercado Pago ${new Date().toISOString()}.`,
+      payer ? `Pagador: ${payer}.` : null,
+      reference ? `Referencia: ${reference}.` : null,
+    ].filter(Boolean).join(' ');
+    const notas = `${clean(charge.notas, 700)} ${notice}`.trim().slice(0, 1000);
+
+    const { error } = await supabase.from('plataforma_cobros')
+      .update({ notas, updated_at: new Date().toISOString() })
+      .eq('id', charge.id)
+      .eq('academia_id', req.user.academia_id);
+    if (error) throw error;
+
+    res.json({ success: true, status: 'pending_validation' });
+  } catch (error) {
+    res.status(500).json({ error: 'No fue posible informar el pago.' });
+  }
+});
+
 router.get('/payment-status', authMiddleware, requireDirector, async (req, res) => {
   try {
     const chargeId = String(req.query.chargeId || '');
     if (!chargeId) return res.status(400).json({ error: 'Cobro requerido.' });
 
     const { data, error } = await supabase.from('plataforma_cobros')
-      .select('id,concepto,total_clp,estado,target_plan_code,target_guardian_license,pagado_at,fecha_vencimiento')
+      .select('id,concepto,total_clp,estado,target_plan_code,target_guardian_license,pagado_at,fecha_vencimiento,notas')
       .eq('academia_id', req.user.academia_id)
       .eq('id', chargeId)
       .maybeSingle();
