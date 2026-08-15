@@ -6,7 +6,7 @@ permissions:
   contents: write
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,27 +18,14 @@ jobs:
           from pathlib import Path
           p = Path('routes/prematriculas.js')
           s = p.read_text()
-          s = s.replace("const { generateMatriculaPdf, selectEnrollmentTerms } = require('../services/premiumPdf');", "const { selectEnrollmentTerms } = require('../services/premiumPdf');\nconst { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');")
-          old = """    const pdfBuffer = await generateMatriculaPdf({
-      academia,
-      jugador: materialized.jugador,
-      tutor,
-      folio,
-      consentimientos: consentRows,
-      firma: { nombre: signedByName, documento: signedByDocument, fecha: now, ip, evidence_sha256: evidenceHash, data_url: signature },
-    });"""
-          new = """    const pdfBuffer = await generateSignedEnrollmentPdf({
-      academia,
-      jugador: materialized.jugador,
-      tutor,
-      folio,
-      terms: pre.terms_snapshot,
-      consentimientos: consentRows,
-      firma: { nombre: signedByName, documento: signedByDocument, fecha: now, ip, evidence_sha256: evidenceHash, data_url: signature },
-    });"""
-          if old not in s:
+          old_import = "const { generateMatriculaPdf, selectEnrollmentTerms } = require('../services/premiumPdf');"
+          new_import = "const { selectEnrollmentTerms } = require('../services/premiumPdf');\nconst { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');"
+          s = s.replace(old_import, new_import, 1)
+          old_call = "    const pdfBuffer = await generateMatriculaPdf({\n      academia,\n      jugador: materialized.jugador,\n      tutor,\n      folio,\n      consentimientos: consentRows,\n      firma: { nombre: signedByName, documento: signedByDocument, fecha: now, ip, evidence_sha256: evidenceHash, data_url: signature },\n    });"
+          new_call = "    const pdfBuffer = await generateSignedEnrollmentPdf({\n      academia,\n      jugador: materialized.jugador,\n      tutor,\n      folio,\n      terms: pre.terms_snapshot,\n      consentimientos: consentRows,\n      firma: { nombre: signedByName, documento: signedByDocument, fecha: now, ip, evidence_sha256: evidenceHash, data_url: signature },\n    });"
+          if old_call not in s:
               raise SystemExit('No se encontró el bloque esperado del generador de matrícula')
-          s = s.replace(old, new, 1)
+          s = s.replace(old_call, new_call, 1)
           p.write_text(s)
           PY
       - name: Validar sintaxis
