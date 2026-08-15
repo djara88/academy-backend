@@ -1,0 +1,22 @@
+name: Validate prematricula feature
+on:
+  push:
+    branches: [agent/prematricula-import-report-v2]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node --check server.js
+      - run: node --check routes/prematriculas.js
+      - run: node --check routes/importaciones.js
+      - run: node --check routes/documentos.js
+      - run: node --check services/enrollmentService.js
+      - run: node --check services/playerReportV2.js
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
