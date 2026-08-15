@@ -56,6 +56,7 @@ app.use('/api', apiLimiter);
 app.use('/api/cambiar-password', sensitiveLimiter);
 app.use('/api/subscriptions/checkout', sensitiveLimiter);
 app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
+app.use('/api/prematriculas/public', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
 
 const bodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
@@ -114,6 +115,8 @@ app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
 
 const documentoJugadorRoutes = require('./routes/documentos');
 const consentimientoRoutes = require('./routes/consentimientos');
+const prematriculaRoutes = require('./routes/prematriculas');
+const importacionRoutes = require('./routes/importaciones');
 const jugadorRoutes = require('./routes/jugadores');
 const tutorRoutes = require('./routes/tutores');
 const evaluacionRoutes = require('./routes/evaluaciones');
@@ -132,10 +135,10 @@ const dashboardRoutes = require('./routes/dashboard');
 const saasAdminRoutes = require('./routes/saasAdmin');
 const subscriptionRoutes = require('./routes/subscriptions');
 
-// Se monta antes de jugadores para reemplazar de forma compatible el endpoint
-// histórico de informe sin modificar la UI existente.
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
+app.use('/api/prematriculas', prematriculaRoutes);
+app.use('/api/importaciones', importacionRoutes);
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
