@@ -17,8 +17,17 @@ jobs:
         with:
           ref: agent/redesign-fast-pdfs
 
-      - name: Instalar dependencias y actualizar lock
+      - name: Instalar dependencias
         run: npm install
+
+      - name: Guardar package-lock actualizado
+        run: |
+          if git diff --quiet package-lock.json; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "Actualizar lock para optimización de PDFs"
+          git push origin HEAD:agent/redesign-fast-pdfs
 
       - name: Validar backend
         run: |
@@ -95,15 +104,6 @@ jobs:
             console.log(`INFORME bytes=${informe.length} ms=${Date.now() - t2}`);
           })().catch((error) => { console.error(error); process.exit(1); });
           NODE
-
-      - name: Guardar package-lock actualizado
-        run: |
-          if git diff --quiet package-lock.json; then exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "Actualizar lock para optimización de PDFs"
-          git push origin HEAD:agent/redesign-fast-pdfs
 
       - uses: actions/upload-artifact@v4
         with:
