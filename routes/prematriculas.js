@@ -5,7 +5,8 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { CONSENT_DEFINITIONS, PRIVACY_VERSION, getConsentCatalog } = require('../services/privacyConsents');
 const { materializeEnrollment } = require('../services/enrollmentService');
-const { generateMatriculaPdf, selectEnrollmentTerms } = require('../services/premiumPdf');
+const { selectEnrollmentTerms } = require('../services/premiumPdf');
+const { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');
 const { fetchWithTimeout } = require('../services/httpClient');
 
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'https://academy-frontend-wheat.vercel.app').replace(/\/$/, '');
@@ -243,11 +244,12 @@ router.post('/public/:token/firmar', async (req, res) => {
     const { data: academia } = await supabase.from('academias').select('*').eq('id', pre.academia_id).single();
     const { data: tutor } = await supabase.from('tutores').select('*').eq('id', materialized.tutorId).single();
     const folio = `MAT-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
-    const pdfBuffer = await generateMatriculaPdf({
+    const pdfBuffer = await generateSignedEnrollmentPdf({
       academia,
       jugador: materialized.jugador,
       tutor,
       folio,
+      terms: pre.terms_snapshot,
       consentimientos: consentRows,
       firma: { nombre: signedByName, documento: signedByDocument, fecha: now, ip, evidence_sha256: evidenceHash, data_url: signature },
     });
