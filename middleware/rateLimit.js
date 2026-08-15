@@ -4,12 +4,15 @@ const createRateLimiter = ({
   windowMs = 5 * 60 * 1000,
   max = 300,
   keyGenerator = defaultKey,
+  skip = () => false,
   message = 'Demasiadas solicitudes. Intenta nuevamente en unos minutos.',
 } = {}) => {
   const buckets = new Map();
   let requestCount = 0;
 
   return (req, res, next) => {
+    if (skip(req)) return next();
+
     const now = Date.now();
     requestCount += 1;
 
