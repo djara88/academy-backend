@@ -4,7 +4,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
-const { generatePlayerReportPdf } = require('../services/premiumPdf');
+const { generatePlayerReportV2 } = require('../services/playerReportV2');
 const { fetchWithTimeout } = require('../services/httpClient');
 
 const escapeHtml = (value) => String(value ?? '')
@@ -39,7 +39,7 @@ const sendReportEmail = async ({ academia, tutor, jugador, pdfBuffer }) => {
             <h2 style="color:#111827">Informe de evolución deportiva</h2>
             <p>Hola ${escapeHtml(tutor.nombre_completo || tutor.nombre || 'apoderado/a')},</p>
             <p>Adjuntamos el informe actualizado de <strong>${escapeHtml(jugador.nombre)}</strong>, preparado por <strong>${escapeHtml(academia.nombre || 'la academia')}</strong>.</p>
-            <p>Encontrarás su evolución técnica, actividad del período, fortalezas, próximos focos y la observación del cuerpo técnico.</p>
+            <p>Encontrarás el radar comparativo de sus dos últimas evaluaciones, evolución por habilidad, actividad del período y sus reconocimientos recientes.</p>
             <p style="margin-top:24px">Gracias por acompañar su proceso deportivo.</p>
             <p><strong>${escapeHtml(academia.nombre || 'Academia Deportiva')}</strong></p>
           </div>`,
@@ -64,7 +64,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
     const { data: jugador, error: jugadorError } = await supabase.from('jugadores')
       .select(`
         id,nombre,rut,fecha_nacimiento,posicion_cancha,tipo_alumno,certificado_medico,
-        foto_base64,foto_url,avatar_url,insignias,tutor_id,
+        foto_base64,foto_url,avatar_url,tutor_id,
         jugador_categoria ( categorias ( id, nombre ) ),
         partido_estadisticas ( goles, asistencias, es_mvp )
       `)
@@ -74,15 +74,23 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
     if (jugadorError) throw jugadorError;
     if (!jugador) return res.status(404).json({ success: false, error: 'Alumno no encontrado.' });
 
-    const [{ data: academia, error: academiaError }, { data: evaluaciones, error: evalError }, { data: asistencias, error: asistError }] = await Promise.all([
+    const [
+      { data: academia, error: academiaError },
+      { data: evaluaciones, error: evalError },
+      { data: asistencias, error: asistError },
+      { data: badgeRows, error: badgeError },
+    ] = await Promise.all([
       supabase.from('academias').select('*').eq('id', academia_id).single(),
       supabase.from('evaluaciones').select('id,created_at,datos_radar,comentarios_profesor')
         .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(2),
       supabase.from('asistencias').select('estado').eq('jugador_id', jugador_id),
+      supabase.from('jugador_insignias').select('fecha_otorgado,insignias(titulo,descripcion,icono_url)')
+        .eq('jugador_id', jugador_id).order('fecha_otorgado', { ascending: false }).limit(6),
     ]);
     if (academiaError) throw academiaError;
     if (evalError) throw evalError;
     if (asistError) throw asistError;
+    if (badgeError) throw badgeError;
 
     let tutor = null;
     if (jugador.tutor_id) {
@@ -104,18 +112,26 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
       clases_justificadas: (asistencias || []).filter((row) => row.estado === 'Justificado').length,
     };
 
+    const badges = (badgeRows || []).map((row) => ({
+      fecha_otorgado: row.fecha_otorgado,
+      titulo: row.insignias?.titulo,
+      descripcion: row.insignias?.descripcion,
+      icono_url: row.insignias?.icono_url,
+    })).filter((badge) => badge.titulo);
+
     const formattedPlayer = {
       ...jugador,
       categorias: (jugador.jugador_categoria || []).map((rel) => rel.categorias).filter(Boolean),
     };
 
-    const pdfBuffer = await generatePlayerReportPdf({
+    const pdfBuffer = await generatePlayerReportV2({
       academia,
       jugador: formattedPlayer,
       tutor,
       evaluaciones: evaluaciones || [],
       stats,
       comentarios,
+      badges,
     });
 
     const stamp = new Date().toISOString().slice(0, 10);
@@ -139,6 +155,8 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
       document_generation_ms: pdfBuffer.generationMs || null,
       total_processing_ms: Date.now() - startedAt,
       pdf_size_bytes: pdfBuffer.length,
+      badges_rendered: badges.length,
+      compared_evaluations: Math.min(2, (evaluaciones || []).length),
     });
   } catch (error) {
     console.error('Error generando informe premium:', error?.message || 'Error desconocido');
