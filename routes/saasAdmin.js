@@ -3,7 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireSuperadmin } = require('../middleware/authorization');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
-const flow = require('../services/flowGateway');
+const { activateChargePlan } = require('../services/subscriptionBilling');
 
 const router = express.Router();
 router.use(authMiddleware, requireSuperadmin);
@@ -15,6 +15,8 @@ const monthBounds = () => {
   return { start, end };
 };
 const number = (value) => Number(value || 0);
+const mercadoPagoLink = () => String(process.env.MERCADO_PAGO_PAYMENT_LINK || 'https://link.mercadopago.cl/smproweb').trim();
+const mercadoPagoConfigured = () => /^https:\/\/link\.mercadopago\.cl\/[A-Za-z0-9._-]+$/i.test(mercadoPagoLink());
 
 router.get('/resumen', async (_req, res) => {
   try {
@@ -62,7 +64,7 @@ router.get('/resumen', async (_req, res) => {
         conversionRate: academies.length ? Math.round((active.length / academies.length) * 100) : 0,
       },
       academies, alerts: alerts.slice(0, 30),
-      gateway: { provider: 'Flow', configured: flow.isConfigured() },
+      gateway: { provider: 'Mercado Pago', configured: mercadoPagoConfigured(), manualVerification: true },
     } });
   } catch (error) {
     res.status(500).json({ error: error.message || 'No fue posible cargar el centro ejecutivo.' });
@@ -96,17 +98,25 @@ router.post('/cobros', async (req, res) => {
 });
 
 router.patch('/cobros/:id/pagado', async (req, res) => {
-  const { data: charge, error: chargeError } = await supabase.from('plataforma_cobros')
-    .select('id').eq('id', req.params.id).maybeSingle();
-  if (chargeError || !charge) return res.status(404).json({ error: 'Cobro no encontrado.' });
-  const { data, error } = await supabase.rpc('marcar_cobro_plataforma_pagado', {
-    p_cobro_id: charge.id,
-    p_created_by: req.user.id,
-    p_metodo_pago: String(req.body.metodo_pago || 'Transferencia').slice(0, 80),
-    p_referencia: String(req.body.referencia || '').slice(0, 120) || null,
-  });
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ success: true, movementId: data });
+  try {
+    const { data: charge, error: chargeError } = await supabase.from('plataforma_cobros')
+      .select('*').eq('id', req.params.id).maybeSingle();
+    if (chargeError || !charge) return res.status(404).json({ error: 'Cobro no encontrado.' });
+    if (charge.estado === 'pagado') return res.json({ success: true, alreadyPaid: true });
+
+    const { data, error } = await supabase.rpc('marcar_cobro_plataforma_pagado', {
+      p_cobro_id: charge.id,
+      p_created_by: req.user.id,
+      p_metodo_pago: String(req.body.metodo_pago || 'Mercado Pago').slice(0, 80),
+      p_referencia: String(req.body.referencia || '').slice(0, 120) || null,
+    });
+    if (error) throw error;
+
+    const licenseActivated = await activateChargePlan(charge);
+    res.json({ success: true, movementId: data, licenseActivated });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'No fue posible validar el pago.' });
+  }
 });
 
 router.get('/movimientos', async (_req, res) => {
