@@ -1,0 +1,37 @@
+name: Patch PDF footer
+
+on:
+  push:
+    branches:
+      - agent/redesign-fast-pdfs
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/redesign-fast-pdfs
+      - name: Corregir posición del footer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('services/premiumPdf.js')
+          s = p.read_text()
+          old = """  const y = doc.page.height - 27;\n  const x = doc.page.margins.left;\n  doc.moveTo(x, y - 7).lineTo(doc.page.width - doc.page.margins.right, y - 7).strokeColor(BORDER).lineWidth(0.5).stroke();\n  doc.fillColor('#94A3B8').font('Helvetica').fontSize(6.8)\n    .text(`${cleanText(academia.nombre, 'Academia Deportiva')} · Documento generado por Syncademia`, x, y, { width: contentWidth(doc) - 80 });\n  doc.text(`${page}/${pages}`, doc.page.width - doc.page.margins.right - 50, y, { width: 50, align: 'right' });"""
+          new = """  const y = pageBottom(doc) - 14;\n  const x = doc.page.margins.left;\n  doc.moveTo(x, y - 7).lineTo(doc.page.width - doc.page.margins.right, y - 7).strokeColor(BORDER).lineWidth(0.5).stroke();\n  doc.fillColor('#94A3B8').font('Helvetica').fontSize(6.8)\n    .text(`${cleanText(academia.nombre, 'Academia Deportiva')} · Documento generado por Syncademia`, x, y, { width: contentWidth(doc) - 80, lineBreak: false });\n  doc.text(`${page}/${pages}`, doc.page.width - doc.page.margins.right - 50, y, { width: 50, align: 'right', lineBreak: false });"""
+          if old not in s:
+              raise SystemExit('No se encontró el footer esperado')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Guardar corrección
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/premiumPdf.js
+          git commit -m "Mantener footer dentro del área imprimible"
+          git push origin HEAD:agent/redesign-fast-pdfs
