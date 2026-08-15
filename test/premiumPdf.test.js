@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { generateMatriculaPdf, generatePlayerReportPdf } = require('../services/premiumPdf');
+const { generateMatriculaPdf, generatePlayerReportPdf, selectEnrollmentTerms } = require('../services/premiumPdf');
 
 const academia = {
   nombre: 'Academia Demo Elite',
@@ -35,13 +35,17 @@ const tutor = {
   telefono: '+56 9 8765 4321',
 };
 
-const assertPdf = (buffer) => {
+const assertPdf = (buffer, expectedPages) => {
   assert.ok(Buffer.isBuffer(buffer));
   assert.equal(buffer.subarray(0, 4).toString('ascii'), '%PDF');
   assert.ok(buffer.length > 4000, `PDF demasiado pequeño: ${buffer.length}`);
+  assert.ok(buffer.length < 900000, `PDF demasiado pesado: ${buffer.length}`);
+  const text = buffer.toString('latin1');
+  const pageObjects = text.match(/\/Type\s*\/Page\b/g) || [];
+  assert.equal(pageObjects.length, expectedPages, `Se esperaban ${expectedPages} páginas y se generaron ${pageObjects.length}`);
 };
 
-test('genera matrícula premium como PDF nativo', async () => {
+test('genera matrícula compacta en exactamente dos páginas', async () => {
   const buffer = await generateMatriculaPdf({
     academia,
     jugador,
@@ -54,22 +58,28 @@ test('genera matrícula premium como PDF nativo', async () => {
       { tipo: 'imagen_publica', estado: 'rechazado' },
     ],
   });
-  assertPdf(buffer);
-  assert.ok(buffer.length > 9000);
+  assertPdf(buffer, 2);
 });
 
-test('genera informe de evolución como PDF nativo', async () => {
+test('genera informe de evolución compacto en exactamente dos páginas', async () => {
   const buffer = await generatePlayerReportPdf({
     academia,
     jugador,
     tutor,
     evaluaciones: [
-      { datos_radar: { Velocidad: 74, Remate: 62, Pase: 82, Defensa: 69, Físico: 71, Mental: 85 } },
-      { datos_radar: { Velocidad: 68, Remate: 60, Pase: 76, Defensa: 66, Físico: 69, Mental: 80 } },
+      { created_at: '2026-08-10T10:00:00Z', datos_radar: { Velocidad: 74, Remate: 62, Pase: 82, Defensa: 69, Físico: 71, Mental: 85 } },
+      { created_at: '2026-05-10T10:00:00Z', datos_radar: { Velocidad: 68, Remate: 60, Pase: 76, Defensa: 66, Físico: 69, Mental: 80 } },
     ],
-    stats: { partidos_jugados: 8, goles: 3, asistencias: 6, mvp: 1, clases_presente: 18, clases_ausente: 2 },
+    stats: { partidos_jugados: 8, goles: 3, asistencias: 6, mvp: 1, clases_presente: 18, clases_ausente: 2, clases_justificadas: 1 },
     comentarios: 'Excelente evolución en toma de decisiones, compromiso y juego asociativo.',
   });
-  assertPdf(buffer);
-  assert.ok(buffer.length > 8000);
+  assertPdf(buffer, 2);
+});
+
+test('rechaza como términos un informe técnico guardado por error', () => {
+  const result = selectEnrollmentTerms({
+    terminos_matricula: 'ACADEMIA DE FÚTBOL AXF - INFORME TÉCNICO Y EVALUACIÓN FORMATIVA\nALUMNO: Demo\nOBSERVACIONES Y RECOMENDACIONES',
+    terminos_condiciones: 'Condiciones válidas para la matrícula y convivencia de la academia.',
+  });
+  assert.equal(result, 'Condiciones válidas para la matrícula y convivencia de la academia.');
 });
