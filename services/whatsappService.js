@@ -1,5 +1,7 @@
 // services/whatsappService.js
 
+const supabase = require('../config/supabase');
+
 const EVOLUTION_URL = process.env.EVOLUTION_API_URL ? process.env.EVOLUTION_API_URL.replace(/\/$/, '') : '';
 const API_KEY = process.env.EVOLUTION_API_KEY;
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET;
@@ -142,6 +144,34 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
     throw error;
   }
 };
+
+const sincronizarWebhooksActivos = async () => {
+  if (!EVOLUTION_URL || !API_KEY || !WEBHOOK_SECRET) {
+    console.warn('⚠️ Sincronización automática de webhooks omitida: configuración incompleta.');
+    return;
+  }
+
+  try {
+    const { data: academias, error } = await supabase
+      .from('academias')
+      .select('id')
+      .eq('estado', 'Activa');
+
+    if (error) throw error;
+
+    for (const academia of academias || []) {
+      await configurarWebhook(academia.id);
+    }
+
+    console.log(`🔐 Webhooks seguros sincronizados para ${(academias || []).length} academia(s) activa(s).`);
+  } catch (error) {
+    console.error('❌ No fue posible sincronizar los webhooks seguros al iniciar:', error.message);
+  }
+};
+
+setImmediate(() => {
+  void sincronizarWebhooksActivos();
+});
 
 module.exports = {
   conectarAcademia,
