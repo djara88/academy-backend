@@ -1,0 +1,43 @@
+name: Apply privacy monitor patch
+
+on:
+  push:
+    branches:
+      - agent/privacy-monitor
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[privacy-monitor-patch]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/privacy-monitor
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Aplicar integración
+        run: python3 scripts/patch_privacy_monitor.py
+      - name: Validar backend
+        run: |
+          npm ci
+          node --check server.js
+          node --check routes/privacyRequests.js
+          node --check routes/saasAdmin.js
+          node --check routes/apoderados.js
+          node --check services/privacyExecution.js
+          node --check services/systemMonitor.js
+          npm test
+          npm audit --omit=dev --audit-level=high
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.js routes/saasAdmin.js routes/apoderados.js services/privacyExecution.js
+          git diff --cached --quiet && exit 0
+          git commit -m "Integrar privacidad y monitor del sistema [privacy-monitor-patch]"
+          git push origin HEAD:agent/privacy-monitor
