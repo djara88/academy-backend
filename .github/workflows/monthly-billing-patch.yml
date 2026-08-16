@@ -94,7 +94,9 @@ jobs:
           p.write_text(s.replace(old,new))
 
           t=Path('test/monthlyBilling.test.js')
-          t.write_text("""const test = require('node:test');
+          t.write_text("""process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://example.supabase.co';
+          process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'test-service-key';
+          const test = require('node:test');
           const assert = require('node:assert/strict');
           const { dueDateForPeriod, summarizeCharges } = require('../services/monthlyBilling');
 
