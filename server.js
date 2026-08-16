@@ -9,6 +9,7 @@ const { FEATURES } = require('./services/planCatalog');
 const { validatePassword } = require('./services/passwordPolicy');
 const { requestFailureRecorder } = require('./services/systemMonitor');
 const { startSystemMetricsSampler } = require('./services/systemMetrics');
+const { startPresenceSampler } = require('./services/userPresence');
 
 const app = express();
 app.disable('x-powered-by');
@@ -44,7 +45,8 @@ const apiLimiter = createRateLimiter({
   windowMs: 5 * 60 * 1000,
   max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
   skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/')
-    || req.originalUrl?.startsWith('/api/whatsapp-bridge/webhook/'),
+    || req.originalUrl?.startsWith('/api/whatsapp-bridge/webhook/')
+    || req.originalUrl?.startsWith('/api/presence/heartbeat'),
 });
 const sensitiveLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -70,22 +72,15 @@ app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
 app.use('/api/academias/registro-publico', (req, res, next) => {
   const validation = validatePassword(req.body?.password);
-  if (!validation.valid) {
-    return res.status(400).json({ error: validation.message, code: 'WEAK_PASSWORD' });
-  }
+  if (!validation.valid) return res.status(400).json({ error: validation.message, code: 'WEAK_PASSWORD' });
   return next();
 });
 
-app.get('/', (_req, res) => {
-  res.send('API de Syncademia funcionando 🚀');
-});
-
+app.get('/', (_req, res) => res.send('API de Syncademia funcionando 🚀'));
 app.get('/health', (_req, res) => {
   const memory = process.memoryUsage();
   res.json({
-    status: 'ok',
-    service: 'syncademia-backend',
-    features: { profesores: true },
+    status: 'ok', service: 'syncademia-backend', features: { profesores: true },
     commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
     uptime_seconds: Math.round(process.uptime()),
     memory_rss_mb: Math.round(memory.rss / 1024 / 1024),
@@ -98,17 +93,11 @@ app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
     const { newPassword } = req.body;
     const userId = req.user?.id || req.user?.sub || req.user?.userId;
     if (!userId) return res.status(400).json({ error: 'No se pudo identificar el ID del usuario en el token.' });
-
     const passwordValidation = validatePassword(newPassword);
-    if (!passwordValidation.valid) {
-      return res.status(400).json({ error: passwordValidation.message, code: 'WEAK_PASSWORD' });
-    }
-
+    if (!passwordValidation.valid) return res.status(400).json({ error: passwordValidation.message, code: 'WEAK_PASSWORD' });
     const { error: authError } = await supabase.auth.admin.updateUserById(userId, { password: newPassword });
     if (authError) throw authError;
-
-    const { data, error: dbError } = await supabase.from('usuarios')
-      .update({ requiere_cambio_password: false }).eq('id', userId).select();
+    const { data, error: dbError } = await supabase.from('usuarios').update({ requiere_cambio_password: false }).eq('id', userId).select();
     if (dbError) throw dbError;
     if (!data || data.length === 0) console.warn('Se cambió la clave en Auth, pero no se encontró la fila correspondiente en usuarios.');
     res.json({ success: true });
@@ -148,28 +137,21 @@ const systemMetricsRoutes = require('./routes/systemMetrics');
 const estructuraRoutes = require('./routes/estructura');
 const sportProfileRoutes = require('./routes/sportProfiles');
 const publicCatalogRoutes = require('./routes/publicCatalog');
+const presenceRoutes = require('./routes/presence');
+const presenceAdminRoutes = require('./routes/presenceAdmin');
 
 app.use('/api/public', publicCatalogRoutes);
+app.use('/api/presence', presenceRoutes);
+app.use('/api/saas-admin/presence', presenceAdminRoutes);
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
 app.use('/api/prematriculas', prematriculaRoutes);
 app.use('/api/importaciones', importacionRoutes);
 
-// Compatibilidad con enlaces de la interfaz anterior: estas rutas heredadas se
-// interceptan antes de jugadores.js para aplicar el aislamiento y el catálogo
-// multideporte del motor nuevo.
 app.post('/api/jugadores/:jugadorId/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), (_req, res) => {
-  res.status(410).json({
-    error: 'Esta ruta de evaluación fue reemplazada por el motor multideporte.',
-    code: 'LEGACY_EVALUATION_ROUTE',
-  });
+  res.status(410).json({ error: 'Esta ruta de evaluación fue reemplazada por el motor multideporte.', code: 'LEGACY_EVALUATION_ROUTE' });
 });
-app.get(
-  '/api/jugadores/categorias/:categoriaId/promedio',
-  authMiddleware,
-  ...requireFeature(FEATURES.EVALUATIONS),
-  evaluacionRoutes.categoryAverageHandler,
-);
+app.get('/api/jugadores/categorias/:categoriaId/promedio', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes.categoryAverageHandler);
 
 app.use('/api', categoriaRoutes);
 app.use('/api/jugadores', jugadorRoutes);
@@ -204,10 +186,9 @@ app.use((error, _req, res, next) => {
 });
 
 const port = process.env.PORT || 8080;
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`Servidor escuchando en http://0.0.0.0:${port}`);
-});
+const server = app.listen(port, '0.0.0.0', () => console.log(`Servidor escuchando en http://0.0.0.0:${port}`));
 const systemMetricsSampler = startSystemMetricsSampler();
+const presenceSampler = startPresenceSampler();
 
 server.requestTimeout = Math.max(15000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000));
 server.headersTimeout = Math.min(server.requestTimeout, Math.max(5000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 15000)));
@@ -218,6 +199,7 @@ const gracefulShutdown = (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
   systemMetricsSampler?.stop?.();
+  presenceSampler?.stop?.();
   console.log(`${signal} recibido. Cerrando conexiones de forma ordenada...`);
   const forceTimer = setTimeout(() => {
     console.error('Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
