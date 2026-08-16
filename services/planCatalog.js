@@ -19,59 +19,70 @@ const FEATURES = Object.freeze({
   CUSTOM_BRANDING: 'marca_personalizada',
   EXPORTS: 'exportaciones',
   GUARDIANS: 'apoderados',
+  WHATSAPP_GROUPS: 'whatsapp_grupos',
+  ADVANCED_COMMUNICATIONS: 'comunicaciones_avanzadas',
 });
 
+// Formación debe sentirse como un producto completo. Las diferencias entre
+// planes se concentran en capacidad y funciones avanzadas, no en quitar la
+// operación esencial de una academia.
 const BASE_FEATURES = [
   FEATURES.CORE,
   FEATURES.FINANCE,
   FEATURES.UNIFORMS,
   FEATURES.PROFESSORS,
   FEATURES.MATCHES,
+  FEATURES.TOURNAMENTS,
+  FEATURES.GUARDIANS,
+];
+
+const COMPETITION_FEATURES = [
+  ...BASE_FEATURES,
+  FEATURES.MATCH_PREPARATION,
+  FEATURES.ATTENDANCE_ALERTS,
+  FEATURES.EVALUATIONS,
+  FEATURES.EXPORTS,
+  FEATURES.WHATSAPP_GROUPS,
 ];
 
 const PLAN_DEFINITIONS = Object.freeze({
   [PLAN_CODES.FORMACION]: {
     code: PLAN_CODES.FORMACION,
     name: 'Formación',
-    audience: 'Academias que necesitan ordenar su operación diaria y crecer con control.',
+    audience: 'Todo lo necesario para administrar profesionalmente una academia.',
     professorLimit: 3,
     playerLimit: 100,
-    priceClp: 30000,
+    siteLimit: 1,
+    branchLimit: 1,
+    priceClp: 59000,
     features: BASE_FEATURES,
   },
   [PLAN_CODES.COMPETENCIA]: {
     code: PLAN_CODES.COMPETENCIA,
     name: 'Competencia',
-    audience: 'Academias con varias categorías, torneos y trabajo técnico coordinado.',
+    audience: 'Academias que quieren automatizar su operación y conectar a toda su comunidad.',
     professorLimit: 10,
     playerLimit: 300,
-    priceClp: 60000,
-    features: [
-      ...BASE_FEATURES,
-      FEATURES.TOURNAMENTS,
-      FEATURES.MATCH_PREPARATION,
-      FEATURES.ATTENDANCE_ALERTS,
-      FEATURES.EVALUATIONS,
-      FEATURES.EXPORTS,
-    ],
+    siteLimit: 2,
+    branchLimit: 2,
+    priceClp: 99000,
+    features: COMPETITION_FEATURES,
   },
   [PLAN_CODES.ALTO_RENDIMIENTO]: {
     code: PLAN_CODES.ALTO_RENDIMIENTO,
     name: 'Alto Rendimiento',
-    audience: 'Organizaciones que requieren trazabilidad, rendimiento y operación avanzada.',
+    audience: 'Organizaciones deportivas que requieren operación, rendimiento y trazabilidad avanzados.',
     professorLimit: 30,
     playerLimit: null,
-    priceClp: 100000,
+    siteLimit: null,
+    branchLimit: null,
+    priceClp: 149000,
     features: [
-      ...BASE_FEATURES,
-      FEATURES.TOURNAMENTS,
-      FEATURES.MATCH_PREPARATION,
-      FEATURES.ATTENDANCE_ALERTS,
-      FEATURES.EVALUATIONS,
+      ...COMPETITION_FEATURES,
       FEATURES.MEDICAL,
       FEATURES.ADVANCED_ANALYTICS,
       FEATURES.CUSTOM_BRANDING,
-      FEATURES.EXPORTS,
+      FEATURES.ADVANCED_COMMUNICATIONS,
     ],
   },
 });
@@ -99,27 +110,31 @@ const getPlanDefinition = (academy = {}) => PLAN_DEFINITIONS[resolvePlanCode(aca
 
 const getAcademyEntitlements = (academy = {}) => {
   const plan = getPlanDefinition(academy);
-  // La prueba de 15 días expone el producto completo para demostrar su valor.
+  // La prueba de 15 días expone Alto Rendimiento completo, incluida capacidad
+  // multi-sede/multi-rama sin límite, para demostrar el valor real del producto.
   const trial = isTrialPlan(academy);
-  const baseFeatures = trial
-    ? PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO].features
-    : plan.features;
-  const features = new Set(baseFeatures);
-  if (trial || academy.licencia_apoderados === true) features.add(FEATURES.GUARDIANS);
+  const trialPlan = PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO];
+  const features = new Set(trial ? trialPlan.features : plan.features);
 
   const manualProfessorLimit = Number(academy.max_profesores);
   return {
     plan: { code: plan.code, name: plan.name, audience: plan.audience, trial },
     limits: {
       professors: trial
-        ? PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO].professorLimit
+        ? trialPlan.professorLimit
         : Number.isInteger(manualProfessorLimit) && manualProfessorLimit > 0
           ? manualProfessorLimit
           : plan.professorLimit,
       players: trial ? null : plan.playerLimit,
+      sites: trial ? null : plan.siteLimit,
+      branches: trial ? null : plan.branchLimit,
     },
-    addOns: { guardians: trial || academy.licencia_apoderados === true, guardiansIncludedByTrial: trial },
-    pricing: { planClp: plan.priceClp, guardiansClp: 15000 },
+    addOns: {
+      guardians: true,
+      guardiansIncludedByPlan: true,
+      guardiansIncludedByTrial: trial,
+    },
+    pricing: { planClp: plan.priceClp, guardiansClp: 0 },
     features: [...features],
   };
 };
