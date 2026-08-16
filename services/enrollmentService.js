@@ -1,6 +1,6 @@
 const supabase = require('../config/supabase');
 const { getAcademyEntitlements, FEATURES } = require('./planCatalog');
-const { recalculateFinancialStatus } = require('./monthlyBilling');
+const { recalculateFinancialStatus, todayInChile } = require('./monthlyBilling');
 const { normalizeRut } = require('./rutGuard');
 const { resolveStructure } = require('./academyStructure');
 const { resolveEvaluationProfile, sanitizeRadarMetrics } = require('./evaluationCatalog');
@@ -55,8 +55,9 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
     if (duplicateError) throw duplicateError;
     const duplicate = (existingPlayers || []).find((row) => normalizeRut(row.rut) === normalizedRut);
     if (duplicate) {
-      const error = new Error('Ya existe un alumno con ese RUT en la academia.');
+      const error = new Error('Ya existe un alumno con ese RUT en la academia. Para agregar otra disciplina utiliza Inscripciones Multideporte.');
       error.code = 'PLAYER_ALREADY_EXISTS';
+      error.existingPlayerId = duplicate.id;
       throw error;
     }
   }
@@ -64,6 +65,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
   let tutorId = null;
   let tutorWasCreated = false;
   let newPlayer = null;
+  let sportEnrollment = null;
 
   try {
     if (tutor.rut) {
@@ -100,9 +102,9 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
 
     const guardianShirt = isGuardianShirtSize(jugador.talla_apoderado);
     const guardianShirtCost = guardianShirt ? (Number(jugador.monto_camiseta_apoderado) || 0) : 0;
-    const matricula = Number(finanzas.monto_matricula ?? jugador.monto_matricula) || 0;
-    const abono = Number(finanzas.abono_matricula ?? jugador.abono_matricula) || 0;
-    const mensualidad = Number(finanzas.monto_mensualidad ?? jugador.monto_mensualidad) || 0;
+    const matricula = Math.max(0, Number(finanzas.monto_matricula ?? jugador.monto_matricula) || 0);
+    const abono = Math.max(0, Number(finanzas.abono_matricula ?? jugador.abono_matricula) || 0);
+    const mensualidad = Math.max(0, Number(finanzas.monto_mensualidad ?? jugador.monto_mensualidad) || 0);
 
     const { data: createdPlayer, error: playerError } = await supabase.from('jugadores').insert([{
       academia_id: academiaId,
@@ -126,7 +128,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       foto_base64: jugador.foto_base64 || null,
       estado_uniforme: 'Pendiente',
       estado_matricula: 'Activa',
-      fecha_matricula: new Date().toISOString().slice(0, 10),
+      fecha_matricula: todayInChile(),
       estado_financiero: 'Al Día',
       alerta_medica: emergencia.nota || '',
       telefono_emergencia: emergencia.telefono || null,
@@ -134,6 +136,41 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
     }]).select('*').single();
     if (playerError) throw playerError;
     newPlayer = createdPlayer;
+
+    const categoriaId = jugador.categoria_id || null;
+    if (categoriaId) {
+      const { data: category, error: categoryError } = await supabase.from('categorias')
+        .select('id,sede_id,rama_id').eq('id', categoriaId).eq('academia_id', academiaId).maybeSingle();
+      if (categoryError) throw categoryError;
+      if (!category || category.sede_id !== structure.sede_id || category.rama_id !== structure.rama_id) {
+        const error = new Error('La categoría seleccionada no corresponde a la sede y rama de la matrícula.');
+        error.code = 'CATEGORY_STRUCTURE_MISMATCH';
+        throw error;
+      }
+    }
+
+    const { data: createdSportEnrollment, error: enrollmentError } = await supabase.from('inscripciones_deportivas').insert([{
+      academia_id: academiaId,
+      jugador_id: newPlayer.id,
+      sede_id: structure.sede_id,
+      rama_id: structure.rama_id,
+      categoria_id: categoriaId,
+      estado: 'Activa',
+      fecha_inicio: todayInChile(),
+      monto_matricula: matricula,
+      monto_mensualidad: mensualidad,
+      es_principal: true,
+    }]).select('*').single();
+    if (enrollmentError) throw enrollmentError;
+    sportEnrollment = createdSportEnrollment;
+
+    if (categoriaId) {
+      const { error: linkError } = await supabase.from('jugador_categoria').upsert(
+        [{ jugador_id: newPlayer.id, categoria_id: categoriaId }],
+        { onConflict: 'jugador_id,categoria_id', ignoreDuplicates: true }
+      );
+      if (linkError) throw linkError;
+    }
 
     if (evaluacion && Object.keys(evaluacion).length > 0 && entitlements.features.includes(FEATURES.EVALUATIONS)) {
       const { data: branch, error: branchError } = await supabase.from('ramas')
@@ -171,6 +208,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
         : 'Matrícula Inicial';
       const { data: charge, error: chargeError } = await supabase.from('cobros').insert([{
         academia_id: academiaId,
+        inscripcion_id: sportEnrollment.id,
         sede_id: structure.sede_id,
         rama_id: structure.rama_id,
         jugador_id: newPlayer.id,
@@ -179,7 +217,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
         monto: totalMatricula,
         monto_pagado: 0,
         estado: 'Pendiente',
-        fecha_vencimiento: new Date().toISOString().slice(0, 10),
+        fecha_vencimiento: todayInChile(),
       }]).select('id').single();
       if (chargeError) throw chargeError;
 
@@ -190,7 +228,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
           p_monto: Math.min(abono, totalMatricula),
           p_metodo_pago: 'Sin registrar',
           p_observaciones: 'Abono registrado al formalizar pre-matrícula',
-          p_idempotency_key: `${sourceKey || 'prematricula'}-${newPlayer.id}-abono`,
+          p_idempotency_key: `${sourceKey || 'prematricula'}-${sportEnrollment.id}-abono`,
           p_usuario_id: userId || null,
         });
         if (paymentError) throw paymentError;
@@ -234,7 +272,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
     }
 
     await recalculateFinancialStatus(academiaId);
-    return { jugador: newPlayer, tutorId, tutorWasCreated };
+    return { jugador: newPlayer, tutorId, tutorWasCreated, inscripcion: sportEnrollment };
   } catch (error) {
     await cleanupMaterializedEnrollment({
       academiaId,

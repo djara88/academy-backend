@@ -128,6 +128,7 @@ const entrenamientosRoutes = require('./routes/entrenamientos');
 const uniformesRoutes = require('./routes/uniformes');
 const profesoresRoutes = require('./routes/profesores');
 const apoderadosRoutes = require('./routes/apoderados');
+const guardianEnrollmentsRoutes = require('./routes/guardianEnrollments');
 const dashboardRoutes = require('./routes/dashboard');
 const saasAdminRoutes = require('./routes/saasAdmin');
 const subscriptionRoutes = require('./routes/subscriptions');
@@ -139,6 +140,7 @@ const sportProfileRoutes = require('./routes/sportProfiles');
 const publicCatalogRoutes = require('./routes/publicCatalog');
 const presenceRoutes = require('./routes/presence');
 const presenceAdminRoutes = require('./routes/presenceAdmin');
+const inscripcionesRoutes = require('./routes/inscripciones');
 
 app.use('/api/public', publicCatalogRoutes);
 app.use('/api/presence', presenceRoutes);
@@ -155,6 +157,7 @@ app.get('/api/jugadores/categorias/:categoriaId/promedio', authMiddleware, ...re
 
 app.use('/api', categoriaRoutes);
 app.use('/api/jugadores', jugadorRoutes);
+app.use('/api/inscripciones', inscripcionesRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
 app.use('/api/sport-profiles', sportProfileRoutes);
@@ -170,6 +173,7 @@ app.use('/api/finanzas', finanzasRoutes);
 app.use('/api/entrenamientos', entrenamientosRoutes);
 app.use('/api/uniformes', uniformesRoutes);
 app.use('/api/profesores', profesoresRoutes);
+app.use('/api/apoderados/me/inscripciones-deportivas', guardianEnrollmentsRoutes);
 app.use('/api/apoderados', apoderadosRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/saas-admin', saasAdminRoutes);
