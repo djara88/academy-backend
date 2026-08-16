@@ -12,5 +12,5 @@ where e.rama_id = r.id
   and e.disciplina_codigo is null
   and lower(r.disciplina) in ('fútbol', 'futbol')
   and jsonb_typeof(e.datos_radar) = 'object'
-  and jsonb_object_length(e.datos_radar) = 6
+  and (select count(*) from jsonb_object_keys(e.datos_radar)) = 6
   and e.datos_radar ?& array['Defensa','Físico','Mental','Pase','Remate','Velocidad'];
