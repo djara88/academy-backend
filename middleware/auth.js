@@ -20,47 +20,24 @@ const authMiddleware = async (req, res, next) => {
     if (!token) return res.status(401).json({ error: 'No autorizado' });
 
     const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
+    if (error || !user) return res.status(401).json({ error: 'Token inválido' });
 
-    // El token ya fue validado por Supabase Auth. Recién después de esa
-    // validación usamos el claim AAL para autorización MFA en rutas sensibles.
-    req.auth = {
-      aal: getAuthenticatorLevelFromToken(token),
-    };
+    req.auth = { aal: getAuthenticatorLevelFromToken(token) };
 
     const { data: usuario, error: userError } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
-
+      .from('usuarios').select('*').eq('id', user.id).maybeSingle();
     if (userError) {
       console.error('❌ Error al consultar usuario:', userError);
       return res.status(500).json({ error: 'Error al validar el usuario' });
     }
 
-    // La identidad propietaria siempre prevalece sobre cualquier perfil accidental
-    // que pudiera existir en `usuarios`, evitando perder el panel maestro.
     if (isMasterAdminEmail(user.email)) {
-      req.user = {
-        id: user.id,
-        email: user.email,
-        academia_id: null,
-        rol: 'superadmin',
-        nombre_completo: 'Control Maestro SaaS',
-      };
+      req.user = { id: user.id, email: user.email, academia_id: null, rol: 'superadmin', nombre_completo: 'Control Maestro SaaS' };
       return next();
     }
 
-    if (!usuario) {
-      return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
-    }
-
-    if (usuario.activo === false) {
-      return res.status(403).json({ error: 'Tu acceso está desactivado. Contacta a la dirección de tu academia.' });
-    }
+    if (!usuario) return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
+    if (usuario.activo === false) return res.status(403).json({ error: 'Tu acceso está desactivado. Contacta a la dirección de tu academia.' });
 
     let academy = null;
     if (usuario.academia_id) {
@@ -81,13 +58,15 @@ const authMiddleware = async (req, res, next) => {
             blocked_reason: academy.blocked_reason || 'Prueba gratuita vencida',
           }).eq('id', academy.id).eq('subscription_status', 'trialing');
         }
-        const allowedWhileBlocked = ['/api/academias/mi-plan', '/api/subscriptions/plans', '/api/subscriptions/checkout', '/api/subscriptions/payment-status', '/api/cambiar-password'];
+        const allowedWhileBlocked = [
+          '/api/academias/mi-plan', '/api/subscriptions/plans', '/api/subscriptions/checkout',
+          '/api/subscriptions/payment-status', '/api/cambiar-password', '/api/presence/heartbeat',
+        ];
         const path = req.originalUrl?.split('?')[0] || '';
         if (!allowedWhileBlocked.includes(path)) {
           return res.status(403).json({
             error: access.reason || 'La suscripción de esta academia se encuentra bloqueada.',
-            code: access.trial ? 'TRIAL_EXPIRED' : 'ACADEMY_BLOCKED',
-            subscription: access,
+            code: access.trial ? 'TRIAL_EXPIRED' : 'ACADEMY_BLOCKED', subscription: access,
           });
         }
       }
@@ -103,15 +82,10 @@ const authMiddleware = async (req, res, next) => {
     };
 
     if (isProfessor(req.user) && !isAllowedProfessorRequest(req)) {
-      return res.status(403).json({
-        error: 'Tu perfil de profesor solo puede acceder a las categorías que te asignó la dirección.',
-      });
+      return res.status(403).json({ error: 'Tu perfil de profesor solo puede acceder a las categorías que te asignó la dirección.' });
     }
-
     if (isGuardian(req.user) && !isAllowedGuardianRequest(req)) {
-      return res.status(403).json({
-        error: 'Tu perfil de apoderado solo puede acceder a la información de tus jugadores vinculados.',
-      });
+      return res.status(403).json({ error: 'Tu perfil de apoderado solo puede acceder a la información de tus jugadores vinculados.' });
     }
     next();
   } catch (error) {
