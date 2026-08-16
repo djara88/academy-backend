@@ -9,6 +9,7 @@ const { materializeEnrollment, cleanupMaterializedEnrollment } = require('../ser
 const { selectEnrollmentTerms } = require('../services/premiumPdf');
 const { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');
 const { fetchWithTimeout } = require('../services/httpClient');
+const { findRutConflict, assertRutAvailable } = require('../services/rutGuard');
 
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'https://academy-frontend-wheat.vercel.app').replace(/\/$/, '');
 const TOKEN_TTL_DAYS = Math.max(2, Number(process.env.PREMATRICULA_TTL_DAYS || 7));
@@ -103,12 +104,36 @@ const sendFinalEnrollmentEmail = async ({ academia, tutor, jugador, folio, pdfBu
 
 router.get('/', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('prematriculas')
-    .select('id,estado,expires_at,sent_at,opened_at,signed_at,tutor_payload,jugador_payload,created_at,jugador_id')
+    .select('id,estado,expires_at,sent_at,opened_at,signed_at,tutor_payload,jugador_payload,finanzas_payload,evaluacion_payload,emergencia_payload,created_at,jugador_id')
     .eq('academia_id', req.user.academia_id)
     .order('created_at', { ascending: false })
     .limit(100);
   if (error) return res.status(500).json({ success: false, error: 'No fue posible cargar las pre-matrículas.' });
   return res.json({ success: true, data });
+});
+
+router.get('/validar-rut', authMiddleware, async (req, res) => {
+  try {
+    const rut = safeText(req.query?.rut, 40);
+    const excludePrematriculaId = safeText(req.query?.exclude_id, 80) || null;
+    if (!rut) return res.json({ success: true, available: true, conflict: null });
+    const conflict = await findRutConflict({
+      supabase,
+      academiaId: req.user.academia_id,
+      rut,
+      excludePrematriculaId,
+    });
+    return res.json({
+      success: true,
+      available: !conflict,
+      code: conflict?.code || null,
+      error: conflict?.message || null,
+      conflict,
+    });
+  } catch (error) {
+    console.error('Error validando RUT de pre-matrícula:', error?.message || 'Error desconocido');
+    return res.status(500).json({ success: false, error: 'No fue posible validar el RUT.' });
+  }
 });
 
 router.post('/', authMiddleware, async (req, res) => {
@@ -122,6 +147,10 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (!safeText(tutor.nombre_completo, 180) || !safeText(tutor.email, 240) || !safeText(jugador.nombre, 180)) {
       return res.status(400).json({ success: false, error: 'Nombre del alumno, apoderado y correo son obligatorios.' });
+    }
+
+    if (jugador.rut) {
+      await assertRutAvailable({ supabase, academiaId: academia_id, rut: jugador.rut });
     }
 
     const { data: academia, error: academyError } = await supabase.from('academias').select('*').eq('id', academia_id).single();
@@ -157,7 +186,103 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(201).json({ success: true, data: created, link, email_sent: emailSent });
   } catch (error) {
     console.error('Error creando pre-matrícula:', error?.message || 'Error desconocido');
+    if (['PLAYER_RUT_EXISTS', 'PRE_ENROLLMENT_RUT_EXISTS'].includes(error?.code)) {
+      return res.status(409).json({ success: false, code: error.code, error: error.message, conflict: error.conflict || null });
+    }
     return res.status(500).json({ success: false, error: 'No fue posible crear la pre-matrícula.' });
+  }
+});
+
+router.put('/:id', authMiddleware, async (req, res) => {
+  try {
+    const { academia_id } = req.user;
+    const tutor = req.body?.tutor || {};
+    const jugador = req.body?.jugador || {};
+    const finanzas = req.body?.finanzas || {};
+    const evaluacion = req.body?.evaluacion || {};
+    const emergencia = req.body?.emergencia || {};
+
+    if (!safeText(tutor.nombre_completo, 180) || !safeText(tutor.email, 240) || !safeText(jugador.nombre, 180)) {
+      return res.status(400).json({ success: false, error: 'Nombre del alumno, apoderado y correo son obligatorios.' });
+    }
+
+    const { data: pre, error: preError } = await supabase.from('prematriculas')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('academia_id', academia_id)
+      .maybeSingle();
+    if (preError) throw preError;
+    if (!pre) return res.status(404).json({ success: false, error: 'Pre-matrícula no encontrada.' });
+    if (!['enviada', 'abierta', 'error'].includes(pre.estado)) {
+      return res.status(409).json({ success: false, error: 'Esta pre-matrícula ya no puede modificarse.' });
+    }
+
+    if (jugador.rut) {
+      await assertRutAvailable({
+        supabase,
+        academiaId: academia_id,
+        rut: jugador.rut,
+        excludePrematriculaId: pre.id,
+      });
+    }
+
+    const { data: academia, error: academyError } = await supabase.from('academias').select('*').eq('id', academia_id).single();
+    if (academyError || !academia) return res.status(404).json({ success: false, error: 'Academia no encontrada.' });
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = hashToken(token);
+    const expiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000).toISOString();
+    const termsSnapshot = selectEnrollmentTerms(academia) || 'La academia no mantiene condiciones adicionales de matrícula configuradas en Syncademia.';
+    const consentCatalog = getConsentCatalog(academia?.nombre || 'la academia');
+    const now = new Date().toISOString();
+
+    const { data: updated, error: updateError } = await supabase.from('prematriculas').update({
+      estado: 'enviada',
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+      sent_at: now,
+      opened_at: null,
+      tutor_payload: tutor,
+      jugador_payload: jugador,
+      finanzas_payload: finanzas,
+      evaluacion_payload: evaluacion,
+      emergencia_payload: emergencia,
+      privacy_version: PRIVACY_VERSION,
+      terms_snapshot: termsSnapshot,
+      consent_snapshot: consentCatalog,
+      updated_at: now,
+    }).eq('id', pre.id).eq('academia_id', academia_id).select('id,estado,expires_at').single();
+    if (updateError) throw updateError;
+
+    const link = `${FRONTEND_URL}/prematricula/${token}`;
+    const emailSent = await sendPrematriculaEmail({ academia, tutor, jugador, link });
+    return res.json({ success: true, data: updated, link, email_sent: emailSent });
+  } catch (error) {
+    console.error('Error editando pre-matrícula:', error?.message || 'Error desconocido');
+    if (['PLAYER_RUT_EXISTS', 'PRE_ENROLLMENT_RUT_EXISTS'].includes(error?.code)) {
+      return res.status(409).json({ success: false, code: error.code, error: error.message, conflict: error.conflict || null });
+    }
+    return res.status(500).json({ success: false, error: 'No fue posible actualizar la pre-matrícula.' });
+  }
+});
+
+router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('prematriculas').update({
+      estado: 'cancelada',
+      updated_at: new Date().toISOString(),
+    })
+      .eq('id', req.params.id)
+      .eq('academia_id', req.user.academia_id)
+      .in('estado', ['enviada', 'abierta', 'error', 'vencida'])
+      .select('id,estado')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(409).json({ success: false, error: 'Esta pre-matrícula ya no puede cancelarse.' });
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error cancelando pre-matrícula:', error?.message || 'Error desconocido');
+    return res.status(500).json({ success: false, error: 'No fue posible cancelar la pre-matrícula.' });
   }
 });
 
