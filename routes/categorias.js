@@ -62,7 +62,7 @@ const getCategory = async (academyId, categoryId) => {
   return data;
 };
 
-router.get('/', async (req, res) => {
+const listCategories = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('categorias')
@@ -71,12 +71,12 @@ router.get('/', async (req, res) => {
       .order('created_at', { ascending: true });
     if (error) throw error;
     res.json({ success: true, data: data || [] });
-  } catch (error) {
+  } catch (_error) {
     res.status(500).json({ success: false, error: 'No fue posible cargar las categorías.' });
   }
-});
+};
 
-router.post('/', requireDirector, async (req, res) => {
+const createCategory = async (req, res) => {
   try {
     const academyId = req.user.academia_id;
     const nombre = safeText(req.body?.nombre);
@@ -107,12 +107,18 @@ router.post('/', requireDirector, async (req, res) => {
       availableBranches: error?.availableBranches || undefined,
     });
   }
-});
+};
 
-router.post('/:categoryId/jugadores/:playerId', requireDirector, async (req, res) => {
+const assignPlayer = async (req, res) => {
   try {
     const academyId = req.user.academia_id;
-    const category = await getCategory(academyId, req.params.categoryId);
+    const categoryId = safeText(req.params.categoryId || req.body?.categoria_id, 80);
+    const playerId = safeText(req.params.playerId, 80);
+    if (!categoryId || !playerId) {
+      return res.status(400).json({ success: false, error: 'Deportista y categoría son obligatorios.' });
+    }
+
+    const category = await getCategory(academyId, categoryId);
     if (!category.rama_id || !category.sede_id) {
       return res.status(409).json({
         success: false,
@@ -124,7 +130,7 @@ router.post('/:categoryId/jugadores/:playerId', requireDirector, async (req, res
     const { data: player, error: playerError } = await supabase
       .from('jugadores')
       .select('id,sede_id,rama_id')
-      .eq('id', req.params.playerId)
+      .eq('id', playerId)
       .eq('academia_id', academyId)
       .maybeSingle();
     if (playerError) throw playerError;
@@ -160,6 +166,10 @@ router.post('/:categoryId/jugadores/:playerId', requireDirector, async (req, res
       code: error?.code || undefined,
     });
   }
-});
+};
+
+router.get(['/categorias', '/jugadores/categorias'], listCategories);
+router.post(['/categorias', '/jugadores/categorias'], requireDirector, createCategory);
+router.post(['/categorias/:categoryId/jugadores/:playerId', '/jugadores/:playerId/categorias'], requireDirector, assignPlayer);
 
 module.exports = router;
