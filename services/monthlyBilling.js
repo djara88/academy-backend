@@ -56,7 +56,7 @@ const ensureMonthlyChargesForAcademy = async (academyId) => {
 
   if (!dueDay) {
     await recalculateFinancialStatus(academyId);
-    return { configured: false, today, period: currentPeriod, dueDate: null, warningDays, created: 0 };
+    return { configured: false, today, period: currentPeriod, dueDay: null, dueDate: null, warningDays, created: 0 };
   }
 
   const [playersResult, existingResult] = await Promise.all([
@@ -104,7 +104,7 @@ const ensureMonthlyChargesForAcademy = async (academyId) => {
   }
 
   await recalculateFinancialStatus(academyId);
-  return { configured: true, today, period: currentPeriod, dueDate, warningDays, created };
+  return { configured: true, today, period: currentPeriod, dueDay, dueDate, warningDays, created };
 };
 
 const summarizeCharges = (charges = [], options = {}) => {
