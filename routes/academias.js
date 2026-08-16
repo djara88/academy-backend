@@ -8,6 +8,7 @@ const { PLAN_DEFINITIONS, getAcademyEntitlements, resolvePlanCode, getPlanProfes
 const { BILLING_PLANS, GUARDIAN_ADDON_CLP } = require('../services/billingCatalog');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 const { fetchWithTimeout } = require('../services/httpClient');
+const { ensureMonthlyChargesForAcademy } = require('../services/monthlyBilling');
 const multer = require('multer');
 
 const maxLogoMb = Math.max(1, Number(process.env.MAX_LOGO_MB || 5));
@@ -241,7 +242,23 @@ router.get('/mi-plan', authMiddleware, async (req, res) => {
 router.put('/mi-academia', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
-    const { nombre, dias_entrenamiento, horarios_entrenamiento, ubicacion_entrenamiento } = req.body;
+    const {
+      nombre, dias_entrenamiento, horarios_entrenamiento, ubicacion_entrenamiento,
+      dia_vencimiento_mensualidad, dias_aviso_mensualidad,
+    } = req.body;
+
+    const dueDay = dia_vencimiento_mensualidad === '' || dia_vencimiento_mensualidad === null || dia_vencimiento_mensualidad === undefined
+      ? null
+      : Number(dia_vencimiento_mensualidad);
+    const warningDays = dias_aviso_mensualidad === '' || dias_aviso_mensualidad === null || dias_aviso_mensualidad === undefined
+      ? 3
+      : Number(dias_aviso_mensualidad);
+    if (dueDay !== null && (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)) {
+      return res.status(400).json({ error: 'El día de pago mensual debe estar entre 1 y 31.' });
+    }
+    if (!Number.isInteger(warningDays) || warningDays < 0 || warningDays > 15) {
+      return res.status(400).json({ error: 'Los días de aviso deben estar entre 0 y 15.' });
+    }
 
     const { data, error } = await supabase
       .from('academias')
@@ -249,14 +266,17 @@ router.put('/mi-academia', authMiddleware, async (req, res) => {
         nombre,
         dias_entrenamiento,
         horarios_entrenamiento,
-        ubicacion_entrenamiento
+        ubicacion_entrenamiento,
+        dia_vencimiento_mensualidad: dueDay,
+        dias_aviso_mensualidad: warningDays,
       })
       .eq('id', academia_id)
       .select()
       .single();
 
     if (error) throw error;
-    res.json({ success: true, data });
+    const billing = await ensureMonthlyChargesForAcademy(academia_id);
+    res.json({ success: true, data, billing });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
