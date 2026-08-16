@@ -14,6 +14,7 @@ const FEATURES = Object.freeze({
   MATCH_PREPARATION: 'preparacion_partidos',
   ATTENDANCE_ALERTS: 'alertas_asistencia',
   EVALUATIONS: 'evaluaciones',
+  CUSTOM_EVALUATION_CRITERIA: 'criterios_evaluacion_personalizados',
   MEDICAL: 'ficha_medica',
   ADVANCED_ANALYTICS: 'analitica_avanzada',
   CUSTOM_BRANDING: 'marca_personalizada',
@@ -23,9 +24,9 @@ const FEATURES = Object.freeze({
   ADVANCED_COMMUNICATIONS: 'comunicaciones_avanzadas',
 });
 
-// Formación debe sentirse como un producto completo. Las diferencias entre
-// planes se concentran en capacidad y funciones avanzadas, no en quitar la
-// operación esencial de una academia.
+// Formación debe sentirse como un producto completo. Incluye evaluación y radar
+// multideporte con criterios estándar de Syncademia. La personalización de esos
+// criterios diferencia Competencia y Alto Rendimiento.
 const BASE_FEATURES = [
   FEATURES.CORE,
   FEATURES.FINANCE,
@@ -34,13 +35,14 @@ const BASE_FEATURES = [
   FEATURES.MATCHES,
   FEATURES.TOURNAMENTS,
   FEATURES.GUARDIANS,
+  FEATURES.EVALUATIONS,
 ];
 
 const COMPETITION_FEATURES = [
   ...BASE_FEATURES,
   FEATURES.MATCH_PREPARATION,
   FEATURES.ATTENDANCE_ALERTS,
-  FEATURES.EVALUATIONS,
+  FEATURES.CUSTOM_EVALUATION_CRITERIA,
   FEATURES.EXPORTS,
   FEATURES.WHATSAPP_GROUPS,
 ];
@@ -111,7 +113,7 @@ const getPlanDefinition = (academy = {}) => PLAN_DEFINITIONS[resolvePlanCode(aca
 const getAcademyEntitlements = (academy = {}) => {
   const plan = getPlanDefinition(academy);
   // La prueba de 15 días expone Alto Rendimiento completo, incluida capacidad
-  // multi-sede/multi-rama sin límite, para demostrar el valor real del producto.
+  // multi-sede/multi-rama y criterios personalizados, para demostrar el valor real.
   const trial = isTrialPlan(academy);
   const trialPlan = PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO];
   const features = new Set(trial ? trialPlan.features : plan.features);
