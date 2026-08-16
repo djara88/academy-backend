@@ -82,8 +82,9 @@ const aliases = new Map([
   ['atletismo', 'atletismo'],
   ['natacion', 'natacion'],
   ['gimnasia', 'gimnasia'],
-  ['artes marciales', 'artes_marciales'], ['arte marcial', 'artes_marciales'],
+  ['artes marciales', 'artes_marciales'], ['arte marcial', 'artes_marciales'], ['artes_marciales', 'artes_marciales'],
   ['rugby', 'rugby'],
+  ['generico', 'generico'],
 ]);
 
 const resolveDisciplineCode = (discipline) => aliases.get(normalizeText(discipline)) || 'generico';
@@ -127,10 +128,28 @@ const sanitizeRadarMetrics = (input, allowedMetrics) => {
   return output;
 };
 
+const evaluationCompatibilityKey = (evaluation = {}) => {
+  const profile = String(evaluation.perfil_evaluacion || '').trim();
+  if (profile) return `profile:${profile}:v${Number(evaluation.metricas_version || 1)}`;
+  const metrics = Object.keys(evaluation.datos_radar || {}).sort((a, b) => a.localeCompare(b, 'es')).join('|');
+  return `legacy:${metrics}`;
+};
+
+const selectComparableEvaluations = (evaluations = []) => {
+  const ordered = Array.isArray(evaluations) ? evaluations.filter(Boolean) : [];
+  if (!ordered.length) return [];
+  const latest = ordered[0];
+  const key = evaluationCompatibilityKey(latest);
+  const previous = ordered.slice(1).find((evaluation) => evaluationCompatibilityKey(evaluation) === key);
+  return previous ? [latest, previous] : [latest];
+};
+
 module.exports = {
   METRIC_VERSION,
   PROFILES,
   resolveDisciplineCode,
   resolveEvaluationProfile,
   sanitizeRadarMetrics,
+  evaluationCompatibilityKey,
+  selectComparableEvaluations,
 };
