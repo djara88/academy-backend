@@ -4,7 +4,6 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 
 const router = express.Router();
-router.use(authMiddleware);
 
 const safeText = (value, max = 180) => String(value ?? '').trim().slice(0, max);
 
@@ -168,8 +167,8 @@ const assignPlayer = async (req, res) => {
   }
 };
 
-router.get(['/categorias', '/jugadores/categorias'], listCategories);
-router.post(['/categorias', '/jugadores/categorias'], requireDirector, createCategory);
-router.post(['/categorias/:categoryId/jugadores/:playerId', '/jugadores/:playerId/categorias'], requireDirector, assignPlayer);
+router.get(['/categorias', '/jugadores/categorias'], authMiddleware, listCategories);
+router.post(['/categorias', '/jugadores/categorias'], authMiddleware, requireDirector, createCategory);
+router.post(['/categorias/:categoryId/jugadores/:playerId', '/jugadores/:playerId/categorias'], authMiddleware, requireDirector, assignPlayer);
 
 module.exports = router;
