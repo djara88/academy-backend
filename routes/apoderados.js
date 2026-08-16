@@ -11,6 +11,8 @@ const router = express.Router();
 const guardianFeature = requireFeature(FEATURES.GUARDIANS);
 const uniqueIds = (values) => [...new Set((values || []).map(String).filter(Boolean))];
 const temporaryPassword = () => `${crypto.randomBytes(9).toString('base64url')}A9!`;
+const PRIVACY_TYPES = new Set(['acceso', 'rectificacion', 'supresion', 'oposicion', 'portabilidad', 'bloqueo', 'revocacion_imagen']);
+const safeText = (value, max = 5000) => String(value ?? '').trim().slice(0, max);
 
 const getTutorPlayers = async (academyId, tutorId) => {
   const [{ data: direct, error: directError }, { data: links, error: linkError }] = await Promise.all([
@@ -290,6 +292,67 @@ router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (re
     });
   } catch (error) {
     res.status(500).json({ error: 'No fue posible cargar tu portal de apoderado.' });
+  }
+});
+
+
+router.get('/me/solicitudes-privacidad', authMiddleware, requireGuardian, ...guardianFeature, async (req, res) => {
+  try {
+    const { data: tutor, error: tutorError } = await supabase.from('tutores')
+      .select('id').eq('usuario_id', req.user.id).eq('academia_id', req.user.academia_id).eq('acceso_activo', true).maybeSingle();
+    if (tutorError || !tutor) return res.status(403).json({ error: 'Tu acceso de apoderado no está activo.' });
+    const { data, error } = await supabase.from('solicitudes_privacidad')
+      .select('id,jugador_id,tipo,estado,detalle,fecha_recepcion,fecha_limite,fecha_limite_prorrogada,respuesta,fecha_resolucion,fecha_ejecucion,jugadores(id,nombre)')
+      .eq('academia_id', req.user.academia_id).eq('tutor_id', tutor.id).order('fecha_recepcion', { ascending: false }).limit(100);
+    if (error) throw error;
+    res.json({ success: true, data: data || [] });
+  } catch (error) {
+    res.status(500).json({ error: 'No fue posible cargar tus solicitudes de privacidad.' });
+  }
+});
+
+router.post('/me/solicitudes-privacidad', authMiddleware, requireGuardian, ...guardianFeature, async (req, res) => {
+  try {
+    const tipo = safeText(req.body?.tipo, 40).toLowerCase();
+    if (!PRIVACY_TYPES.has(tipo)) return res.status(400).json({ error: 'Tipo de solicitud no válido.' });
+    const { data: tutor, error: tutorError } = await supabase.from('tutores')
+      .select('id,nombre,nombre_completo,rut,email').eq('usuario_id', req.user.id).eq('academia_id', req.user.academia_id).eq('acceso_activo', true).maybeSingle();
+    if (tutorError || !tutor) return res.status(403).json({ error: 'Tu acceso de apoderado no está activo.' });
+    const players = await getTutorPlayers(req.user.academia_id, tutor.id);
+    const playerId = safeText(req.body?.jugador_id, 80);
+    const player = players.find((item) => String(item.id) === playerId);
+    if (!player) return res.status(403).json({ error: 'Solo puedes solicitar acciones sobre alumnos vinculados a tu cuenta.' });
+    const now = new Date();
+    const blockRequested = req.body?.bloqueo_solicitado === true && ['rectificacion', 'supresion', 'oposicion', 'bloqueo'].includes(tipo);
+    const { data: created, error } = await supabase.from('solicitudes_privacidad').insert({
+      academia_id: req.user.academia_id,
+      jugador_id: player.id,
+      tutor_id: tutor.id,
+      tipo,
+      estado: 'verificacion_pendiente',
+      canal: 'portal_apoderado',
+      solicitante_nombre: tutor.nombre_completo || tutor.nombre || 'Apoderado',
+      solicitante_documento: tutor.rut || null,
+      solicitante_email: tutor.email || req.user.email,
+      detalle: safeText(req.body?.detalle, 5000) || null,
+      cambios_solicitados: req.body?.cambios_solicitados && typeof req.body.cambios_solicitados === 'object' ? req.body.cambios_solicitados : {},
+      bloqueo_solicitado: blockRequested,
+      fecha_recepcion: now.toISOString(),
+      fecha_limite: new Date(now.getTime() + 30 * 86400000).toISOString(),
+      created_by: req.user.id,
+    }).select('*').single();
+    if (error) throw error;
+    await supabase.from('solicitudes_privacidad_eventos').insert({
+      solicitud_id: created.id,
+      academia_id: req.user.academia_id,
+      evento: 'solicitud_portal_apoderado',
+      actor_user_id: req.user.id,
+      detalle: { tipo, jugador_id: player.id },
+    });
+    res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    console.error('Error registrando solicitud desde portal:', error?.message || 'Error desconocido');
+    res.status(500).json({ error: 'No fue posible registrar tu solicitud.' });
   }
 });
 
