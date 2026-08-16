@@ -1,0 +1,23 @@
+name: Production Volume 200
+
+on:
+  push:
+    branches:
+      - agent/production-volume-200
+
+permissions:
+  contents: read
+
+jobs:
+  volume-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Ejecutar volumen productivo controlado
+        run: node scripts/productionVolume200.js
