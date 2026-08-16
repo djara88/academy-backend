@@ -1,8 +1,9 @@
 const supabase = require('../config/supabase');
-const { getAcademyEntitlements } = require('./planCatalog');
+const { getAcademyEntitlements, FEATURES } = require('./planCatalog');
 const { recalculateFinancialStatus } = require('./monthlyBilling');
 const { normalizeRut } = require('./rutGuard');
 const { resolveStructure } = require('./academyStructure');
+const { resolveEvaluationProfile, sanitizeRadarMetrics } = require('./evaluationCatalog');
 
 const isGuardianShirtSize = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -35,7 +36,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
 
   const { data: academy, error: academyError } = await supabase.from('academias').select('*').eq('id', academiaId).single();
   if (academyError || !academy) throw new Error('No fue posible validar el plan de la academia.');
-  const playerLimit = getAcademyEntitlements(academy).limits.players;
+  const entitlements = getAcademyEntitlements(academy);
+  const playerLimit = entitlements.limits.players;
   if (Number.isInteger(playerLimit)) {
     const { count, error: countError } = await supabase.from('jugadores').select('id', { count: 'exact', head: true }).eq('academia_id', academiaId);
     if (countError) throw countError;
@@ -133,16 +135,33 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
     if (playerError) throw playerError;
     newPlayer = createdPlayer;
 
-    if (evaluacion && Object.keys(evaluacion).length > 0) {
-      const { error } = await supabase.from('evaluaciones').insert([{
-        jugador_id: newPlayer.id,
-        academia_id: academiaId,
-        sede_id: structure.sede_id,
-        rama_id: structure.rama_id,
-        datos_radar: evaluacion,
-        comentarios_profesor: 'Evaluación inicial registrada durante la pre-matrícula.',
-      }]);
-      if (error) throw error;
+    if (evaluacion && Object.keys(evaluacion).length > 0 && entitlements.features.includes(FEATURES.EVALUATIONS)) {
+      const { data: branch, error: branchError } = await supabase.from('ramas')
+        .select('disciplina,config_evaluacion')
+        .eq('id', structure.rama_id)
+        .eq('academia_id', academiaId)
+        .maybeSingle();
+      if (branchError) throw branchError;
+      const profile = resolveEvaluationProfile({
+        discipline: branch?.disciplina || 'Otro',
+        role: jugador.posicion_cancha || '',
+        customConfig: branch?.config_evaluacion || {},
+      });
+      const radar = sanitizeRadarMetrics(evaluacion, profile.metrics);
+      if (Object.keys(radar).length >= 3) {
+        const { error } = await supabase.from('evaluaciones').insert([{
+          jugador_id: newPlayer.id,
+          academia_id: academiaId,
+          sede_id: structure.sede_id,
+          rama_id: structure.rama_id,
+          datos_radar: radar,
+          comentarios_profesor: 'Evaluación inicial registrada durante la pre-matrícula.',
+          disciplina_codigo: profile.code,
+          perfil_evaluacion: profile.profileCode,
+          metricas_version: profile.metricVersion,
+        }]);
+        if (error) throw error;
+      }
     }
 
     const totalMatricula = matricula + guardianShirtCost;
@@ -177,9 +196,6 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
         if (paymentError) throw paymentError;
       }
     }
-
-    // La mensualidad no se genera el día de la matrícula. El calendario mensual
-    // de la academia crea el primer cobro a partir del ciclo siguiente.
 
     if (jugador.talla_uniforme || jugador.numero_camiseta || jugador.nombre_camiseta) {
       const { error } = await supabase.from('pedidos_indumentaria').insert([{
