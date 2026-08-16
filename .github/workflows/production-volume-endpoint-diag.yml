@@ -1,0 +1,21 @@
+name: Production Volume Endpoint Diagnostics
+
+on:
+  push:
+    branches:
+      - agent/production-volume-endpoint-diag
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Diagnosticar endpoints con volumen realista
+        run: node scripts/productionVolumeEndpointDiag.js
