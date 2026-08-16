@@ -151,6 +151,17 @@ app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
 app.use('/api/prematriculas', prematriculaRoutes);
 app.use('/api/importaciones', importacionRoutes);
+
+// La escritura antigua no valida disciplina ni perfil. Se conserva la lectura
+// heredada en jugadores.js por compatibilidad, pero toda nueva evaluación debe
+// pasar por /api/evaluaciones y su catálogo multideporte.
+app.post('/api/jugadores/:jugadorId/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), (_req, res) => {
+  res.status(410).json({
+    error: 'Esta ruta de evaluación fue reemplazada por el motor multideporte.',
+    code: 'LEGACY_EVALUATION_ROUTE',
+  });
+});
+
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
