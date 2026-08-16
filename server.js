@@ -146,7 +146,9 @@ const chatRoutes = require('./routes/chat');
 const systemMetricsRoutes = require('./routes/systemMetrics');
 const estructuraRoutes = require('./routes/estructura');
 const sportProfileRoutes = require('./routes/sportProfiles');
+const publicCatalogRoutes = require('./routes/publicCatalog');
 
+app.use('/api/public', publicCatalogRoutes);
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
 app.use('/api/prematriculas', prematriculaRoutes);
