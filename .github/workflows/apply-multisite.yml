@@ -1,0 +1,30 @@
+name: Apply multisite backend patch
+on:
+  push:
+    branches: [agent/multisite-multibranch]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/multisite-multibranch
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/applyMultisitePatch.js
+      - run: node --check server.js && node --check services/enrollmentService.js && node --check services/monthlyBilling.js && node --check routes/estructura.js
+      - run: npm ci
+      - run: npm test -- --runInBand
+        continue-on-error: false
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add server.js services/enrollmentService.js services/monthlyBilling.js
+          git diff --cached --quiet || git commit -m "Conectar multisede y multirama al backend"
+          git push
