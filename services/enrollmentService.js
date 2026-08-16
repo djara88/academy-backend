@@ -1,5 +1,6 @@
 const supabase = require('../config/supabase');
 const { getAcademyEntitlements } = require('./planCatalog');
+const { recalculateFinancialStatus } = require('./monthlyBilling');
 
 const isGuardianShirtSize = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -119,7 +120,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       estado_uniforme: 'Pendiente',
       estado_matricula: 'Activa',
       fecha_matricula: new Date().toISOString().slice(0, 10),
-      estado_financiero: ((matricula + guardianShirtCost) > abono || mensualidad > 0) ? 'Moroso' : 'Al Día',
+      estado_financiero: 'Al Día',
       alerta_medica: emergencia.nota || '',
       telefono_emergencia: emergencia.telefono || null,
       insignias: [],
@@ -168,19 +169,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       }
     }
 
-    if (mensualidad > 0) {
-      const { error } = await supabase.from('cobros').insert([{
-        academia_id: academiaId,
-        jugador_id: newPlayer.id,
-        concepto: 'Mensualidad Inicial',
-        tipo_concepto: 'Mensualidad',
-        monto: mensualidad,
-        monto_pagado: 0,
-        estado: 'Pendiente',
-        fecha_vencimiento: new Date().toISOString().slice(0, 10),
-      }]);
-      if (error) throw error;
-    }
+    // La mensualidad no se genera el día de la matrícula. El calendario mensual
+    // de la academia crea el primer cobro a partir del ciclo siguiente.
 
     if (jugador.talla_uniforme || jugador.numero_camiseta || jugador.nombre_camiseta) {
       const { error } = await supabase.from('pedidos_indumentaria').insert([{
@@ -214,6 +204,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       if (error) throw error;
     }
 
+    await recalculateFinancialStatus(academiaId);
     return { jugador: newPlayer, tutorId, tutorWasCreated };
   } catch (error) {
     await cleanupMaterializedEnrollment({
