@@ -2,13 +2,18 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { FEATURES } = require('../services/planCatalog');
 const {
   resolveEvaluationProfile,
   sanitizeRadarMetrics,
   selectComparableEvaluations,
 } = require('../services/evaluationCatalog');
 
-const resolvePlayerProfile = async (academiaId, jugadorId) => {
+const customCriteriaAllowed = (req) => Boolean(
+  req.entitlements?.features?.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA),
+);
+
+const resolvePlayerProfile = async (academiaId, jugadorId, allowCustomCriteria = false) => {
   const { data: player, error: playerError } = await supabase.from('jugadores')
     .select('id,sede_id,rama_id,posicion_cancha')
     .eq('id', jugadorId)
@@ -35,7 +40,8 @@ const resolvePlayerProfile = async (academiaId, jugadorId) => {
   const profile = resolveEvaluationProfile({
     discipline: branch?.disciplina || 'Otro',
     role: player.posicion_cancha || '',
-    customConfig: branch?.config_evaluacion || {},
+    customConfig: allowCustomCriteria ? (branch?.config_evaluacion || {}) : {},
+    scopeId: branch?.id || undefined,
   });
   return { player, branch, profile };
 };
@@ -54,7 +60,7 @@ router.get('/jugador/:jugadorId', authMiddleware, async (req, res) => {
     // `data` alimenta el radar actual y por diseño contiene únicamente la
     // evaluación más reciente y, si existe, una anterior del mismo perfil y
     // versión. El historial completo sigue disponible por separado para no
-    // perder trazabilidad ni fabricar evolución entre deportes incompatibles.
+    // perder trazabilidad ni fabricar evolución entre criterios incompatibles.
     res.json({
       success: true,
       data: comparable,
@@ -92,7 +98,8 @@ const categoryAverageHandler = async (req, res) => {
     }
     const profile = resolveEvaluationProfile({
       discipline: branch?.disciplina || 'Otro',
-      customConfig: branch?.config_evaluacion || {},
+      customConfig: customCriteriaAllowed(req) ? (branch?.config_evaluacion || {}) : {},
+      scopeId: branch?.id || undefined,
     });
 
     const { data: links, error: linkError } = await supabase.from('jugador_categoria')
@@ -164,7 +171,11 @@ router.post('/', authMiddleware, async (req, res) => {
     const jugadorId = String(req.body?.jugador_id || '').trim();
     if (!jugadorId) return res.status(400).json({ error: 'Jugador requerido.' });
 
-    const { player, profile } = await resolvePlayerProfile(req.user.academia_id, jugadorId);
+    const { player, profile } = await resolvePlayerProfile(
+      req.user.academia_id,
+      jugadorId,
+      customCriteriaAllowed(req),
+    );
     const sourceMetrics = req.body?.datos_radar || req.body?.metricas_json || {};
     const metrics = sanitizeRadarMetrics(sourceMetrics, profile.metrics);
     if (Object.keys(metrics).length < 3) {

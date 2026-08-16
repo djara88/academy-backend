@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   resolveEvaluationProfile,
+  sanitizeCustomEvaluationConfig,
   sanitizeRadarMetrics,
   selectComparableEvaluations,
 } = require('../services/evaluationCatalog');
@@ -27,6 +28,30 @@ test('disciplina desconocida usa perfil genérico seguro', () => {
   assert.equal(profile.metrics.length, 6);
 });
 
+test('criterios personalizados quedan ligados a rama y versión', () => {
+  const profile = resolveEvaluationProfile({
+    discipline: 'Tenis',
+    scopeId: 'rama-tenis-1',
+    customConfig: { metrics: ['Saque táctico', 'Consistencia', 'Lectura de juego', 'Movilidad'], version: 4 },
+  });
+  assert.equal(profile.custom, true);
+  assert.equal(profile.profileCode, 'tenis:custom:rama-tenis-1');
+  assert.equal(profile.metricVersion, 4);
+  assert.deepEqual(profile.metrics, ['Saque táctico', 'Consistencia', 'Lectura de juego', 'Movilidad']);
+});
+
+test('sanitiza criterios duplicados y exige al menos tres distintos', () => {
+  const config = sanitizeCustomEvaluationConfig({
+    metrics: [' Técnica ', 'técnica', 'Decisiones', 'Actitud', ''],
+  }, 2);
+  assert.deepEqual(config.metrics, ['Técnica', 'Decisiones', 'Actitud']);
+  assert.equal(config.version, 3);
+  assert.throws(
+    () => sanitizeCustomEvaluationConfig({ metrics: ['Técnica', 'Actitud'] }, 1),
+    /Define entre 3 y 10 criterios/,
+  );
+});
+
 test('sanitiza valores y descarta métricas ajenas al perfil', () => {
   const profile = resolveEvaluationProfile({ discipline: 'Básquetbol' });
   const radar = sanitizeRadarMetrics({
@@ -48,6 +73,18 @@ test('solo compara evaluaciones del mismo perfil y versión', () => {
   assert.deepEqual(
     selectComparableEvaluations(evaluations).map((evaluation) => evaluation.id),
     ['tenis-actual', 'tenis-anterior'],
+  );
+});
+
+test('un cambio de versión personalizada no fabrica evolución', () => {
+  const evaluations = [
+    { id: 'custom-v3', perfil_evaluacion: 'basquetbol:custom:rama-1', metricas_version: 3, datos_radar: { Tiro: 80, Defensa: 70, Liderazgo: 75 } },
+    { id: 'custom-v2', perfil_evaluacion: 'basquetbol:custom:rama-1', metricas_version: 2, datos_radar: { Tiro: 78, Defensa: 68, Pase: 80 } },
+    { id: 'custom-v3-prev', perfil_evaluacion: 'basquetbol:custom:rama-1', metricas_version: 3, datos_radar: { Tiro: 74, Defensa: 67, Liderazgo: 70 } },
+  ];
+  assert.deepEqual(
+    selectComparableEvaluations(evaluations).map((evaluation) => evaluation.id),
+    ['custom-v3', 'custom-v3-prev'],
   );
 });
 

@@ -5,6 +5,8 @@ const normalizeText = (value) => String(value || '')
   .toLowerCase();
 
 const METRIC_VERSION = 2;
+const MIN_CUSTOM_METRICS = 3;
+const MAX_CUSTOM_METRICS = 10;
 
 const PROFILES = Object.freeze({
   futbol: {
@@ -89,17 +91,46 @@ const aliases = new Map([
 
 const resolveDisciplineCode = (discipline) => aliases.get(normalizeText(discipline)) || 'generico';
 
-const validCustomMetrics = (config) => Array.isArray(config?.metrics)
-  ? config.metrics.map((item) => String(item || '').trim().slice(0, 80)).filter(Boolean).slice(0, 10)
-  : [];
+const validCustomMetrics = (config) => {
+  if (!Array.isArray(config?.metrics)) return [];
+  const seen = new Set();
+  const metrics = [];
+  for (const item of config.metrics) {
+    const metric = String(item || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!metric) continue;
+    const key = normalizeText(metric);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    metrics.push(metric);
+    if (metrics.length >= MAX_CUSTOM_METRICS) break;
+  }
+  return metrics;
+};
 
-const resolveEvaluationProfile = ({ discipline, role, customConfig } = {}) => {
+const sanitizeCustomEvaluationConfig = (input, previousVersion = 0) => {
+  const metrics = validCustomMetrics(input);
+  if (metrics.length < MIN_CUSTOM_METRICS) {
+    const error = new Error(`Define entre ${MIN_CUSTOM_METRICS} y ${MAX_CUSTOM_METRICS} criterios de evaluación distintos.`);
+    error.status = 400;
+    error.code = 'INVALID_CUSTOM_EVALUATION_METRICS';
+    throw error;
+  }
+  return {
+    metrics,
+    version: Math.min(32767, Math.max(1, Number(previousVersion || 0) + 1)),
+  };
+};
+
+const resolveEvaluationProfile = ({ discipline, role, customConfig, scopeId } = {}) => {
   const code = resolveDisciplineCode(discipline);
   const base = PROFILES[code] || PROFILES.generico;
   const customMetrics = validCustomMetrics(customConfig);
+  const usingCustomMetrics = customMetrics.length >= MIN_CUSTOM_METRICS;
   const normalizedRole = String(role || '').trim();
   const roleMetrics = base.roleProfiles?.[normalizedRole];
-  const metrics = customMetrics.length >= 3 ? customMetrics : (roleMetrics || base.metrics);
+  const metrics = usingCustomMetrics ? customMetrics : (roleMetrics || base.metrics);
+  const standardProfileCode = roleMetrics ? `${code}:${normalizeText(normalizedRole).replace(/\s+/g, '_')}` : code;
+  const customVersion = Math.min(32767, Math.max(1, Math.round(Number(customConfig?.version || 1))));
 
   return {
     code,
@@ -109,8 +140,10 @@ const resolveEvaluationProfile = ({ discipline, role, customConfig } = {}) => {
       ? customConfig.roles.map((item) => String(item || '').trim().slice(0, 80)).filter(Boolean).slice(0, 20)
       : base.roles,
     metrics,
-    profileCode: roleMetrics ? `${code}:${normalizeText(normalizedRole).replace(/\s+/g, '_')}` : code,
-    metricVersion: METRIC_VERSION,
+    profileCode: usingCustomMetrics ? `${code}:custom:${String(scopeId || 'default').slice(0, 80)}` : standardProfileCode,
+    metricVersion: usingCustomMetrics ? customVersion : METRIC_VERSION,
+    standardMetricVersion: METRIC_VERSION,
+    custom: usingCustomMetrics,
     supportsFootballStats: ['futbol', 'futsal'].includes(code),
   };
 };
@@ -146,9 +179,12 @@ const selectComparableEvaluations = (evaluations = []) => {
 
 module.exports = {
   METRIC_VERSION,
+  MIN_CUSTOM_METRICS,
+  MAX_CUSTOM_METRICS,
   PROFILES,
   resolveDisciplineCode,
   resolveEvaluationProfile,
+  sanitizeCustomEvaluationConfig,
   sanitizeRadarMetrics,
   evaluationCompatibilityKey,
   selectComparableEvaluations,

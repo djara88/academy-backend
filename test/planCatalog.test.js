@@ -17,12 +17,26 @@ test('el portal de apoderados está incluido en todos los planes', () => {
   }
 });
 
+test('todos los planes tienen radar, pero solo Competencia y Alto Rendimiento personalizan criterios', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
+
+  for (const entitlements of [formation, competition, highPerformance]) {
+    assert.equal(entitlements.features.includes(FEATURES.EVALUATIONS), true);
+  }
+  assert.equal(formation.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), false);
+  assert.equal(competition.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
+  assert.equal(highPerformance.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
+});
+
 test('la prueba Full habilita todas las funciones y capacidad premium', () => {
   const trial = getAcademyEntitlements({ plan: 'Prueba 15 Días', plan_codigo: 'formacion', max_profesores: 2 });
   assert.equal(trial.plan.trial, true);
   assert.equal(trial.features.includes(FEATURES.ADVANCED_ANALYTICS), true);
   assert.equal(trial.features.includes(FEATURES.GUARDIANS), true);
   assert.equal(trial.features.includes(FEATURES.WHATSAPP_GROUPS), true);
+  assert.equal(trial.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
   assert.equal(trial.limits.professors, 30);
   assert.equal(trial.limits.players, null);
   assert.equal(trial.limits.sites, null);
