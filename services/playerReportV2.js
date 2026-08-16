@@ -173,7 +173,7 @@ const average = (values = {}) => {
   return nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : null;
 };
 
-const generatePlayerReportV2 = async ({ academia, jugador, tutor, evaluaciones = [], stats = {}, comentarios = '', badges = [] }) => {
+const generatePlayerReportV2 = async ({ academia, jugador, tutor, evaluaciones = [], stats = {}, comentarios = '', badges = [], sportProfile = null }) => {
   const startedAt = Date.now();
   const theme = themeFor(academia);
   const [logo, photo] = await Promise.all([
@@ -186,30 +186,41 @@ const generatePlayerReportV2 = async ({ academia, jugador, tutor, evaluaciones =
   const previous = previousEval.datos_radar || {};
   const totalAttendance = (Number(stats.clases_presente) || 0) + (Number(stats.clases_ausente) || 0) + (Number(stats.clases_justificadas) || 0);
   const attendance = totalAttendance ? Math.round(((Number(stats.clases_presente) || 0) + (Number(stats.clases_justificadas) || 0)) * 100 / totalAttendance) : null;
+  const disciplineLabel = clean(sportProfile?.label, 'Deporte');
+  const roleLabel = clean(sportProfile?.roleLabel, 'Rol / especialidad');
+  const footballStats = sportProfile?.supportsFootballStats === true;
   const doc = new PDFDocument({ size: 'A4', margin: 42, info: { Title: `Informe de evolución - ${clean(jugador.nombre, 'Alumno')}` } });
   const bufferPromise = toBuffer(doc);
   const x = doc.page.margins.left;
   const w = contentWidth(doc);
-  brandBar(doc, academia, 'Informe de evolución deportiva', `Seguimiento privado · ${shortDate(new Date())}`, logo, theme);
+  brandBar(doc, academia, 'Informe de evolución deportiva', `${disciplineLabel} · seguimiento privado · ${shortDate(new Date())}`, logo, theme);
 
   const py = doc.y;
   portrait(doc, photo, x, py, 94, 108, theme);
   doc.fillColor(theme.primary).font('Helvetica-Bold').fontSize(19).text(clean(jugador.nombre).toUpperCase(), x + 114, py + 7, { width: w - 114, ellipsis: true });
-  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(9).text(clean(jugador.posicion_cancha, 'Posición por definir'), x + 114, py + 39);
+  doc.fillColor(theme.accent).font('Helvetica-Bold').fontSize(9).text(`${roleLabel}: ${clean(jugador.posicion_cancha, 'Sin definir')}`, x + 114, py + 39, { width: w - 114, ellipsis: true });
   const categories = (jugador.categorias || []).map((c) => c?.nombre).filter(Boolean).join(' · ');
   doc.fillColor(MUTED).font('Helvetica').fontSize(8).text(`Categoría: ${clean(categories, 'Sin categoría')}`, x + 114, py + 61);
   doc.text(`Nacimiento: ${formatDate(jugador.fecha_nacimiento)} · Tipo: ${clean(jugador.tipo_alumno, 'Alumno')}`, x + 114, py + 80);
   if (latestEval.created_at) doc.text(`Evaluación actual: ${shortDate(latestEval.created_at)}${previousEval.created_at ? ` · Anterior: ${shortDate(previousEval.created_at)}` : ''}`, x + 114, py + 98);
   doc.y = py + 124;
 
-  kpis(doc, [
-    { label: 'Promedio técnico', value: average(latest) === null ? '-' : `${average(latest)}/100` },
-    { label: 'Asistencia', value: attendance === null ? '-' : `${attendance}%` },
-    { label: 'Partidos', value: stats.partidos_jugados ?? 0 },
-    { label: 'Goles + asist.', value: (Number(stats.goles) || 0) + (Number(stats.asistencias) || 0) },
-  ], theme);
+  const mainKpis = footballStats
+    ? [
+        { label: 'Promedio perfil', value: average(latest) === null ? '-' : `${average(latest)}/100` },
+        { label: 'Asistencia', value: attendance === null ? '-' : `${attendance}%` },
+        { label: 'Partidos', value: stats.partidos_jugados ?? 0 },
+        { label: 'Goles + asist.', value: (Number(stats.goles) || 0) + (Number(stats.asistencias) || 0) },
+      ]
+    : [
+        { label: 'Promedio perfil', value: average(latest) === null ? '-' : `${average(latest)}/100` },
+        { label: 'Asistencia', value: attendance === null ? '-' : `${attendance}%` },
+        { label: 'Evaluaciones', value: evaluaciones.length },
+        { label: 'Encuentros', value: stats.partidos_jugados ?? 0 },
+      ];
+  kpis(doc, mainKpis, theme);
 
-  section(doc, 'Radar comparativo', 'Evaluación actual y evaluación anterior superpuestas por color', theme, doc.y - 2);
+  section(doc, 'Radar comparativo', `${disciplineLabel}: evaluación actual y anterior superpuestas por color`, theme, doc.y - 2);
   const panelY = doc.y;
   const leftW = 300;
   const gap = 14;
@@ -217,12 +228,12 @@ const generatePlayerReportV2 = async ({ academia, jugador, tutor, evaluaciones =
   doc.roundedRect(x, panelY, leftW, 252, 12).fill(WHITE).strokeColor(BORDER).lineWidth(0.7).stroke();
   dualRadar(doc, latest, previous, latestEval.created_at, previousEval.created_at, x + 8, panelY + 8, leftW - 16, 230);
   doc.roundedRect(x + leftW + gap, panelY, rightW, 252, 12).fill(LIGHT).strokeColor(BORDER).lineWidth(0.7).stroke();
-  doc.fillColor(theme.primary).font('Helvetica-Bold').fontSize(9).text('EVOLUCIÓN POR HABILIDAD', x + leftW + gap + 13, panelY + 14, { width: rightW - 26 });
+  doc.fillColor(theme.primary).font('Helvetica-Bold').fontSize(9).text('EVOLUCIÓN POR MÉTRICA', x + leftW + gap + 13, panelY + 14, { width: rightW - 26 });
   skillBars(doc, latest, previous, x + leftW + gap + 13, panelY + 38, rightW - 26);
   footer(doc, academia, 1);
 
   doc.addPage();
-  brandBar(doc, academia, 'Progreso, reconocimientos y próximos focos', 'Lectura para la familia', null, theme);
+  brandBar(doc, academia, 'Progreso, reconocimientos y próximos focos', `${disciplineLabel} · lectura para la familia`, null, theme);
   const ranked = Object.entries(latest).map(([name, score]) => ({ name, score: Number(score) || 0 })).sort((a, b) => b.score - a.score);
   const strengths = ranked.slice(0, 3);
   const focuses = [...ranked].sort((a, b) => a.score - b.score).slice(0, 3);
@@ -241,12 +252,20 @@ const generatePlayerReportV2 = async ({ academia, jugador, tutor, evaluaciones =
   doc.y = boxY + 118;
 
   section(doc, 'Actividad del período', null, theme);
-  kpis(doc, [
-    { label: 'Presente', value: stats.clases_presente ?? 0 },
-    { label: 'Ausente', value: stats.clases_ausente ?? 0 },
-    { label: 'MVP', value: stats.mvp ?? 0 },
-    { label: 'Goles', value: stats.goles ?? 0 },
-  ], theme, doc.y - 4);
+  const activityKpis = footballStats
+    ? [
+        { label: 'Presente', value: stats.clases_presente ?? 0 },
+        { label: 'Ausente', value: stats.clases_ausente ?? 0 },
+        { label: 'MVP', value: stats.mvp ?? 0 },
+        { label: 'Goles', value: stats.goles ?? 0 },
+      ]
+    : [
+        { label: 'Presente', value: stats.clases_presente ?? 0 },
+        { label: 'Ausente', value: stats.clases_ausente ?? 0 },
+        { label: 'Justificado', value: stats.clases_justificadas ?? 0 },
+        { label: 'Evaluaciones', value: evaluaciones.length },
+      ];
+  kpis(doc, activityKpis, theme, doc.y - 4);
 
   if (badges.length) {
     section(doc, 'Medallas y reconocimientos', 'Últimos reconocimientos registrados por la academia', theme, doc.y - 6);
