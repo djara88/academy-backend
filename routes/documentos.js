@@ -20,6 +20,51 @@ const sanitizeFilePart = (value) => String(value || 'alumno')
   .replace(/^_+|_+$/g, '')
   .slice(0, 80) || 'alumno';
 
+const cleanBadgeTitle = (value) => String(value || '')
+  .replace(/^[^\p{L}\p{N}]+/u, '')
+  .trim();
+
+const buildReportBadges = (badgeRows = [], legacyBadges = []) => {
+  const normalized = [];
+
+  (badgeRows || []).forEach((row) => {
+    const titulo = cleanBadgeTitle(row?.insignias?.titulo);
+    if (!titulo) return;
+    normalized.push({
+      fecha_otorgado: row.fecha_otorgado || null,
+      titulo,
+      descripcion: row.insignias?.descripcion || null,
+      icono_url: row.insignias?.icono_url || null,
+    });
+  });
+
+  (Array.isArray(legacyBadges) ? legacyBadges : []).forEach((badge) => {
+    const source = typeof badge === 'string' ? { nombre: badge } : (badge || {});
+    const titulo = cleanBadgeTitle(source.titulo || source.nombre);
+    if (!titulo) return;
+    normalized.push({
+      fecha_otorgado: source.fecha_otorgado || source.fecha || null,
+      titulo,
+      descripcion: source.descripcion || null,
+      icono_url: source.icono_url || null,
+    });
+  });
+
+  const unique = new Map();
+  normalized.forEach((badge) => {
+    const key = badge.titulo.toLocaleLowerCase('es-CL');
+    if (!unique.has(key)) unique.set(key, badge);
+  });
+
+  return [...unique.values()]
+    .sort((a, b) => {
+      const dateA = a.fecha_otorgado ? new Date(a.fecha_otorgado).getTime() : 0;
+      const dateB = b.fecha_otorgado ? new Date(b.fecha_otorgado).getTime() : 0;
+      return dateB - dateA;
+    })
+    .slice(0, 6);
+};
+
 const sendReportEmail = async ({ academia, tutor, jugador, pdfBuffer }) => {
   if (!tutor?.email || !process.env.BREVO_API_KEY || !process.env.BREVO_SENDER_EMAIL) return false;
   try {
@@ -64,7 +109,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
     const { data: jugador, error: jugadorError } = await supabase.from('jugadores')
       .select(`
         id,nombre,rut,fecha_nacimiento,posicion_cancha,tipo_alumno,certificado_medico,
-        foto_base64,foto_url,avatar_url,tutor_id,
+        foto_base64,foto_url,avatar_url,tutor_id,insignias,
         jugador_categoria ( categorias ( id, nombre ) ),
         partido_estadisticas ( goles, asistencias, es_mvp )
       `)
@@ -112,12 +157,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
       clases_justificadas: (asistencias || []).filter((row) => row.estado === 'Justificado').length,
     };
 
-    const badges = (badgeRows || []).map((row) => ({
-      fecha_otorgado: row.fecha_otorgado,
-      titulo: row.insignias?.titulo,
-      descripcion: row.insignias?.descripcion,
-      icono_url: row.insignias?.icono_url,
-    })).filter((badge) => badge.titulo);
+    const badges = buildReportBadges(badgeRows || [], jugador.insignias || []);
 
     const formattedPlayer = {
       ...jugador,
