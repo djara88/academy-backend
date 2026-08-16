@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireDirector } = require('../middleware/professorAccess');
 const { todayInChile, recalculateFinancialStatus } = require('../services/monthlyBilling');
 
 const moneyValue = (value) => Math.max(0, Number(value) || 0);
@@ -30,7 +31,7 @@ const loadEnrollmentContext = async ({ academiaId, jugadorId, sedeId, ramaId, ca
   return { player: playerResult.data, site: siteResult.data, branch: branchResult.data, category: categoryResult.data };
 };
 
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', authMiddleware, requireDirector, async (req, res) => {
   try {
     const { data, error } = await supabase.from('inscripciones_deportivas')
       .select(`id,jugador_id,sede_id,rama_id,categoria_id,estado,fecha_inicio,fecha_fin,monto_matricula,monto_mensualidad,es_principal,created_at,
@@ -46,7 +47,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/alumnos', authMiddleware, async (req, res) => {
+router.get('/alumnos', authMiddleware, requireDirector, async (req, res) => {
   try {
     const { data: players, error: playersError } = await supabase.from('jugadores')
       .select('id,nombre,rut,fecha_nacimiento,foto_url,avatar_url,tutor_id')
@@ -74,9 +75,8 @@ router.get('/alumnos', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, requireDirector, async (req, res) => {
   let enrollment = null;
-  let categoryLinked = false;
   const createdChargeIds = [];
   try {
     const academiaId = req.user.academia_id;
@@ -127,7 +127,6 @@ router.post('/', authMiddleware, async (req, res) => {
         { onConflict: 'jugador_id,categoria_id', ignoreDuplicates: true }
       );
       if (categoryError) throw categoryError;
-      categoryLinked = true;
     }
 
     if (matricula > 0) {
@@ -194,15 +193,12 @@ router.post('/', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error creando inscripción deportiva:', error?.message || error);
     if (createdChargeIds.length) await supabase.from('cobros').delete().in('id', createdChargeIds);
-    if (categoryLinked && enrollment?.categoria_id) {
-      // No eliminamos la relación si ya existía antes; el upsert es idempotente y la categoría puede ser usada por otra inscripción histórica.
-    }
     if (enrollment?.id) await supabase.from('inscripciones_deportivas').delete().eq('id', enrollment.id);
     return res.status(error?.statusCode || 500).json({ success: false, error: error?.statusCode ? error.message : 'No fue posible crear la inscripción deportiva.' });
   }
 });
 
-router.patch('/:id/estado', authMiddleware, async (req, res) => {
+router.patch('/:id/estado', authMiddleware, requireDirector, async (req, res) => {
   try {
     const estado = String(req.body?.estado || '').trim();
     if (!['Activa','Inactiva','Retirada'].includes(estado)) return res.status(400).json({ success: false, error: 'Estado de inscripción no válido.' });
