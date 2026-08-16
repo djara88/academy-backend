@@ -145,6 +145,7 @@ const privacyRequestRoutes = require('./routes/privacyRequests');
 const chatRoutes = require('./routes/chat');
 const systemMetricsRoutes = require('./routes/systemMetrics');
 const estructuraRoutes = require('./routes/estructura');
+const sportProfileRoutes = require('./routes/sportProfiles');
 
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
@@ -153,6 +154,7 @@ app.use('/api/importaciones', importacionRoutes);
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
+app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
 app.use('/api/partidos', partidoRoutes);
