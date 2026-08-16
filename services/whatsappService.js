@@ -8,6 +8,7 @@ const API_KEY = process.env.EVOLUTION_API_KEY;
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET;
 const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
 const EVOLUTION_TIMEOUT_MS = Math.max(3000, Number(process.env.EVOLUTION_TIMEOUT_MS || 12000));
+const WHATSAPP_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'SEND_MESSAGE_UPDATE'];
 
 const getHeaders = () => ({
   'Content-Type': 'application/json',
@@ -40,7 +41,7 @@ const configurarWebhook = async (academiaId) => {
   if (!EVOLUTION_URL) return;
 
   const instanceName = `academia_${academiaId}`;
-  const webhookUrl = `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`;
+  const webhookUrl = `${BACKEND_URL}/api/whatsapp-bridge/webhook/${academiaId}`;
   const webhookHeaders = getWebhookHeaders();
 
   try {
@@ -53,14 +54,14 @@ const configurarWebhook = async (academiaId) => {
           url: webhookUrl,
           byEvents: false,
           base64: false,
-          events: ['MESSAGES_UPSERT'],
+          events: WHATSAPP_EVENTS,
           headers: webhookHeaders,
         }
       })
     });
 
     if (response.ok) {
-      console.log('🔗 Webhook seguro de WhatsApp configurado con éxito.');
+      console.log('🔗 Webhook omnicanal de WhatsApp configurado con éxito.');
     } else {
       console.warn(`⚠️ No se pudo configurar un webhook de WhatsApp (HTTP ${response.status}).`);
     }
@@ -94,10 +95,10 @@ const conectarAcademia = async (academiaId) => {
           integration: 'WHATSAPP-BAILEYS',
           webhook: {
             enabled: true,
-            url: `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`,
+            url: `${BACKEND_URL}/api/whatsapp-bridge/webhook/${academiaId}`,
             byEvents: false,
             base64: false,
-            events: ['MESSAGES_UPSERT'],
+            events: WHATSAPP_EVENTS,
             headers: getWebhookHeaders(),
           }
         })
@@ -165,7 +166,7 @@ const sincronizarWebhooksActivos = async () => {
       await configurarWebhook(academia.id);
     }
 
-    console.log(`🔐 Webhooks seguros sincronizados para ${(academias || []).length} academia(s) activa(s).`);
+    console.log(`🔐 Webhooks omnicanal sincronizados para ${(academias || []).length} academia(s) activa(s).`);
   } catch (error) {
     console.error('❌ No fue posible sincronizar los webhooks seguros al iniciar:', error?.message || 'Error desconocido');
   }
