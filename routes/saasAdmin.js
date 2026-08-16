@@ -60,6 +60,20 @@ router.get('/monitor', async (_req, res) => {
   }
 });
 
+router.get('/activation-funnel', async (req, res) => {
+  try {
+    const requestedDays = Number(req.query.days || 30);
+    const days = Math.min(Math.max(Number.isFinite(requestedDays) ? Math.round(requestedDays) : 30, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase.rpc('obtener_embudo_activacion_syncademia', { p_since: since });
+    if (error) throw error;
+    res.json({ success: true, data: { ...(data || {}), windowDays: days } });
+  } catch (error) {
+    console.error('Error cargando embudo de activación:', error?.message || 'Error desconocido');
+    res.status(500).json({ error: 'No fue posible cargar el embudo de activación.' });
+  }
+});
+
 router.get('/resumen', async (_req, res) => {
   try {
     await supabase.rpc('refrescar_pruebas_vencidas');
@@ -146,9 +160,6 @@ router.patch('/cobros/:id/pagado', async (req, res) => {
     if (chargeError || !charge) return res.status(404).json({ error: 'Cobro no encontrado.' });
     if (charge.estado === 'pagado') return res.json({ success: true, alreadyPaid: true });
 
-    // Un cobro Fundador puede llevar días pendiente. Antes de registrar dinero,
-    // renueva/reasigna su reserva si aún existen cupos. Si ya se agotaron, se
-    // rechaza aquí para no dejar un cobro pagado sin licencia activable.
     await ensureFounderReservationBeforePayment(charge);
 
     const { data, error } = await supabase.rpc('marcar_cobro_plataforma_pagado', {
