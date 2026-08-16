@@ -1,0 +1,23 @@
+name: Production Load Test Phase 2
+
+on:
+  push:
+    branches:
+      - agent/production-load-test-phase2
+
+permissions:
+  contents: read
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Ejecutar fase 2 contra producción
+        run: node scripts/productionLoadTestPhase2.js
