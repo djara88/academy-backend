@@ -1,0 +1,40 @@
+name: Apply prematricula RUT guard patch
+
+on:
+  push:
+    branches:
+      - agent/prematricula-rut-guard
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[prematricula-rut-patch]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/prematricula-rut-guard
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Aplicar guardia de RUT y edición
+        run: python3 scripts/patch_prematricula_rut_guard.py
+      - name: Validar backend
+        run: |
+          npm ci
+          node --check routes/prematriculas.js
+          node --check services/enrollmentService.js
+          node --check services/rutGuard.js
+          npm test
+          npm audit --omit=dev --audit-level=high
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add routes/prematriculas.js services/enrollmentService.js
+          git diff --cached --quiet && exit 0
+          git commit -m "Bloquear RUT duplicado y editar prematrículas [prematricula-rut-patch]"
+          git push origin HEAD:agent/prematricula-rut-guard
