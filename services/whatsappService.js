@@ -8,6 +8,7 @@ const API_KEY = process.env.EVOLUTION_API_KEY;
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET;
 const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
 const EVOLUTION_TIMEOUT_MS = Math.max(3000, Number(process.env.EVOLUTION_TIMEOUT_MS || 12000));
+const WHATSAPP_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'SEND_MESSAGE_UPDATE'];
 
 const getHeaders = () => ({
   'Content-Type': 'application/json',
@@ -36,11 +37,25 @@ const parseResponse = async (response) => {
   }
 };
 
+const extractGroupJid = (data) => {
+  const candidates = [
+    data?.id,
+    data?.groupJid,
+    data?.group?.id,
+    data?.group?.groupJid,
+    data?.group?.gid,
+    data?.data?.id,
+    data?.data?.groupJid,
+    data?.data?.group?.id,
+  ];
+  return candidates.map((value) => String(value || '').trim()).find((value) => value.includes('@g.us')) || null;
+};
+
 const configurarWebhook = async (academiaId) => {
   if (!EVOLUTION_URL) return;
 
   const instanceName = `academia_${academiaId}`;
-  const webhookUrl = `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`;
+  const webhookUrl = `${BACKEND_URL}/api/whatsapp-bridge/webhook/${academiaId}`;
   const webhookHeaders = getWebhookHeaders();
 
   try {
@@ -53,14 +68,14 @@ const configurarWebhook = async (academiaId) => {
           url: webhookUrl,
           byEvents: false,
           base64: false,
-          events: ['MESSAGES_UPSERT'],
+          events: WHATSAPP_EVENTS,
           headers: webhookHeaders,
         }
       })
     });
 
     if (response.ok) {
-      console.log('🔗 Webhook seguro de WhatsApp configurado con éxito.');
+      console.log('🔗 Webhook omnicanal de WhatsApp configurado con éxito.');
     } else {
       console.warn(`⚠️ No se pudo configurar un webhook de WhatsApp (HTTP ${response.status}).`);
     }
@@ -94,10 +109,10 @@ const conectarAcademia = async (academiaId) => {
           integration: 'WHATSAPP-BAILEYS',
           webhook: {
             enabled: true,
-            url: `${BACKEND_URL}/api/whatsapp/webhook/${academiaId}`,
+            url: `${BACKEND_URL}/api/whatsapp-bridge/webhook/${academiaId}`,
             byEvents: false,
             base64: false,
-            events: ['MESSAGES_UPSERT'],
+            events: WHATSAPP_EVENTS,
             headers: getWebhookHeaders(),
           }
         })
@@ -147,6 +162,56 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
   }
 };
 
+const crearGrupo = async (academiaId, { subject, description = '', participants = [] }) => {
+  if (!EVOLUTION_URL) throw new Error('EVOLUTION_API_URL no está configurada');
+  const instanceName = `academia_${academiaId}`;
+  const cleanParticipants = [...new Set((participants || []).map((value) => String(value || '').replace(/\D/g, '')).filter((value) => value.length >= 8))];
+  if (!subject || cleanParticipants.length === 0) throw new Error('El grupo necesita un nombre y al menos un participante válido.');
+
+  const response = await evolutionFetch(`${EVOLUTION_URL}/group/create/${instanceName}`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      subject: String(subject).trim().slice(0, 100),
+      description: String(description || '').trim().slice(0, 500),
+      participants: cleanParticipants,
+    }),
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data?.message || 'No fue posible crear el grupo de WhatsApp.');
+  return { data, groupJid: extractGroupJid(data), participants: cleanParticipants };
+};
+
+const actualizarParticipantesGrupo = async (academiaId, groupJid, action, participants = []) => {
+  if (!EVOLUTION_URL) throw new Error('EVOLUTION_API_URL no está configurada');
+  const instanceName = `academia_${academiaId}`;
+  const cleanParticipants = [...new Set((participants || []).map((value) => String(value || '').replace(/\D/g, '')).filter((value) => value.length >= 8))];
+  if (!groupJid || cleanParticipants.length === 0) return { success: true, skipped: true };
+  if (!['add', 'remove', 'promote', 'demote'].includes(action)) throw new Error('Acción de grupo no válida.');
+
+  const response = await evolutionFetch(`${EVOLUTION_URL}/group/updateParticipant/${instanceName}`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ groupJid, action, participants: cleanParticipants }),
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data?.message || 'No fue posible actualizar los participantes del grupo.');
+  return data;
+};
+
+const obtenerParticipantesGrupo = async (academiaId, groupJid) => {
+  if (!EVOLUTION_URL) throw new Error('EVOLUTION_API_URL no está configurada');
+  const instanceName = `academia_${academiaId}`;
+  const response = await evolutionFetch(`${EVOLUTION_URL}/group/participants/${instanceName}?groupJid=${encodeURIComponent(groupJid)}`, {
+    method: 'GET', headers: getHeaders(),
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data?.message || 'No fue posible consultar los participantes del grupo.');
+  return data?.participants || data?.data?.participants || [];
+};
+
+const enviarMensajeGrupo = async (academiaId, groupJid, mensaje) => enviarMensaje(academiaId, groupJid, mensaje);
+
 const sincronizarWebhooksActivos = async () => {
   if (!EVOLUTION_URL || !API_KEY || !WEBHOOK_SECRET) {
     console.warn('⚠️ Sincronización automática de webhooks omitida: configuración incompleta.');
@@ -165,7 +230,7 @@ const sincronizarWebhooksActivos = async () => {
       await configurarWebhook(academia.id);
     }
 
-    console.log(`🔐 Webhooks seguros sincronizados para ${(academias || []).length} academia(s) activa(s).`);
+    console.log(`🔐 Webhooks omnicanal sincronizados para ${(academias || []).length} academia(s) activa(s).`);
   } catch (error) {
     console.error('❌ No fue posible sincronizar los webhooks seguros al iniciar:', error?.message || 'Error desconocido');
   }
@@ -178,5 +243,9 @@ setImmediate(() => {
 module.exports = {
   conectarAcademia,
   enviarMensaje,
-  configurarWebhook
+  configurarWebhook,
+  crearGrupo,
+  actualizarParticipantesGrupo,
+  obtenerParticipantesGrupo,
+  enviarMensajeGrupo,
 };
