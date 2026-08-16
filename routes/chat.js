@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/auth');
 const { isDirector, isGuardian, requireDirector } = require('../middleware/professorAccess');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
+const { normalizePhone, sendDirectorMessageToWhatsApp } = require('../services/chatWhatsApp');
 
 const router = express.Router();
 const guardianFeature = requireFeature(FEATURES.GUARDIANS);
@@ -11,10 +12,13 @@ const safeText = (value, max = 4000) => String(value ?? '').trim().slice(0, max)
 
 router.use(authMiddleware, ...guardianFeature);
 
+const conversationSelect = 'id,academia_id,tutor_id,jugador_id,asunto,estado,last_message_at,created_at,updated_at,tutores(id,nombre,nombre_completo,email,telefono,usuario_id,acceso_activo),jugadores(id,nombre)';
+const messageSelect = 'id,conversation_id,sender_user_id,sender_role,body,origin_channel,whatsapp_status,whatsapp_error,whatsapp_updated_at,created_at,edited_at,deleted_at';
+
 const getGuardianTutor = async (user) => {
   if (!isGuardian(user)) return null;
   const { data, error } = await supabase.from('tutores')
-    .select('id,usuario_id,nombre_completo,nombre,email,acceso_activo')
+    .select('id,usuario_id,nombre_completo,nombre,email,telefono,acceso_activo')
     .eq('academia_id', user.academia_id)
     .eq('usuario_id', user.id)
     .maybeSingle();
@@ -24,7 +28,7 @@ const getGuardianTutor = async (user) => {
 
 const getConversation = async (conversationId, user) => {
   const { data, error } = await supabase.from('chat_conversations')
-    .select('id,academia_id,tutor_id,jugador_id,asunto,estado,last_message_at,created_at,updated_at,tutores(id,nombre,nombre_completo,email),jugadores(id,nombre)')
+    .select(conversationSelect)
     .eq('id', conversationId)
     .eq('academia_id', user.academia_id)
     .maybeSingle();
@@ -80,14 +84,20 @@ router.get('/contacts', requireDirector, async (req, res) => {
     ]);
     if (playerError) throw playerError;
     if (linkError) throw linkError;
-    const data = (tutors || []).map((tutor) => ({
-      ...tutor,
-      can_chat: Boolean(tutor.usuario_id && tutor.acceso_activo !== false),
-      jugadores: (players || []).filter((player) =>
-        [player.tutor_id, player.apoderado_id, player.tutor_principal_id].some((id) => String(id || '') === String(tutor.id))
-        || (links || []).some((link) => String(link.tutor_id) === String(tutor.id) && String(link.jugador_id) === String(player.id))
-      ).map((player) => ({ id: player.id, nombre: player.nombre })),
-    }));
+    const data = (tutors || []).map((tutor) => {
+      const canPortal = Boolean(tutor.usuario_id && tutor.acceso_activo !== false);
+      const canWhatsApp = normalizePhone(tutor.telefono).length >= 8;
+      return {
+        ...tutor,
+        can_portal: canPortal,
+        can_whatsapp: canWhatsApp,
+        can_chat: canPortal || canWhatsApp,
+        jugadores: (players || []).filter((player) =>
+          [player.tutor_id, player.apoderado_id, player.tutor_principal_id].some((id) => String(id || '') === String(tutor.id))
+          || (links || []).some((link) => String(link.tutor_id) === String(tutor.id) && String(link.jugador_id) === String(player.id))
+        ).map((player) => ({ id: player.id, nombre: player.nombre })),
+      };
+    });
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error cargando contactos del chat:', error?.message || 'Error desconocido');
@@ -104,7 +114,7 @@ router.get('/conversations', async (req, res) => {
     let rows = [];
     if (director) {
       const { data, error } = await supabase.from('chat_conversations')
-        .select('id,academia_id,tutor_id,jugador_id,asunto,estado,last_message_at,created_at,updated_at,tutores(id,nombre,nombre_completo,email),jugadores(id,nombre)')
+        .select(conversationSelect)
         .eq('academia_id', req.user.academia_id)
         .order('last_message_at', { ascending: false, nullsFirst: false });
       if (error) throw error;
@@ -117,13 +127,31 @@ router.get('/conversations', async (req, res) => {
     } else {
       const tutor = await getGuardianTutor(req.user);
       if (!tutor) return res.json({ success: true, data: [] });
+
+      // Si la familia venía conversando solo por WhatsApp y luego activa el portal,
+      // incorporamos automáticamente su cuenta a todo el historial de ese tutor.
+      const { data: familyConversations, error: familyError } = await supabase.from('chat_conversations')
+        .select('id').eq('academia_id', req.user.academia_id).eq('tutor_id', tutor.id);
+      if (familyError) throw familyError;
+      if (familyConversations?.length) {
+        const rowsToUpsert = familyConversations.map((item) => ({
+          conversation_id: item.id,
+          user_id: req.user.id,
+          participant_role: 'apoderado',
+          active: true,
+        }));
+        const { error: upsertError } = await supabase.from('chat_participants')
+          .upsert(rowsToUpsert, { onConflict: 'conversation_id,user_id', ignoreDuplicates: true });
+        if (upsertError) throw upsertError;
+      }
+
       const { data: participants, error: participantError } = await supabase.from('chat_participants')
         .select('conversation_id').eq('user_id', req.user.id).eq('active', true);
       if (participantError) throw participantError;
       const ids = (participants || []).map((item) => item.conversation_id);
       if (ids.length) {
         const { data, error } = await supabase.from('chat_conversations')
-          .select('id,academia_id,tutor_id,jugador_id,asunto,estado,last_message_at,created_at,updated_at,tutores(id,nombre,nombre_completo,email),jugadores(id,nombre)')
+          .select(conversationSelect)
           .eq('academia_id', req.user.academia_id).in('id', ids)
           .order('last_message_at', { ascending: false, nullsFirst: false });
         if (error) throw error;
@@ -134,7 +162,7 @@ router.get('/conversations', async (req, res) => {
     const ids = rows.map((row) => row.id);
     const [{ data: reads, error: readError }, { data: messages, error: messageError }] = await Promise.all([
       ids.length ? supabase.from('chat_participants').select('conversation_id,last_read_at').eq('user_id', req.user.id).in('conversation_id', ids) : Promise.resolve({ data: [], error: null }),
-      ids.length ? supabase.from('chat_messages').select('id,conversation_id,sender_user_id,sender_role,body,created_at,deleted_at').in('conversation_id', ids).is('deleted_at', null).order('created_at', { ascending: false }).limit(2000) : Promise.resolve({ data: [], error: null }),
+      ids.length ? supabase.from('chat_messages').select(messageSelect).in('conversation_id', ids).is('deleted_at', null).order('created_at', { ascending: false }).limit(2000) : Promise.resolve({ data: [], error: null }),
     ]);
     if (readError) throw readError;
     if (messageError) throw messageError;
@@ -166,12 +194,14 @@ router.post('/conversations', requireDirector, async (req, res) => {
     const asunto = safeText(req.body?.asunto, 180) || 'Conversación con la familia';
     if (!tutorId) return res.status(400).json({ error: 'Selecciona un apoderado.' });
     const { data: tutor, error: tutorError } = await supabase.from('tutores')
-      .select('id,nombre,nombre_completo,usuario_id,acceso_activo')
+      .select('id,nombre,nombre_completo,telefono,usuario_id,acceso_activo')
       .eq('id', tutorId).eq('academia_id', req.user.academia_id).maybeSingle();
     if (tutorError) throw tutorError;
     if (!tutor) return res.status(404).json({ error: 'Apoderado no encontrado.' });
-    if (!tutor.usuario_id || tutor.acceso_activo === false) {
-      return res.status(409).json({ error: 'Primero activa el acceso al portal de este apoderado para poder conversar.' });
+    const canPortal = Boolean(tutor.usuario_id && tutor.acceso_activo !== false);
+    const canWhatsApp = normalizePhone(tutor.telefono).length >= 8;
+    if (!canPortal && !canWhatsApp) {
+      return res.status(409).json({ error: 'Este apoderado necesita un teléfono válido o acceso activo al portal para iniciar una conversación.' });
     }
     if (playerId && !await linkedPlayerToTutor(req.user.academia_id, playerId, tutor.id)) {
       return res.status(400).json({ error: 'El alumno seleccionado no está vinculado a este apoderado.' });
@@ -199,11 +229,16 @@ router.post('/conversations', requireDirector, async (req, res) => {
     }
     const participants = [
       { conversation_id: conversation.id, user_id: req.user.id, participant_role: 'director', active: true, last_read_at: new Date().toISOString() },
-      { conversation_id: conversation.id, user_id: tutor.usuario_id, participant_role: 'apoderado', active: true },
     ];
+    if (canPortal) participants.push({ conversation_id: conversation.id, user_id: tutor.usuario_id, participant_role: 'apoderado', active: true });
     const { error: participantError } = await supabase.from('chat_participants').upsert(participants, { onConflict: 'conversation_id,user_id' });
     if (participantError) throw participantError;
-    res.status(existing ? 200 : 201).json({ success: true, data: conversation, already_exists: Boolean(existing) });
+    res.status(existing ? 200 : 201).json({
+      success: true,
+      data: conversation,
+      already_exists: Boolean(existing),
+      channels: { portal: canPortal, whatsapp: canWhatsApp },
+    });
   } catch (error) {
     console.error('Error creando conversación:', error?.message || 'Error desconocido');
     res.status(500).json({ error: 'No fue posible crear la conversación.' });
@@ -217,7 +252,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
     await ensureParticipant(conversation.id, req.user);
     const limit = Math.min(Math.max(Number(req.query.limit || 100), 20), 200);
     let query = supabase.from('chat_messages')
-      .select('id,conversation_id,sender_user_id,sender_role,body,created_at,edited_at,deleted_at')
+      .select(messageSelect)
       .eq('conversation_id', conversation.id)
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -246,11 +281,25 @@ router.post('/conversations/:id/messages', async (req, res) => {
       sender_user_id: req.user.id,
       sender_role: senderRole,
       body,
-    }).select('id,conversation_id,sender_user_id,sender_role,body,created_at').single();
+      origin_channel: 'portal',
+    }).select(messageSelect).single();
     if (error) throw error;
     await supabase.from('chat_participants').update({ last_read_at: data.created_at, active: true })
       .eq('conversation_id', conversation.id).eq('user_id', req.user.id);
-    res.status(201).json({ success: true, data });
+
+    let transport = { attempted: false, status: null };
+    if (senderRole === 'director') {
+      transport = await sendDirectorMessageToWhatsApp({
+        academyId: req.user.academia_id,
+        tutorId: conversation.tutor_id,
+        body,
+        chatMessageId: data.id,
+      });
+    }
+
+    const { data: refreshed } = await supabase.from('chat_messages')
+      .select(messageSelect).eq('id', data.id).maybeSingle();
+    res.status(201).json({ success: true, data: refreshed || data, whatsapp: transport });
   } catch (error) {
     console.error('Error enviando mensaje:', error?.message || 'Error desconocido');
     res.status(500).json({ error: 'No fue posible enviar el mensaje.' });
