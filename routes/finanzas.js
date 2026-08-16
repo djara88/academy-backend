@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const {
+  ensureMonthlyChargesForAcademy,
+  recalculateFinancialStatus,
+  summarizeCharges,
+  todayInChile,
+} = require('../services/monthlyBilling');
 
 const failIfError = (result, context) => {
   if (result.error) throw new Error(`${context}: ${result.error.message}`);
@@ -14,11 +20,12 @@ const asMoney = (value) => Number(value || 0);
 router.get('/resumen', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const billing = await ensureMonthlyChargesForAcademy(academia_id);
     const [resCobros, resPagos, resEgresos, resJugadores] = await Promise.all([
-      supabase.from('cobros').select('monto, monto_pagado, estado').eq('academia_id', academia_id),
+      supabase.from('cobros').select('jugador_id,monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academia_id),
       supabase.from('pagos').select('monto').eq('academia_id', academia_id),
       supabase.from('egresos').select('monto').eq('academia_id', academia_id).is('anulado_at', null),
-      supabase.from('jugadores').select('id, estado_financiero').eq('academia_id', academia_id)
+      supabase.from('jugadores').select('id').eq('academia_id', academia_id)
     ]);
 
     const cobros = rows(resCobros, 'No se pudieron leer los cobros');
@@ -26,25 +33,33 @@ router.get('/resumen', authMiddleware, async (req, res) => {
     const egresos = rows(resEgresos, 'No se pudieron leer los egresos');
     const jugadores = rows(resJugadores, 'No se pudieron leer los jugadores');
     const totalIngresosReales = pagos.reduce((total, pago) => total + asMoney(pago.monto), 0);
-    const totalPorCobrar = cobros.reduce((total, cobro) => {
-      if (['Pagado', 'Anulado'].includes(cobro.estado)) return total;
+    const vigentes = cobros.filter((cobro) => !['Pagado', 'Anulado'].includes(cobro.estado));
+    const totalPorCobrar = vigentes.reduce((total, cobro) => total + Math.max(asMoney(cobro.monto) - asMoney(cobro.monto_pagado), 0), 0);
+    const totalVencido = vigentes.reduce((total, cobro) => {
+      if (!cobro.fecha_vencimiento || cobro.fecha_vencimiento >= billing.today) return total;
       return total + Math.max(asMoney(cobro.monto) - asMoney(cobro.monto_pagado), 0);
     }, 0);
+    const morosos = new Set(vigentes
+      .filter((cobro) => cobro.jugador_id && cobro.fecha_vencimiento && cobro.fecha_vencimiento < billing.today && Math.max(asMoney(cobro.monto) - asMoney(cobro.monto_pagado), 0) > 0)
+      .map((cobro) => cobro.jugador_id));
     const totalEgresos = egresos.reduce((total, egreso) => total + asMoney(egreso.monto), 0);
-    const alumnosMorosos = jugadores.filter(j => j.estado_financiero === 'Moroso').length;
+    const alumnosMorosos = morosos.size;
 
     res.json({
       success: true,
       data: {
         totalIngresosReales,
         totalPorCobrar,
+        totalVencido,
+        totalPorVencer: Math.max(totalPorCobrar - totalVencido, 0),
         totalEgresos,
         balanceNeto: totalIngresosReales - totalEgresos,
         totalAlumnos: jugadores.length,
         alumnosMorosos,
         tasaMorosidad: jugadores.length
           ? Number(((alumnosMorosos / jugadores.length) * 100).toFixed(1))
-          : 0
+          : 0,
+        calendarioMensual: billing,
       }
     });
   } catch (error) {
@@ -56,10 +71,11 @@ router.get('/resumen', authMiddleware, async (req, res) => {
 router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
+    const billing = await ensureMonthlyChargesForAcademy(academia_id);
     const [resJugadores, resCobros] = await Promise.all([
       supabase
         .from('jugadores')
-        .select('id, nombre, foto_base64, estado_financiero, monto_matricula, abono_matricula, monto_mensualidad, tutor_id, tutores:tutores!jugadores_tutor_id_fkey(nombre_completo, telefono)')
+        .select('id,nombre,foto_base64,estado_financiero,monto_matricula,abono_matricula,monto_mensualidad,tutor_id,tutores:tutores!jugadores_tutor_id_fkey(nombre_completo,telefono)')
         .eq('academia_id', academia_id)
         .order('nombre', { ascending: true }),
       supabase
@@ -74,9 +90,8 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
     const pendientes = [];
 
     for (const jugador of jugadores) {
-      const delJugador = cobros.filter(c => c.jugador_id === jugador.id);
+      const delJugador = cobros.filter(c => c.jugador_id === jugador.id && c.estado !== 'Anulado');
       const montoMatricula = asMoney(jugador.monto_matricula);
-      const montoMensualidad = asMoney(jugador.monto_mensualidad);
 
       if (!delJugador.some(c => c.tipo_concepto === 'Matrícula') && montoMatricula > 0) {
         pendientes.push({
@@ -88,25 +103,9 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
             monto: montoMatricula,
             monto_pagado: 0,
             estado: 'Pendiente',
-            fecha_vencimiento: new Date().toISOString().split('T')[0]
+            fecha_vencimiento: billing.today
           },
           abono: Math.min(asMoney(jugador.abono_matricula), montoMatricula)
-        });
-      }
-
-      if (!delJugador.some(c => c.tipo_concepto === 'Mensualidad') && montoMensualidad > 0) {
-        pendientes.push({
-          cobro: {
-            academia_id,
-            jugador_id: jugador.id,
-            concepto: 'Mensualidad Inicial',
-            tipo_concepto: 'Mensualidad',
-            monto: montoMensualidad,
-            monto_pagado: 0,
-            estado: 'Pendiente',
-            fecha_vencimiento: new Date().toISOString().split('T')[0]
-          },
-          abono: 0
         });
       }
     }
@@ -130,6 +129,7 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
     }
 
     if (pendientes.length) {
+      await recalculateFinancialStatus(academia_id);
       cobros = rows(await supabase
         .from('cobros')
         .select('*')
@@ -142,8 +142,15 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
       const vigentes = cobrosJugador.filter(c => c.estado !== 'Anulado');
       const deudaTotal = vigentes.reduce((total, c) => total + asMoney(c.monto), 0);
       const pagadoTotal = vigentes.reduce((total, c) => total + asMoney(c.monto_pagado), 0);
-      const saldoPendiente = Math.max(deudaTotal - pagadoTotal, 0);
-      return { ...jugador, cobros: cobrosJugador, deudaTotal, pagadoTotal, saldoPendiente, alDia: saldoPendiente <= 0 };
+      const resumenCuenta = summarizeCharges(cobrosJugador, { today: billing.today, warningDays: billing.warningDays });
+      return {
+        ...jugador,
+        cobros: cobrosJugador,
+        deudaTotal,
+        pagadoTotal,
+        ...resumenCuenta,
+        alDia: resumenCuenta.saldoVencido <= 0,
+      };
     });
 
     res.json({ success: true, data: cuentas });
@@ -170,6 +177,7 @@ router.put('/cobros/:id/pagar', authMiddleware, async (req, res) => {
       p_usuario_id: req.user.id
     }), 'No se pudo registrar el pago');
 
+    await recalculateFinancialStatus(req.user.academia_id);
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en PUT /api/finanzas/cobros/:id/pagar:', error);
@@ -181,7 +189,7 @@ router.get('/pagos', authMiddleware, async (req, res) => {
   try {
     const data = rows(await supabase
       .from('pagos')
-      .select('id, cobro_id, jugador_id, monto, metodo_pago, fecha_pago, observaciones, comprobante_ref, cobro:cobros!pagos_cobro_id_fkey(concepto, tipo_concepto), jugador:jugadores!pagos_jugador_id_fkey(nombre)')
+      .select('id,cobro_id,jugador_id,monto,metodo_pago,fecha_pago,observaciones,comprobante_ref,cobro:cobros!pagos_cobro_id_fkey(concepto,tipo_concepto),jugador:jugadores!pagos_jugador_id_fkey(nombre)')
       .eq('academia_id', req.user.academia_id)
       .order('fecha_pago', { ascending: false }), 'No se pudieron leer los pagos');
     res.json({ success: true, data });
@@ -207,6 +215,7 @@ router.post('/cobros', authMiddleware, async (req, res) => {
       .maybeSingle(), 'No se pudo validar el jugador');
     if (!jugador) return res.status(404).json({ success: false, error: 'Jugador no encontrado en la academia.' });
 
+    const dueDate = fecha_vencimiento || todayInChile();
     const data = failIfError(await supabase.from('cobros').insert([{
       academia_id,
       jugador_id,
@@ -215,12 +224,11 @@ router.post('/cobros', authMiddleware, async (req, res) => {
       monto,
       monto_pagado: 0,
       estado: 'Pendiente',
-      fecha_vencimiento: fecha_vencimiento || new Date().toISOString().split('T')[0],
+      fecha_vencimiento: dueDate,
       observaciones: observaciones || null
     }]).select().single(), 'No se pudo crear el cobro');
 
-    await supabase.from('jugadores').update({ estado_financiero: 'Moroso' })
-      .eq('id', jugador_id).eq('academia_id', academia_id);
+    await recalculateFinancialStatus(academia_id);
     res.status(201).json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -255,7 +263,7 @@ router.post('/egresos', authMiddleware, async (req, res) => {
       centro_costo: centro_costo || 'General',
       monto,
       metodo_pago: metodo_pago || 'Transferencia',
-      fecha_gasto: fecha_gasto || new Date().toISOString().split('T')[0],
+      fecha_gasto: fecha_gasto || todayInChile(),
       observaciones: observaciones || null
     }]).select().single(), 'No se pudo crear el egreso');
     res.status(201).json({ success: true, data });
@@ -285,10 +293,10 @@ router.get('/flujo-caja', authMiddleware, async (req, res) => {
     const { academia_id } = req.user;
     const [resPagos, resEgresos] = await Promise.all([
       supabase.from('pagos')
-        .select('id, monto, fecha_pago, metodo_pago, observaciones, cobro:cobros!pagos_cobro_id_fkey(concepto), jugador:jugadores!pagos_jugador_id_fkey(nombre)')
+        .select('id,monto,fecha_pago,metodo_pago,observaciones,cobro:cobros!pagos_cobro_id_fkey(concepto),jugador:jugadores!pagos_jugador_id_fkey(nombre)')
         .eq('academia_id', academia_id),
       supabase.from('egresos')
-        .select('id, concepto, monto, fecha_gasto, metodo_pago, categoria_gasto, centro_costo')
+        .select('id,concepto,monto,fecha_gasto,metodo_pago,categoria_gasto,centro_costo')
         .eq('academia_id', academia_id)
         .is('anulado_at', null)
     ]);
