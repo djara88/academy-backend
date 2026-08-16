@@ -144,6 +144,7 @@ const subscriptionRoutes = require('./routes/subscriptions');
 const privacyRequestRoutes = require('./routes/privacyRequests');
 const chatRoutes = require('./routes/chat');
 const systemMetricsRoutes = require('./routes/systemMetrics');
+const estructuraRoutes = require('./routes/estructura');
 
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
@@ -170,6 +171,7 @@ app.use('/api/saas-admin', saasAdminRoutes);
 app.use('/api/saas-admin/metrics', systemMetricsRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/privacy-requests', privacyRequestRoutes);
+app.use('/api/estructura', estructuraRoutes);
 app.use('/api/chat', chatRoutes);
 
 app.use((error, _req, res, next) => {
