@@ -8,6 +8,12 @@ const evolutionUrl = String(process.env.EVOLUTION_API_URL || '').replace(/\/$/, 
 
 const statusFrom = (ok, warning = false) => ok ? (warning ? 'warning' : 'ok') : 'critical';
 const safeError = (error) => String(error?.message || 'Error de conexión').slice(0, 180);
+const sanitizeRoutePath = (value) => String(value || '')
+  .split('?')[0]
+  .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ':id')
+  .replace(/\/[A-Za-z0-9_-]{20,}(?=\/|$)/g, '/:token')
+  .replace(/\/\d{4,}(?=\/|$)/g, '/:id')
+  .slice(0, 240);
 
 const timed = async (fn) => {
   const started = Date.now();
@@ -74,7 +80,7 @@ const recordSystemEvent = async ({ severity = 'warning', category = 'http', sour
       fuente: String(source || 'backend').slice(0, 80),
       http_status: statusCode,
       metodo: method ? String(method).slice(0, 12) : null,
-      ruta: path ? String(path).split('?')[0].slice(0, 240) : null,
+      ruta: path ? sanitizeRoutePath(path) : null,
       mensaje: String(message || 'Error interno').slice(0, 500),
       metadata: metadata && typeof metadata === 'object' ? metadata : {},
     });
@@ -147,7 +153,7 @@ const getSystemMonitorSnapshot = async () => {
     ['Supabase service role', Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)],
     ['Brevo', Boolean(process.env.BREVO_API_KEY && process.env.BREVO_SENDER_EMAIL)],
     ['Evolution API', Boolean(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_API_KEY)],
-    ['Mercado Pago', /^https:\/\/link\.mercadopago\.cl\//i.test(String(process.env.MERCADO_PAGO_PAYMENT_LINK || ''))],
+    ['Mercado Pago', /^https:\/\/link\.mercadopago\.cl\//i.test(String(process.env.MERCADO_PAGO_PAYMENT_LINK || 'https://link.mercadopago.cl/smproweb'))],
     ['Frontend URL', /^https:\/\//i.test(frontendUrl)],
   ].map(([label, configured]) => ({ label, configured: Boolean(configured) }));
 
