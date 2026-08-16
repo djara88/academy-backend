@@ -43,7 +43,8 @@ app.use(cors({
 const apiLimiter = createRateLimiter({
   windowMs: 5 * 60 * 1000,
   max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
-  skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/'),
+  skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/')
+    || req.originalUrl?.startsWith('/api/whatsapp-bridge/webhook/'),
 });
 const sensitiveLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -130,6 +131,7 @@ const partidoRoutes = require('./routes/partidos');
 const academiaRoutes = require('./routes/academias');
 const matriculaRoutes = require('./routes/matriculas');
 const whatsappRoutes = require('./routes/whatsapp');
+const whatsappBridgeRoutes = require('./routes/whatsappBridge');
 const finanzasRoutes = require('./routes/finanzas');
 const entrenamientosRoutes = require('./routes/entrenamientos');
 const uniformesRoutes = require('./routes/uniformes');
@@ -154,6 +156,7 @@ app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS),
 app.use('/api/partidos', partidoRoutes);
 app.use('/api/academias', academiaRoutes);
 app.use('/api/matriculas', matriculaRoutes);
+app.use('/api/whatsapp-bridge', whatsappBridgeRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/finanzas', finanzasRoutes);
 app.use('/api/entrenamientos', entrenamientosRoutes);
