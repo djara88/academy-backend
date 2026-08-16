@@ -139,6 +139,7 @@ const sportProfileRoutes = require('./routes/sportProfiles');
 const publicCatalogRoutes = require('./routes/publicCatalog');
 const presenceRoutes = require('./routes/presence');
 const presenceAdminRoutes = require('./routes/presenceAdmin');
+const inscripcionesRoutes = require('./routes/inscripciones');
 
 app.use('/api/public', publicCatalogRoutes);
 app.use('/api/presence', presenceRoutes);
@@ -155,6 +156,7 @@ app.get('/api/jugadores/categorias/:categoriaId/promedio', authMiddleware, ...re
 
 app.use('/api', categoriaRoutes);
 app.use('/api/jugadores', jugadorRoutes);
+app.use('/api/inscripciones', inscripcionesRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
 app.use('/api/sport-profiles', sportProfileRoutes);
