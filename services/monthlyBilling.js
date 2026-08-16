@@ -61,7 +61,7 @@ const ensureMonthlyChargesForAcademy = async (academyId) => {
 
   const [playersResult, existingResult] = await Promise.all([
     supabase.from('jugadores')
-      .select('id,nombre,monto_mensualidad,fecha_matricula,created_at,estado_matricula')
+      .select('id,nombre,monto_mensualidad,fecha_matricula,created_at,estado_matricula,sede_id,rama_id')
       .eq('academia_id', academyId),
     supabase.from('cobros')
       .select('jugador_id')
@@ -85,6 +85,8 @@ const ensureMonthlyChargesForAcademy = async (academyId) => {
     return true;
   }).map((player) => ({
     academia_id: academyId,
+    sede_id: player.sede_id || null,
+    rama_id: player.rama_id || null,
     jugador_id: player.id,
     concepto: `Mensualidad ${monthLabel(currentPeriod)}`,
     tipo_concepto: 'Mensualidad',

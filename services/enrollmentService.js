@@ -2,6 +2,7 @@ const supabase = require('../config/supabase');
 const { getAcademyEntitlements } = require('./planCatalog');
 const { recalculateFinancialStatus } = require('./monthlyBilling');
 const { normalizeRut } = require('./rutGuard');
+const { resolveStructure } = require('./academyStructure');
 
 const isGuardianShirtSize = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -30,6 +31,7 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
   const finanzas = payload.finanzas || {};
   const evaluacion = payload.evaluacion || {};
   const emergencia = payload.emergencia || {};
+  const structure = await resolveStructure({ academiaId, sedeId: jugador.sede_id || null, ramaId: jugador.rama_id || null });
 
   const { data: academy, error: academyError } = await supabase.from('academias').select('*').eq('id', academiaId).single();
   if (academyError || !academy) throw new Error('No fue posible validar el plan de la academia.');
@@ -102,6 +104,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
 
     const { data: createdPlayer, error: playerError } = await supabase.from('jugadores').insert([{
       academia_id: academiaId,
+      sede_id: structure.sede_id,
+      rama_id: structure.rama_id,
       tutor_id: tutorId,
       nombre: jugador.nombre,
       rut: jugador.rut || null,
@@ -133,6 +137,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
       const { error } = await supabase.from('evaluaciones').insert([{
         jugador_id: newPlayer.id,
         academia_id: academiaId,
+        sede_id: structure.sede_id,
+        rama_id: structure.rama_id,
         datos_radar: evaluacion,
         comentarios_profesor: 'Evaluación inicial registrada durante la pre-matrícula.',
       }]);
@@ -146,6 +152,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
         : 'Matrícula Inicial';
       const { data: charge, error: chargeError } = await supabase.from('cobros').insert([{
         academia_id: academiaId,
+        sede_id: structure.sede_id,
+        rama_id: structure.rama_id,
         jugador_id: newPlayer.id,
         concepto,
         tipo_concepto: 'Matrícula',
@@ -176,6 +184,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
     if (jugador.talla_uniforme || jugador.numero_camiseta || jugador.nombre_camiseta) {
       const { error } = await supabase.from('pedidos_indumentaria').insert([{
         academia_id: academiaId,
+        sede_id: structure.sede_id,
+        rama_id: structure.rama_id,
         jugador_id: newPlayer.id,
         prenda_id: null,
         prenda_nombre: 'Kit de Matrícula (Alumno)',
@@ -192,6 +202,8 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
     if (guardianShirt) {
       const { error } = await supabase.from('pedidos_indumentaria').insert([{
         academia_id: academiaId,
+        sede_id: structure.sede_id,
+        rama_id: structure.rama_id,
         jugador_id: newPlayer.id,
         prenda_id: null,
         prenda_nombre: 'Camiseta Apoderado',
