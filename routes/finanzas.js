@@ -17,10 +17,33 @@ const failIfError = (result, context) => {
 const rows = (result, context) => failIfError(result, context) || [];
 const asMoney = (value) => Number(value || 0);
 
+const BILLING_CACHE_TTL_MS = Math.max(10_000, Number(process.env.FINANCE_BILLING_CACHE_TTL_MS || 60_000));
+const billingCache = new Map();
+
+const getBillingSnapshot = async (academyId) => {
+  const now = Date.now();
+  const cached = billingCache.get(academyId);
+  if (cached?.data && cached.expiresAt > now) return cached.data;
+  if (cached?.promise) return cached.promise;
+
+  const promise = ensureMonthlyChargesForAcademy(academyId)
+    .then((data) => {
+      billingCache.set(academyId, { data, expiresAt: Date.now() + BILLING_CACHE_TTL_MS });
+      return data;
+    })
+    .catch((error) => {
+      billingCache.delete(academyId);
+      throw error;
+    });
+
+  billingCache.set(academyId, { promise, expiresAt: now + BILLING_CACHE_TTL_MS });
+  return promise;
+};
+
 router.get('/resumen', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
-    const billing = await ensureMonthlyChargesForAcademy(academia_id);
+    const billing = await getBillingSnapshot(academia_id);
     const [resCobros, resPagos, resEgresos, resJugadores] = await Promise.all([
       supabase.from('cobros').select('jugador_id,monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academia_id),
       supabase.from('pagos').select('monto').eq('academia_id', academia_id),
@@ -71,7 +94,7 @@ router.get('/resumen', authMiddleware, async (req, res) => {
 router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
-    const billing = await ensureMonthlyChargesForAcademy(academia_id);
+    const billing = await getBillingSnapshot(academia_id);
     const [resJugadores, resCobros] = await Promise.all([
       supabase
         .from('jugadores')
@@ -86,59 +109,18 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
     ]);
 
     const jugadores = rows(resJugadores, 'No se pudieron leer los jugadores');
-    let cobros = rows(resCobros, 'No se pudieron leer los cobros');
-    const pendientes = [];
+    const cobros = rows(resCobros, 'No se pudieron leer los cobros');
+    const cobrosPorJugador = new Map();
 
-    for (const jugador of jugadores) {
-      const delJugador = cobros.filter(c => c.jugador_id === jugador.id && c.estado !== 'Anulado');
-      const montoMatricula = asMoney(jugador.monto_matricula);
-
-      if (!delJugador.some(c => c.tipo_concepto === 'Matrícula') && montoMatricula > 0) {
-        pendientes.push({
-          cobro: {
-            academia_id,
-            jugador_id: jugador.id,
-            concepto: 'Matrícula Inicial',
-            tipo_concepto: 'Matrícula',
-            monto: montoMatricula,
-            monto_pagado: 0,
-            estado: 'Pendiente',
-            fecha_vencimiento: billing.today
-          },
-          abono: Math.min(asMoney(jugador.abono_matricula), montoMatricula)
-        });
-      }
-    }
-
-    for (const pendiente of pendientes) {
-      const insertado = failIfError(
-        await supabase.from('cobros').insert([pendiente.cobro]).select().single(),
-        'No se pudo sincronizar un cobro base'
-      );
-      if (pendiente.abono > 0) {
-        failIfError(await supabase.rpc('registrar_pago_cobro', {
-          p_academia_id: academia_id,
-          p_cobro_id: insertado.id,
-          p_monto: pendiente.abono,
-          p_metodo_pago: 'Sin registrar',
-          p_observaciones: 'Abono histórico de matrícula',
-          p_idempotency_key: `legacy-player-${insertado.jugador_id}-matricula`,
-          p_usuario_id: req.user.id
-        }), 'No se pudo migrar el abono inicial');
-      }
-    }
-
-    if (pendientes.length) {
-      await recalculateFinancialStatus(academia_id);
-      cobros = rows(await supabase
-        .from('cobros')
-        .select('*')
-        .eq('academia_id', academia_id)
-        .order('fecha_vencimiento', { ascending: false }), 'No se pudieron recargar los cobros');
+    for (const cobro of cobros) {
+      if (!cobro.jugador_id) continue;
+      const current = cobrosPorJugador.get(cobro.jugador_id);
+      if (current) current.push(cobro);
+      else cobrosPorJugador.set(cobro.jugador_id, [cobro]);
     }
 
     const cuentas = jugadores.map(jugador => {
-      const cobrosJugador = cobros.filter(c => c.jugador_id === jugador.id);
+      const cobrosJugador = cobrosPorJugador.get(jugador.id) || [];
       const vigentes = cobrosJugador.filter(c => c.estado !== 'Anulado');
       const deudaTotal = vigentes.reduce((total, c) => total + asMoney(c.monto), 0);
       const pagadoTotal = vigentes.reduce((total, c) => total + asMoney(c.monto_pagado), 0);
