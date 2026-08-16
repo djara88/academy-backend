@@ -20,6 +20,36 @@ const number = (value) => Number(value || 0);
 const mercadoPagoLink = () => String(process.env.MERCADO_PAGO_PAYMENT_LINK || 'https://link.mercadopago.cl/smproweb').trim();
 const mercadoPagoConfigured = () => /^https:\/\/link\.mercadopago\.cl\/[A-Za-z0-9._-]+$/i.test(mercadoPagoLink());
 
+const ensureFounderReservationBeforePayment = async (charge) => {
+  if (charge?.promotion_code !== 'founder') return charge;
+
+  const { data: slot, error: slotError } = await supabase.rpc('reservar_syncademia_founder_slot', {
+    p_academia_id: charge.academia_id,
+    p_charge_id: charge.id,
+  });
+  if (slotError) throw slotError;
+
+  const founderSlot = Number(slot || 0) || null;
+  if (!founderSlot) {
+    const error = new Error('No quedan cupos de Precio Fundador disponibles para validar este pago. No se registró el abono; genera una nueva orden mensual o anual.');
+    error.status = 409;
+    error.code = 'FOUNDER_SOLD_OUT_BEFORE_PAYMENT';
+    throw error;
+  }
+
+  if (founderSlot !== Number(charge.founder_slot || 0)) {
+    const { error: updateError } = await supabase.from('plataforma_cobros')
+      .update({ founder_slot: founderSlot, updated_at: new Date().toISOString() })
+      .eq('id', charge.id)
+      .eq('academia_id', charge.academia_id)
+      .neq('estado', 'pagado');
+    if (updateError) throw updateError;
+    charge.founder_slot = founderSlot;
+  }
+
+  return charge;
+};
+
 router.get('/monitor', async (_req, res) => {
   try {
     const data = await getSystemMonitorSnapshot();
@@ -116,6 +146,11 @@ router.patch('/cobros/:id/pagado', async (req, res) => {
     if (chargeError || !charge) return res.status(404).json({ error: 'Cobro no encontrado.' });
     if (charge.estado === 'pagado') return res.json({ success: true, alreadyPaid: true });
 
+    // Un cobro Fundador puede llevar días pendiente. Antes de registrar dinero,
+    // renueva/reasigna su reserva si aún existen cupos. Si ya se agotaron, se
+    // rechaza aquí para no dejar un cobro pagado sin licencia activable.
+    await ensureFounderReservationBeforePayment(charge);
+
     const { data, error } = await supabase.rpc('marcar_cobro_plataforma_pagado', {
       p_cobro_id: charge.id,
       p_created_by: req.user.id,
@@ -127,7 +162,10 @@ router.patch('/cobros/:id/pagado', async (req, res) => {
     const licenseActivated = await activateChargePlan(charge);
     res.json({ success: true, movementId: data, licenseActivated });
   } catch (error) {
-    res.status(500).json({ error: error.message || 'No fue posible validar el pago.' });
+    res.status(error?.status || 500).json({
+      error: error.message || 'No fue posible validar el pago.',
+      code: error?.code || undefined,
+    });
   }
 });
 
