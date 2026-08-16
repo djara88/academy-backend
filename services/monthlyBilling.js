@@ -30,8 +30,8 @@ const daysBetween = (from, to) => {
   return Math.round((end - start) / 86400000);
 };
 
-const effectiveEnrollmentMonth = (player) => {
-  const raw = player.fecha_matricula || player.created_at;
+const effectiveEnrollmentMonth = (row) => {
+  const raw = row.fecha_inicio || row.fecha_matricula || row.created_at;
   if (!raw) return null;
   return `${String(raw).slice(0, 7)}-01`;
 };
@@ -59,24 +59,57 @@ const ensureMonthlyChargesForAcademy = async (academyId) => {
     return { configured: false, today, period: currentPeriod, dueDay: null, dueDate: null, warningDays, created: 0 };
   }
 
-  const [playersResult, existingResult] = await Promise.all([
+  const [enrollmentsResult, playersResult, existingResult] = await Promise.all([
+    supabase.from('inscripciones_deportivas')
+      .select('id,jugador_id,sede_id,rama_id,monto_mensualidad,fecha_inicio,estado,ramas(disciplina),jugadores(nombre)')
+      .eq('academia_id', academyId)
+      .eq('estado', 'Activa'),
     supabase.from('jugadores')
       .select('id,nombre,monto_mensualidad,fecha_matricula,created_at,estado_matricula,sede_id,rama_id')
       .eq('academia_id', academyId),
     supabase.from('cobros')
-      .select('jugador_id')
+      .select('jugador_id,inscripcion_id')
       .eq('academia_id', academyId)
       .eq('tipo_concepto', 'Mensualidad')
       .eq('periodo_mensualidad', currentPeriod)
       .neq('estado', 'Anulado'),
   ]);
+  if (enrollmentsResult.error) throw enrollmentsResult.error;
   if (playersResult.error) throw playersResult.error;
   if (existingResult.error) throw existingResult.error;
 
-  const existingPlayerIds = new Set((existingResult.data || []).map((row) => row.jugador_id));
+  const activeEnrollments = enrollmentsResult.data || [];
+  const activeEnrollmentPlayerIds = new Set(activeEnrollments.map((row) => row.jugador_id));
+  const existingEnrollmentIds = new Set((existingResult.data || []).filter((row) => row.inscripcion_id).map((row) => row.inscripcion_id));
+  const existingLegacyPlayerIds = new Set((existingResult.data || []).filter((row) => !row.inscripcion_id).map((row) => row.jugador_id));
   const dueDate = dueDateForPeriod(currentPeriod, dueDay);
-  const rows = (playersResult.data || []).filter((player) => {
-    if (existingPlayerIds.has(player.id)) return false;
+
+  const enrollmentRows = activeEnrollments.filter((enrollment) => {
+    if (existingEnrollmentIds.has(enrollment.id)) return false;
+    if ((Number(enrollment.monto_mensualidad) || 0) <= 0) return false;
+    const enrollmentMonth = effectiveEnrollmentMonth(enrollment);
+    if (enrollmentMonth && enrollmentMonth >= currentPeriod) return false;
+    return true;
+  }).map((enrollment) => ({
+    academia_id: academyId,
+    inscripcion_id: enrollment.id,
+    sede_id: enrollment.sede_id || null,
+    rama_id: enrollment.rama_id || null,
+    jugador_id: enrollment.jugador_id,
+    concepto: `Mensualidad ${monthLabel(currentPeriod)}${enrollment.ramas?.disciplina ? ` · ${enrollment.ramas.disciplina}` : ''}`,
+    tipo_concepto: 'Mensualidad',
+    monto: Number(enrollment.monto_mensualidad) || 0,
+    monto_pagado: 0,
+    estado: 'Pendiente',
+    fecha_vencimiento: dueDate,
+    periodo_mensualidad: currentPeriod,
+    observaciones: 'Cobro mensual generado automáticamente por inscripción deportiva',
+  }));
+
+  // Compatibilidad: alumnos creados por flujos antiguos que todavía no tengan una inscripción deportiva.
+  const legacyRows = (playersResult.data || []).filter((player) => {
+    if (activeEnrollmentPlayerIds.has(player.id)) return false;
+    if (existingLegacyPlayerIds.has(player.id)) return false;
     if ((Number(player.monto_mensualidad) || 0) <= 0) return false;
     const enrollmentMonth = effectiveEnrollmentMonth(player);
     if (enrollmentMonth && enrollmentMonth >= currentPeriod) return false;
@@ -95,9 +128,10 @@ const ensureMonthlyChargesForAcademy = async (academyId) => {
     estado: 'Pendiente',
     fecha_vencimiento: dueDate,
     periodo_mensualidad: currentPeriod,
-    observaciones: 'Cobro mensual generado automáticamente por calendario de academia',
+    observaciones: 'Cobro mensual generado automáticamente por compatibilidad legacy',
   }));
 
+  const rows = [...enrollmentRows, ...legacyRows];
   let created = 0;
   if (rows.length) {
     const { data, error } = await supabase.from('cobros').insert(rows).select('id');
