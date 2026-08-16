@@ -49,20 +49,27 @@ router.get('/jugador/:jugadorId', authMiddleware, async (req, res) => {
       .order('created_at', { ascending: false });
     if (error) throw error;
     const evaluations = data || [];
+    const comparable = selectComparableEvaluations(evaluations);
+    const comparableIds = new Set(comparable.map((evaluation) => evaluation.id));
+    const uiOrdered = [
+      ...comparable,
+      ...evaluations.filter((evaluation) => !comparableIds.has(evaluation.id)),
+    ];
     res.json({
       success: true,
-      data: evaluations,
-      comparable: selectComparableEvaluations(evaluations),
+      data: uiOrdered,
+      comparable,
+      history_count: evaluations.length,
     });
   } catch (_error) {
     res.status(500).json({ success: false, error: 'No fue posible cargar las evaluaciones.' });
   }
 });
 
-router.get('/categorias/:categoriaId/promedio', authMiddleware, async (req, res) => {
+const categoryAverageHandler = async (req, res) => {
   try {
     const academyId = req.user.academia_id;
-    const categoryId = String(req.params.categoriaId || '').trim();
+    const categoryId = String(req.params.categoriaId || req.params.categoria_id || '').trim();
     const { data: category, error: categoryError } = await supabase.from('categorias')
       .select('id,rama_id')
       .eq('id', categoryId)
@@ -146,7 +153,9 @@ router.get('/categorias/:categoriaId/promedio', authMiddleware, async (req, res)
     console.error('Error calculando promedio de categoría:', error?.message || 'Error desconocido');
     res.status(500).json({ error: 'No fue posible calcular el promedio de la categoría.' });
   }
-});
+};
+
+router.get('/categorias/:categoriaId/promedio', authMiddleware, categoryAverageHandler);
 
 router.post('/', authMiddleware, async (req, res) => {
   try {
@@ -184,4 +193,5 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+router.categoryAverageHandler = categoryAverageHandler;
 module.exports = router;
