@@ -3,17 +3,16 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { FEATURES, getAcademyEntitlements } = require('../services/planCatalog');
+const { ensureMonthlyChargesForAcademy, todayInChile } = require('../services/monthlyBilling');
 
 const router = express.Router();
-const todayInChile = () => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
-}).format(new Date());
 const sum = (rows, field) => (rows || []).reduce((total, row) => total + Number(row[field] || 0), 0);
 
 router.get('/resumen', authMiddleware, requireDirector, async (req, res) => {
   try {
     const academyId = req.user.academia_id;
-    const today = todayInChile();
+    const billing = await ensureMonthlyChargesForAcademy(academyId);
+    const today = billing.today || todayInChile();
     const monthStart = `${today.slice(0, 7)}-01`;
     const nextMonthDate = new Date(`${monthStart}T12:00:00Z`);
     nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1);
@@ -28,7 +27,7 @@ router.get('/resumen', authMiddleware, requireDirector, async (req, res) => {
         .eq('academia_id', academyId).gte('fecha', today).neq('estado', 'Jugado').order('fecha').order('hora').limit(8),
       supabase.from('pagos').select('monto,fecha_pago').eq('academia_id', academyId).gte('fecha_pago', `${monthStart}T00:00:00`).lt('fecha_pago', `${nextMonth}T00:00:00`),
       supabase.from('egresos').select('monto,fecha_gasto,anulado_at').eq('academia_id', academyId).gte('fecha_gasto', monthStart).lt('fecha_gasto', nextMonth).is('anulado_at', null),
-      supabase.from('cobros').select('monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academyId),
+      supabase.from('cobros').select('monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academyId).neq('estado', 'Anulado'),
       supabase.from('alertas_asistencia').select('id,racha,ultima_ausencia,jugadores(id,nombre),categorias(id,nombre)')
         .eq('academia_id', academyId).eq('activa', true).order('detectada_at', { ascending: false }).limit(6),
       supabase.from('jugadores').select('estado_uniforme').eq('academia_id', academyId),
@@ -74,6 +73,7 @@ router.get('/resumen', authMiddleware, requireDirector, async (req, res) => {
           cobros_vencidos: overdueReceivables,
           uniformes_pendientes: pendingUniforms,
         },
+        calendario_mensual: billing,
         prioridades: {
           alertas_asistencia: entitlements.features.includes(FEATURES.ATTENDANCE_ALERTS) ? alertsResult.data || [] : [],
           categorias_sin_profesor: categoriesWithoutProfessor,
