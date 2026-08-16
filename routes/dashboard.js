@@ -6,83 +6,117 @@ const { FEATURES, getAcademyEntitlements } = require('../services/planCatalog');
 const { ensureMonthlyChargesForAcademy, todayInChile } = require('../services/monthlyBilling');
 
 const router = express.Router();
-const sum = (rows, field) => (rows || []).reduce((total, row) => total + Number(row[field] || 0), 0);
+const BILLING_CACHE_TTL_MS = Math.max(10_000, Number(process.env.DASHBOARD_BILLING_CACHE_TTL_MS || 60_000));
+const billingCache = new Map();
+
+const getBillingSnapshot = async (academyId) => {
+  const now = Date.now();
+  const cached = billingCache.get(academyId);
+  if (cached?.data && cached.expiresAt > now) return cached.data;
+  if (cached?.promise) return cached.promise;
+
+  const promise = ensureMonthlyChargesForAcademy(academyId)
+    .then((data) => {
+      billingCache.set(academyId, { data, expiresAt: Date.now() + BILLING_CACHE_TTL_MS });
+      return data;
+    })
+    .catch((error) => {
+      billingCache.delete(academyId);
+      throw error;
+    });
+
+  billingCache.set(academyId, { promise, expiresAt: now + BILLING_CACHE_TTL_MS });
+  return promise;
+};
 
 router.get('/resumen', authMiddleware, requireDirector, async (req, res) => {
   try {
     const academyId = req.user.academia_id;
-    const billing = await ensureMonthlyChargesForAcademy(academyId);
+    const billing = await getBillingSnapshot(academyId);
     const today = billing.today || todayInChile();
     const monthStart = `${today.slice(0, 7)}-01`;
     const nextMonthDate = new Date(`${monthStart}T12:00:00Z`);
     nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1);
     const nextMonth = nextMonthDate.toISOString().slice(0, 10);
 
-    const [academyResult, playersResult, professorsResult, categoriesResult, matchesResult, paymentsResult, expensesResult, chargesResult, alertsResult, uniformsResult, trainingsResult, assignmentsResult] = await Promise.all([
-      supabase.from('academias').select('id,nombre,logo,logo_url,plan,plan_codigo,max_profesores,licencia_apoderados,estado').eq('id', academyId).single(),
-      supabase.from('jugadores').select('id', { count: 'exact', head: true }).eq('academia_id', academyId),
-      supabase.from('usuarios').select('id', { count: 'exact', head: true }).eq('academia_id', academyId).eq('rol', 'profesor').eq('activo', true),
-      supabase.from('categorias').select('id,nombre').eq('academia_id', academyId).order('nombre'),
-      supabase.from('partidos').select('id,rival,fecha,hora,hora_citacion,ubicacion,condicion,estado,categorias(nombre)')
-        .eq('academia_id', academyId).gte('fecha', today).neq('estado', 'Jugado').order('fecha').order('hora').limit(8),
-      supabase.from('pagos').select('monto,fecha_pago').eq('academia_id', academyId).gte('fecha_pago', `${monthStart}T00:00:00`).lt('fecha_pago', `${nextMonth}T00:00:00`),
-      supabase.from('egresos').select('monto,fecha_gasto,anulado_at').eq('academia_id', academyId).gte('fecha_gasto', monthStart).lt('fecha_gasto', nextMonth).is('anulado_at', null),
-      supabase.from('cobros').select('monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academyId).neq('estado', 'Anulado'),
-      supabase.from('alertas_asistencia').select('id,racha,ultima_ausencia,jugadores(id,nombre),categorias(id,nombre)')
-        .eq('academia_id', academyId).eq('activa', true).order('detectada_at', { ascending: false }).limit(6),
-      supabase.from('jugadores').select('estado_uniforme').eq('academia_id', academyId),
-      supabase.from('entrenamientos').select('id').eq('academia_id', academyId).gte('fecha', monthStart).lt('fecha', nextMonth),
-      supabase.from('profesor_categorias').select('categoria_id').eq('academia_id', academyId).eq('activo', true),
+    const [academyResult, matchesResult, alertsResult, kpisResult] = await Promise.all([
+      supabase.from('academias')
+        .select('id,nombre,logo,logo_url,plan,plan_codigo,max_profesores,licencia_apoderados,estado')
+        .eq('id', academyId)
+        .single(),
+      supabase.from('partidos')
+        .select('id,rival,fecha,hora,hora_citacion,ubicacion,condicion,estado,categorias(nombre)')
+        .eq('academia_id', academyId)
+        .gte('fecha', today)
+        .neq('estado', 'Jugado')
+        .order('fecha')
+        .order('hora')
+        .limit(8),
+      supabase.from('alertas_asistencia')
+        .select('id,racha,ultima_ausencia,jugadores(id,nombre),categorias(id,nombre)')
+        .eq('academia_id', academyId)
+        .eq('activa', true)
+        .order('detectada_at', { ascending: false })
+        .limit(6),
+      supabase.rpc('obtener_dashboard_kpis', {
+        p_academia_id: academyId,
+        p_month_start: monthStart,
+        p_next_month: nextMonth,
+        p_today: today,
+      }),
     ]);
 
-    const required = [academyResult, playersResult, professorsResult, categoriesResult, matchesResult, paymentsResult, expensesResult, chargesResult, alertsResult, uniformsResult, trainingsResult, assignmentsResult];
+    const required = [academyResult, matchesResult, alertsResult, kpisResult];
     const failed = required.find((result) => result.error);
     if (failed) throw failed.error;
 
-    const trainingIds = (trainingsResult.data || []).map((training) => training.id);
-    const attendanceResult = trainingIds.length
-      ? await supabase.from('asistencias').select('estado').in('entrenamiento_id', trainingIds)
-      : { data: [], error: null };
-    if (attendanceResult.error) throw attendanceResult.error;
-
-    const attendance = attendanceResult.data || [];
-    const attended = attendance.filter((item) => item.estado === 'Presente').length;
-    const eligibleAttendance = attendance.filter((item) => ['Presente', 'Ausente', 'Justificado'].includes(item.estado)).length;
-    const categoryIdsWithProfessor = new Set((assignmentsResult.data || []).map((item) => item.categoria_id));
-    const categoriesWithoutProfessor = (categoriesResult.data || []).filter((category) => !categoryIdsWithProfessor.has(category.id));
-    const pendingUniforms = (uniformsResult.data || []).filter((item) => !['entregado', 'completo'].includes(String(item.estado_uniforme || '').toLowerCase())).length;
-    const pendingReceivables = (chargesResult.data || []).reduce((total, charge) => total + Math.max(Number(charge.monto || 0) - Number(charge.monto_pagado || 0), 0), 0);
-    const overdueReceivables = (chargesResult.data || []).filter((charge) => charge.fecha_vencimiento && charge.fecha_vencimiento < today && Math.max(Number(charge.monto || 0) - Number(charge.monto_pagado || 0), 0) > 0).length;
     const entitlements = getAcademyEntitlements(academyResult.data);
+    const kpis = kpisResult.data || {};
+    const income = Number(kpis.ingresos_mes || 0);
+    const expenses = Number(kpis.egresos_mes || 0);
 
     res.json({
       success: true,
       data: {
-        academia: { id: academyResult.data.id, nombre: academyResult.data.nombre, logo: academyResult.data.logo_url || academyResult.data.logo, estado: academyResult.data.estado },
+        academia: {
+          id: academyResult.data.id,
+          nombre: academyResult.data.nombre,
+          logo: academyResult.data.logo_url || academyResult.data.logo,
+          estado: academyResult.data.estado,
+        },
         plan: entitlements,
         kpis: {
-          jugadores: playersResult.count || 0,
-          profesores: { activos: professorsResult.count || 0, limite: entitlements.limits.professors },
-          categorias: (categoriesResult.data || []).length,
+          jugadores: Number(kpis.jugadores || 0),
+          profesores: {
+            activos: Number(kpis.profesores_activos || 0),
+            limite: entitlements.limits.professors,
+          },
+          categorias: Number(kpis.categorias || 0),
           proximos_partidos: (matchesResult.data || []).length,
-          asistencia_mes: eligibleAttendance ? Math.round((attended / eligibleAttendance) * 100) : null,
-          ingresos_mes: sum(paymentsResult.data, 'monto'),
-          egresos_mes: sum(expensesResult.data, 'monto'),
-          saldo_mes: sum(paymentsResult.data, 'monto') - sum(expensesResult.data, 'monto'),
-          por_cobrar: pendingReceivables,
-          cobros_vencidos: overdueReceivables,
-          uniformes_pendientes: pendingUniforms,
+          asistencia_mes: kpis.asistencia_mes === null || kpis.asistencia_mes === undefined
+            ? null
+            : Number(kpis.asistencia_mes),
+          ingresos_mes: income,
+          egresos_mes: expenses,
+          saldo_mes: income - expenses,
+          por_cobrar: Number(kpis.por_cobrar || 0),
+          cobros_vencidos: Number(kpis.cobros_vencidos || 0),
+          uniformes_pendientes: Number(kpis.uniformes_pendientes || 0),
         },
         calendario_mensual: billing,
         prioridades: {
-          alertas_asistencia: entitlements.features.includes(FEATURES.ATTENDANCE_ALERTS) ? alertsResult.data || [] : [],
-          categorias_sin_profesor: categoriesWithoutProfessor,
+          alertas_asistencia: entitlements.features.includes(FEATURES.ATTENDANCE_ALERTS)
+            ? alertsResult.data || []
+            : [],
+          categorias_sin_profesor: Array.isArray(kpis.categorias_sin_profesor)
+            ? kpis.categorias_sin_profesor
+            : [],
         },
         proximos_partidos: matchesResult.data || [],
       },
     });
   } catch (error) {
-    console.error('Error al construir dashboard:', error);
+    console.error('Error al construir dashboard:', error?.message || error);
     res.status(500).json({ error: 'No fue posible cargar el resumen de dirección.' });
   }
 });
