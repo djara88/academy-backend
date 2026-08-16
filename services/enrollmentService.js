@@ -1,6 +1,7 @@
 const supabase = require('../config/supabase');
 const { getAcademyEntitlements } = require('./planCatalog');
 const { recalculateFinancialStatus } = require('./monthlyBilling');
+const { normalizeRut } = require('./rutGuard');
 
 const isGuardianShirtSize = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -44,11 +45,11 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
   }
 
   if (jugador.rut) {
-    const normalizedRut = String(jugador.rut).replace(/\./g, '').replace(/\s/g, '').toUpperCase();
+    const normalizedRut = normalizeRut(jugador.rut);
     const { data: existingPlayers, error: duplicateError } = await supabase.from('jugadores')
       .select('id,nombre,rut').eq('academia_id', academiaId);
     if (duplicateError) throw duplicateError;
-    const duplicate = (existingPlayers || []).find((row) => String(row.rut || '').replace(/\./g, '').replace(/\s/g, '').toUpperCase() === normalizedRut);
+    const duplicate = (existingPlayers || []).find((row) => normalizeRut(row.rut) === normalizedRut);
     if (duplicate) {
       const error = new Error('Ya existe un alumno con ese RUT en la academia.');
       error.code = 'PLAYER_ALREADY_EXISTS';
@@ -62,11 +63,11 @@ const materializeEnrollment = async ({ academiaId, userId, payload, sourceKey })
 
   try {
     if (tutor.rut) {
-      const normalizedTutorRut = String(tutor.rut).replace(/\./g, '').replace(/\s/g, '').toUpperCase();
+      const normalizedTutorRut = normalizeRut(tutor.rut);
       const { data: tutors, error: lookupError } = await supabase.from('tutores')
         .select('id,rut').eq('academia_id', academiaId);
       if (lookupError) throw lookupError;
-      const existingTutor = (tutors || []).find((row) => String(row.rut || '').replace(/\./g, '').replace(/\s/g, '').toUpperCase() === normalizedTutorRut);
+      const existingTutor = (tutors || []).find((row) => normalizeRut(row.rut) === normalizedTutorRut);
       if (existingTutor) {
         tutorId = existingTutor.id;
         const { error } = await supabase.from('tutores').update({
