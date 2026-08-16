@@ -7,6 +7,7 @@ const { createRateLimiter } = require('./middleware/rateLimit');
 const { requireFeature } = require('./middleware/planAccess');
 const { FEATURES } = require('./services/planCatalog');
 const { validatePassword } = require('./services/passwordPolicy');
+const { requestFailureRecorder } = require('./services/systemMonitor');
 
 const app = express();
 app.disable('x-powered-by');
@@ -28,6 +29,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+app.use(requestFailureRecorder);
 
 app.use(cors({
   origin(origin, callback) {
@@ -134,6 +137,7 @@ const apoderadosRoutes = require('./routes/apoderados');
 const dashboardRoutes = require('./routes/dashboard');
 const saasAdminRoutes = require('./routes/saasAdmin');
 const subscriptionRoutes = require('./routes/subscriptions');
+const privacyRequestRoutes = require('./routes/privacyRequests');
 
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
@@ -156,6 +160,7 @@ app.use('/api/apoderados', apoderadosRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/saas-admin', saasAdminRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/privacy-requests', privacyRequestRoutes);
 
 app.use((error, _req, res, next) => {
   if (error?.type === 'entity.too.large') return res.status(413).json({ error: 'La solicitud supera el tamaño máximo permitido.' });

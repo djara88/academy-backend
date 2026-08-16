@@ -5,6 +5,7 @@ const { requireSuperadmin } = require('../middleware/authorization');
 const { requireSuperadminMfa } = require('../middleware/requireMfa');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 const { activateChargePlan } = require('../services/subscriptionBilling');
+const { getSystemMonitorSnapshot } = require('../services/systemMonitor');
 
 const router = express.Router();
 router.use(authMiddleware, requireSuperadmin, requireSuperadminMfa);
@@ -18,6 +19,16 @@ const monthBounds = () => {
 const number = (value) => Number(value || 0);
 const mercadoPagoLink = () => String(process.env.MERCADO_PAGO_PAYMENT_LINK || 'https://link.mercadopago.cl/smproweb').trim();
 const mercadoPagoConfigured = () => /^https:\/\/link\.mercadopago\.cl\/[A-Za-z0-9._-]+$/i.test(mercadoPagoLink());
+
+router.get('/monitor', async (_req, res) => {
+  try {
+    const data = await getSystemMonitorSnapshot();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error cargando monitor del sistema:', error?.message || 'Error desconocido');
+    res.status(500).json({ error: 'No fue posible cargar el monitor del sistema.' });
+  }
+});
 
 router.get('/resumen', async (_req, res) => {
   try {
