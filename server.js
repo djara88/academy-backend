@@ -171,7 +171,7 @@ app.get(
   evaluacionRoutes.categoryAverageHandler,
 );
 
-app.use('/api/categorias', categoriaRoutes);
+app.use('/api', categoriaRoutes);
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
