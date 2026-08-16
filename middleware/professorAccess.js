@@ -33,7 +33,7 @@ const isAllowedProfessorRequest = (req) => {
 
 const isAllowedGuardianRequest = (req) => {
   const path = req.originalUrl?.split('?')[0] || '';
-  return path.startsWith('/api/apoderados/me') || path === '/api/academias/mi-plan' || path === '/api/cambiar-password';
+  return path.startsWith('/api/apoderados/me') || path.startsWith('/api/chat/') || path === '/api/chat' || path === '/api/academias/mi-plan' || path === '/api/cambiar-password';
 };
 
 module.exports = {
