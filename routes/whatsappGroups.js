@@ -9,7 +9,7 @@ const { crearGrupo, actualizarParticipantesGrupo, obtenerParticipantesGrupo, env
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 
 const router = express.Router();
-router.use(authMiddleware, ...requireFeature(FEATURES.GUARDIANS), requireDirector);
+router.use(authMiddleware, ...requireFeature(FEATURES.WHATSAPP_GROUPS), requireDirector);
 
 const safeText = (value, max = 500) => String(value ?? '').trim().slice(0, max);
 const activePlayer = (player) => !player.privacy_anonymized_at && String(player.estado || '').toLowerCase() !== 'inactivo';
