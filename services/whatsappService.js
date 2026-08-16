@@ -37,6 +37,20 @@ const parseResponse = async (response) => {
   }
 };
 
+const extractGroupJid = (data) => {
+  const candidates = [
+    data?.id,
+    data?.groupJid,
+    data?.group?.id,
+    data?.group?.groupJid,
+    data?.group?.gid,
+    data?.data?.id,
+    data?.data?.groupJid,
+    data?.data?.group?.id,
+  ];
+  return candidates.map((value) => String(value || '').trim()).find((value) => value.includes('@g.us')) || null;
+};
+
 const configurarWebhook = async (academiaId) => {
   if (!EVOLUTION_URL) return;
 
@@ -148,6 +162,56 @@ const enviarMensaje = async (academiaId, numero, mensaje) => {
   }
 };
 
+const crearGrupo = async (academiaId, { subject, description = '', participants = [] }) => {
+  if (!EVOLUTION_URL) throw new Error('EVOLUTION_API_URL no está configurada');
+  const instanceName = `academia_${academiaId}`;
+  const cleanParticipants = [...new Set((participants || []).map((value) => String(value || '').replace(/\D/g, '')).filter((value) => value.length >= 8))];
+  if (!subject || cleanParticipants.length === 0) throw new Error('El grupo necesita un nombre y al menos un participante válido.');
+
+  const response = await evolutionFetch(`${EVOLUTION_URL}/group/create/${instanceName}`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      subject: String(subject).trim().slice(0, 100),
+      description: String(description || '').trim().slice(0, 500),
+      participants: cleanParticipants,
+    }),
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data?.message || 'No fue posible crear el grupo de WhatsApp.');
+  return { data, groupJid: extractGroupJid(data), participants: cleanParticipants };
+};
+
+const actualizarParticipantesGrupo = async (academiaId, groupJid, action, participants = []) => {
+  if (!EVOLUTION_URL) throw new Error('EVOLUTION_API_URL no está configurada');
+  const instanceName = `academia_${academiaId}`;
+  const cleanParticipants = [...new Set((participants || []).map((value) => String(value || '').replace(/\D/g, '')).filter((value) => value.length >= 8))];
+  if (!groupJid || cleanParticipants.length === 0) return { success: true, skipped: true };
+  if (!['add', 'remove', 'promote', 'demote'].includes(action)) throw new Error('Acción de grupo no válida.');
+
+  const response = await evolutionFetch(`${EVOLUTION_URL}/group/updateParticipant/${instanceName}`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ groupJid, action, participants: cleanParticipants }),
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data?.message || 'No fue posible actualizar los participantes del grupo.');
+  return data;
+};
+
+const obtenerParticipantesGrupo = async (academiaId, groupJid) => {
+  if (!EVOLUTION_URL) throw new Error('EVOLUTION_API_URL no está configurada');
+  const instanceName = `academia_${academiaId}`;
+  const response = await evolutionFetch(`${EVOLUTION_URL}/group/participants/${instanceName}?groupJid=${encodeURIComponent(groupJid)}`, {
+    method: 'GET', headers: getHeaders(),
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) throw new Error(data?.message || 'No fue posible consultar los participantes del grupo.');
+  return data?.participants || data?.data?.participants || [];
+};
+
+const enviarMensajeGrupo = async (academiaId, groupJid, mensaje) => enviarMensaje(academiaId, groupJid, mensaje);
+
 const sincronizarWebhooksActivos = async () => {
   if (!EVOLUTION_URL || !API_KEY || !WEBHOOK_SECRET) {
     console.warn('⚠️ Sincronización automática de webhooks omitida: configuración incompleta.');
@@ -179,5 +243,9 @@ setImmediate(() => {
 module.exports = {
   conectarAcademia,
   enviarMensaje,
-  configurarWebhook
+  configurarWebhook,
+  crearGrupo,
+  actualizarParticipantesGrupo,
+  obtenerParticipantesGrupo,
+  enviarMensajeGrupo,
 };
