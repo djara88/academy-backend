@@ -22,11 +22,11 @@ jobs:
           p=Path('routes/finanzas.js')
           s=p.read_text()
           old='''        ...resumenCuenta,
-                alDia: resumenCuenta.saldoVencido <= 0,'''
+                  alDia: resumenCuenta.saldoVencido <= 0,'''
           new='''        ...resumenCuenta,
-                saldoTotalPendiente: resumenCuenta.saldoPendiente,
-                saldoPendiente: resumenCuenta.saldoVencido,
-                alDia: resumenCuenta.saldoVencido <= 0,'''
+                  saldoTotalPendiente: resumenCuenta.saldoPendiente,
+                  saldoPendiente: resumenCuenta.saldoVencido,
+                  alDia: resumenCuenta.saldoVencido <= 0,'''
           if 'saldoTotalPendiente: resumenCuenta.saldoPendiente' not in s:
               if old not in s:
                   raise SystemExit('Expected finance response block not found')
