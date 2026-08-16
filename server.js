@@ -145,14 +145,33 @@ const privacyRequestRoutes = require('./routes/privacyRequests');
 const chatRoutes = require('./routes/chat');
 const systemMetricsRoutes = require('./routes/systemMetrics');
 const estructuraRoutes = require('./routes/estructura');
+const sportProfileRoutes = require('./routes/sportProfiles');
 
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
 app.use('/api/prematriculas', prematriculaRoutes);
 app.use('/api/importaciones', importacionRoutes);
+
+// Compatibilidad con enlaces de la interfaz anterior: estas rutas heredadas se
+// interceptan antes de jugadores.js para aplicar el aislamiento y el catálogo
+// multideporte del motor nuevo.
+app.post('/api/jugadores/:jugadorId/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), (_req, res) => {
+  res.status(410).json({
+    error: 'Esta ruta de evaluación fue reemplazada por el motor multideporte.',
+    code: 'LEGACY_EVALUATION_ROUTE',
+  });
+});
+app.get(
+  '/api/jugadores/categorias/:categoriaId/promedio',
+  authMiddleware,
+  ...requireFeature(FEATURES.EVALUATIONS),
+  evaluacionRoutes.categoryAverageHandler,
+);
+
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
+app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
 app.use('/api/partidos', partidoRoutes);
