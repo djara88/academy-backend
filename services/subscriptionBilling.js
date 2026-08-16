@@ -1,5 +1,5 @@
 const supabase = require('../config/supabase');
-const { GUARDIAN_ADDON_CLP, getBillingPlan } = require('./billingCatalog');
+const { getBillingPlan } = require('./billingCatalog');
 
 const activateChargePlan = async (charge) => {
   if (!charge?.target_plan_code) return false;
@@ -12,9 +12,10 @@ const activateChargePlan = async (charge) => {
     plan_codigo: plan.code,
     max_profesores: plan.professorLimit,
     max_jugadores: plan.playerLimit || 100000,
-    licencia_apoderados: charge.target_guardian_license === true,
+    // Portal del apoderado y comunicación individual ya son parte del plan base.
+    licencia_apoderados: true,
     plan_price_clp: plan.priceClp,
-    guardian_price_clp: charge.target_guardian_license ? GUARDIAN_ADDON_CLP : 0,
+    guardian_price_clp: 0,
     subscription_status: 'active',
     estado: 'Activa',
     blocked_at: null,

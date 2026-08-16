@@ -19,9 +19,12 @@ router.get('/plans', authMiddleware, async (req, res) => {
     success: true,
     data: {
       plans,
+      // Se mantiene por compatibilidad con clientes antiguos. Desde la nueva
+      // matriz el portal del apoderado está incluido y su costo adicional es 0.
       guardianAddon: {
         priceClp: GUARDIAN_ADDON_CLP,
-        grossClp: calculateGrossClp({ priceClp: 0, guardians: true }),
+        grossClp: 0,
+        included: true,
       },
       vatRate: VAT_RATE,
       gateway: {
@@ -46,21 +49,19 @@ router.post('/checkout', authMiddleware, requireDirector, async (req, res) => {
     const plan = getBillingPlan(String(req.body.plan_code || ''));
     if (!plan) return res.status(400).json({ error: 'Selecciona un plan válido.' });
 
-    const guardians = req.body.guardian_license === true;
     const subtotal = calculateGrossClp({ priceClp: plan.priceClp });
-    const addon = guardians ? calculateGrossClp({ priceClp: 0, guardians: true }) : 0;
-    const total = subtotal + addon;
+    const total = subtotal;
 
     const { data: charge, error: chargeError } = await supabase.from('plataforma_cobros').insert({
       academia_id: req.user.academia_id,
-      concepto: `Suscripción Syncademia · ${plan.name}${guardians ? ' + Apoderados PRO' : ''}`,
+      concepto: `Suscripción Syncademia · ${plan.name}`,
       subtotal_clp: subtotal,
-      addon_clp: addon,
+      addon_clp: 0,
       target_plan_code: plan.code,
-      target_guardian_license: guardians,
+      target_guardian_license: true,
       fecha_vencimiento: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
       checkout_url: mercadoPagoLink(),
-      notas: `Pago externo Mercado Pago. Monto esperado: $${total.toLocaleString('es-CL')} CLP. Activación sujeta a validación del administrador.`,
+      notas: `Pago externo Mercado Pago. Monto esperado: $${total.toLocaleString('es-CL')} CLP. Activación sujeta a validación del administrador. Portal de apoderados incluido.`,
       created_by: req.user.id,
     }).select().single();
 
@@ -73,7 +74,7 @@ router.post('/checkout', authMiddleware, requireDirector, async (req, res) => {
         checkoutUrl: mercadoPagoLink(),
         amountClp: Number(charge.total_clp || total),
         planName: plan.name,
-        guardianLicense: guardians,
+        guardianLicense: true,
         manualVerification: true,
         expiresAt: charge.fecha_vencimiento,
       },
