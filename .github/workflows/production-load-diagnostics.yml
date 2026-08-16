@@ -1,0 +1,23 @@
+name: Production Load Diagnostics
+
+on:
+  push:
+    branches:
+      - agent/production-load-diagnostics
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Ejecutar diagnóstico por endpoint
+        run: node scripts/productionLoadDiagnostics.js
