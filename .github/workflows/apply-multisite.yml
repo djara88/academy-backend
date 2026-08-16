@@ -18,8 +18,7 @@ jobs:
       - run: node scripts/applyMultisitePatch.js
       - run: node --check server.js && node --check services/enrollmentService.js && node --check services/monthlyBilling.js && node --check routes/estructura.js
       - run: npm ci
-      - run: npm test -- --runInBand
-        continue-on-error: false
+      - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - name: Commit patch
         run: |
