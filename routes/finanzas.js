@@ -149,6 +149,8 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
         deudaTotal,
         pagadoTotal,
         ...resumenCuenta,
+        saldoTotalPendiente: resumenCuenta.saldoPendiente,
+        saldoPendiente: resumenCuenta.saldoVencido,
         alDia: resumenCuenta.saldoVencido <= 0,
       };
     });
