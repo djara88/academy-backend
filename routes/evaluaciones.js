@@ -50,16 +50,18 @@ router.get('/jugador/:jugadorId', authMiddleware, async (req, res) => {
     if (error) throw error;
     const evaluations = data || [];
     const comparable = selectComparableEvaluations(evaluations);
-    const comparableIds = new Set(comparable.map((evaluation) => evaluation.id));
-    const uiOrdered = [
-      ...comparable,
-      ...evaluations.filter((evaluation) => !comparableIds.has(evaluation.id)),
-    ];
+
+    // `data` alimenta el radar actual y por diseño contiene únicamente la
+    // evaluación más reciente y, si existe, una anterior del mismo perfil y
+    // versión. El historial completo sigue disponible por separado para no
+    // perder trazabilidad ni fabricar evolución entre deportes incompatibles.
     res.json({
       success: true,
-      data: uiOrdered,
+      data: comparable,
       comparable,
+      history: evaluations,
       history_count: evaluations.length,
+      hidden_from_comparison: Math.max(0, evaluations.length - comparable.length),
     });
   } catch (_error) {
     res.status(500).json({ success: false, error: 'No fue posible cargar las evaluaciones.' });
