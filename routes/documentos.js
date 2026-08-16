@@ -5,7 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
 const { generatePlayerReportV2 } = require('../services/playerReportV2');
-const { resolveEvaluationProfile, PROFILES } = require('../services/evaluationCatalog');
+const { resolveEvaluationProfile, PROFILES, selectComparableEvaluations } = require('../services/evaluationCatalog');
 const { fetchWithTimeout } = require('../services/httpClient');
 
 const escapeHtml = (value) => String(value ?? '')
@@ -86,7 +86,7 @@ const sendReportEmail = async ({ academia, tutor, jugador, pdfBuffer, sportProfi
             <h2 style="color:#111827">Informe de evolución deportiva</h2>
             <p>Hola ${escapeHtml(tutor.nombre_completo || tutor.nombre || 'apoderado/a')},</p>
             <p>Adjuntamos el informe actualizado de <strong>${escapeHtml(jugador.nombre)}</strong>, preparado por <strong>${escapeHtml(academia.nombre || 'la academia')}</strong>.</p>
-            <p>El informe corresponde al perfil de <strong>${escapeHtml(discipline)}</strong> y contiene el radar comparativo de sus evaluaciones, evolución por métrica, actividad del período y reconocimientos recientes.</p>
+            <p>El informe corresponde al perfil de <strong>${escapeHtml(discipline)}</strong> y contiene el radar comparativo de evaluaciones compatibles, evolución por métrica, actividad del período y reconocimientos recientes.</p>
             <p style="margin-top:24px">Gracias por acompañar su proceso deportivo.</p>
             <p><strong>${escapeHtml(academia.nombre || 'Academia Deportiva')}</strong></p>
           </div>`,
@@ -130,7 +130,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
     ] = await Promise.all([
       supabase.from('academias').select('*').eq('id', academia_id).single(),
       supabase.from('evaluaciones').select('id,created_at,datos_radar,comentarios_profesor,disciplina_codigo,perfil_evaluacion,metricas_version')
-        .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(2),
+        .eq('jugador_id', jugador_id).eq('academia_id', academia_id).order('created_at', { ascending: false }).limit(12),
       supabase.from('asistencias').select('estado').eq('jugador_id', jugador_id),
       supabase.from('jugador_insignias').select('fecha_otorgado,insignias(titulo,descripcion,icono_url)')
         .eq('jugador_id', jugador_id).order('fecha_otorgado', { ascending: false }).limit(6),
@@ -153,7 +153,8 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
       tutor = data;
     }
 
-    const latestProfileCode = evaluaciones?.[0]?.disciplina_codigo;
+    const comparableEvaluations = selectComparableEvaluations(evaluaciones || []);
+    const latestProfileCode = comparableEvaluations?.[0]?.disciplina_codigo || evaluaciones?.[0]?.disciplina_codigo;
     const fallbackDiscipline = latestProfileCode && PROFILES[latestProfileCode]
       ? PROFILES[latestProfileCode].label
       : 'Otro';
@@ -185,7 +186,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
       academia,
       jugador: formattedPlayer,
       tutor,
-      evaluaciones: evaluaciones || [],
+      evaluaciones: comparableEvaluations,
       stats,
       comentarios,
       badges,
@@ -214,7 +215,8 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
       total_processing_ms: Date.now() - startedAt,
       pdf_size_bytes: pdfBuffer.length,
       badges_rendered: badges.length,
-      compared_evaluations: Math.min(2, (evaluaciones || []).length),
+      compared_evaluations: comparableEvaluations.length,
+      history_evaluations: (evaluaciones || []).length,
       discipline: sportProfile.code,
       discipline_label: sportProfile.label,
     });
