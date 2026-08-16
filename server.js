@@ -123,6 +123,7 @@ const consentimientoRoutes = require('./routes/consentimientos');
 const prematriculaRoutes = require('./routes/prematriculas');
 const importacionRoutes = require('./routes/importaciones');
 const jugadorRoutes = require('./routes/jugadores');
+const categoriaRoutes = require('./routes/categorias');
 const tutorRoutes = require('./routes/tutores');
 const evaluacionRoutes = require('./routes/evaluaciones');
 const fichaMedicaRoutes = require('./routes/ficha_medica');
@@ -170,6 +171,7 @@ app.get(
   evaluacionRoutes.categoryAverageHandler,
 );
 
+app.use('/api/categorias', categoriaRoutes);
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
