@@ -68,7 +68,8 @@ const revokeImageConsent = async ({ academyId, playerId, requestId, actorUserId 
 
 const deleteRows = async (table, academyId, playerId) => {
   let query = supabase.from(table).delete().eq('jugador_id', playerId);
-  if (academyId && !['jugador_categoria', 'jugador_tutor'].includes(table)) query = query.eq('academia_id', academyId);
+  const scopedByAcademy = new Set(['alertas_asistencia', 'evaluaciones', 'matriculas', 'pedidos_indumentaria']);
+  if (academyId && scopedByAcademy.has(table)) query = query.eq('academia_id', academyId);
   const { data, error } = await query.select('jugador_id');
   if (error) throw error;
   return Number(data?.length || 0);
