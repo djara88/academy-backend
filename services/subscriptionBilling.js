@@ -1,5 +1,5 @@
 const supabase = require('../config/supabase');
-const { getBillingQuote } = require('./billingCatalog');
+const { getBillingQuote, GUARDIAN_ADDON_CLP } = require('./billingCatalog');
 
 const addMonthsDate = (baseDate, months) => {
   const base = new Date(baseDate);
@@ -10,20 +10,56 @@ const addMonthsDate = (baseDate, months) => {
   return firstTarget.toISOString().slice(0, 10);
 };
 
+const today = () => new Date().toISOString().slice(0, 10);
+const activeGuardianLicense = (academy = {}) => academy.licencia_apoderados === true
+  && (!academy.guardian_license_ends_at || String(academy.guardian_license_ends_at).slice(0, 10) >= today());
+
+const activateGuardianAddonOnly = async (charge) => {
+  const { data: current, error: currentError } = await supabase.from('academias')
+    .select('id,licencia_apoderados,guardian_license_ends_at')
+    .eq('id', charge.academia_id).single();
+  if (currentError || !current) throw currentError || new Error('Academia no encontrada.');
+
+  const months = Number(charge.billing_period_months) === 12 ? 12 : 1;
+  const extensionBase = activeGuardianLicense(current) && current.guardian_license_ends_at
+    ? new Date(`${current.guardian_license_ends_at}T12:00:00Z`)
+    : new Date();
+  const guardianLicenseEndsAt = addMonthsDate(extensionBase, months);
+  const { error } = await supabase.from('academias').update({
+    licencia_apoderados: true,
+    guardian_price_clp: GUARDIAN_ADDON_CLP,
+    guardian_license_ends_at: guardianLicenseEndsAt,
+  }).eq('id', charge.academia_id);
+  if (error) throw error;
+
+  return {
+    activated: true,
+    addonOnly: true,
+    guardianLicense: true,
+    guardianLicenseEndsAt,
+    guardianPriceClp: GUARDIAN_ADDON_CLP,
+  };
+};
+
 const activateChargePlan = async (charge) => {
-  if (!charge?.target_plan_code) return false;
+  if (!charge?.target_plan_code) {
+    if (charge?.target_guardian_license === true) return activateGuardianAddonOnly(charge);
+    return false;
+  }
 
   const billingCycle = charge.billing_cycle === 'annual' ? 'annual' : 'monthly';
   const promotionCode = charge.promotion_code === 'founder' ? 'founder' : null;
+  const targetGuardians = charge.target_guardian_license === true;
   const quote = getBillingQuote({
     planCode: charge.target_plan_code,
     billingCycle,
     promotionCode,
+    guardians: targetGuardians,
   });
   if (!quote) throw new Error('El cobro no contiene un plan válido.');
 
   const { data: current, error: currentError } = await supabase.from('academias')
-    .select('id,founder_number,promotion_ends_at,promotion_code')
+    .select('id,founder_number,promotion_ends_at,promotion_code,licencia_apoderados,guardian_license_ends_at,guardian_price_clp')
     .eq('id', charge.academia_id)
     .single();
   if (currentError || !current) throw currentError || new Error('Academia no encontrada.');
@@ -31,7 +67,7 @@ const activateChargePlan = async (charge) => {
   let founderNumber = current.founder_number || null;
   let promotionEndsAt = current.promotion_ends_at || null;
   if (promotionCode === 'founder') {
-    if (founderNumber && promotionEndsAt && promotionEndsAt < new Date().toISOString().slice(0, 10)) {
+    if (founderNumber && promotionEndsAt && promotionEndsAt < today()) {
       throw new Error('El período de Precio Fundador de esta academia ya finalizó.');
     }
     const { data: slot, error: slotError } = await supabase.rpc('activar_syncademia_founder_slot', {
@@ -45,14 +81,16 @@ const activateChargePlan = async (charge) => {
   }
 
   const nextBillingDate = addMonthsDate(new Date(), quote.billingPeriodMonths);
+  const baseMonthlyEquivalentClp = quote.billingCycle === 'annual'
+    ? Math.round(quote.baseChargedNetClp / 12)
+    : quote.baseChargedNetClp;
+  const guardianWasAlreadyActive = activeGuardianLicense(current);
   const update = {
     plan: quote.plan.name,
     plan_codigo: quote.plan.code,
     max_profesores: quote.plan.professorLimit,
     max_jugadores: quote.plan.playerLimit || 100000,
-    licencia_apoderados: true,
-    plan_price_clp: quote.monthlyEquivalentNetClp,
-    guardian_price_clp: 0,
+    plan_price_clp: baseMonthlyEquivalentClp,
     billing_cycle: quote.billingCycle,
     billing_amount_clp: quote.chargedNetClp,
     promotion_code: promotionCode,
@@ -65,6 +103,16 @@ const activateChargePlan = async (charge) => {
     next_billing_date: nextBillingDate,
   };
 
+  if (targetGuardians) {
+    update.licencia_apoderados = true;
+    update.guardian_price_clp = GUARDIAN_ADDON_CLP;
+    update.guardian_license_ends_at = nextBillingDate;
+  } else if (!guardianWasAlreadyActive) {
+    update.licencia_apoderados = false;
+    update.guardian_price_clp = 0;
+    update.guardian_license_ends_at = null;
+  }
+
   const { error } = await supabase.from('academias').update(update).eq('id', charge.academia_id);
   if (error) throw error;
   return {
@@ -75,8 +123,10 @@ const activateChargePlan = async (charge) => {
     promotionEndsAt,
     nextBillingDate,
     billingAmountClp: quote.chargedNetClp,
-    monthlyEquivalentClp: quote.monthlyEquivalentNetClp,
+    monthlyEquivalentClp: baseMonthlyEquivalentClp,
+    guardianLicense: targetGuardians || guardianWasAlreadyActive,
+    guardianLicenseEndsAt: targetGuardians ? nextBillingDate : current.guardian_license_ends_at || null,
   };
 };
 
-module.exports = { activateChargePlan, addMonthsDate };
+module.exports = { activateChargePlan, activateGuardianAddonOnly, addMonthsDate };
