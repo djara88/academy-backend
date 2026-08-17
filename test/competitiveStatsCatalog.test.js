@@ -8,7 +8,7 @@ const {
   legacyStatColumns,
 } = require('../services/competitiveStatsCatalog');
 
-test('básquetbol usa estadísticas propias y agrega por jugador', () => {
+test('básquetbol usa estadísticas propias y agrega por alumno', () => {
   const profile = resolveCompetitiveProfile({ discipline: 'Básquetbol' });
   assert.equal(profile.code, 'basquetbol');
   assert.deepEqual(profile.metrics.map((item) => item.code), ['puntos', 'rebotes', 'asistencias', 'robos', 'tapones', 'triples']);
@@ -22,6 +22,24 @@ test('básquetbol usa estadísticas propias y agrega por jugador', () => {
   assert.equal(aggregate.metrics.find((item) => item.code === 'puntos').value, 30);
   assert.equal(aggregate.metrics.find((item) => item.code === 'rebotes').value, 12);
   assert.equal(aggregate.metrics.find((item) => item.code === 'asistencias').value, 10);
+});
+
+test('Karate separa métricas de Kumite y Kata', () => {
+  const profile = resolveCompetitiveProfile({ discipline: 'Karate' });
+  assert.equal(profile.code, 'karate');
+  assert.ok(profile.metrics.some((item) => item.code === 'ippon'));
+  assert.ok(profile.metrics.some((item) => item.code === 'waza_ari'));
+  assert.ok(profile.metrics.some((item) => item.code === 'puntaje_kata'));
+
+  const aggregate = aggregateCompetitiveStats(profile, [
+    { disciplina_codigo: 'karate', metricas_competitivas: { combates: 2, victorias: 2, ippon: 1, puntos: 8 } },
+    { disciplina_codigo: 'karate', metricas_competitivas: { medallas: 1, puntaje_kata: 24.7 } },
+    { disciplina_codigo: 'karate', metricas_competitivas: { medallas: 1, puntaje_kata: 25.3 }, es_mvp: true },
+  ]);
+  assert.equal(aggregate.participations, 3);
+  assert.equal(aggregate.metrics.find((item) => item.code === 'victorias').value, 2);
+  assert.equal(aggregate.metrics.find((item) => item.code === 'medallas').value, 2);
+  assert.equal(aggregate.metrics.find((item) => item.code === 'puntaje_kata').value, 25.3);
 });
 
 test('tenis no hereda columnas de fútbol', () => {
