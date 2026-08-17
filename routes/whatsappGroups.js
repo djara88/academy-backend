@@ -7,6 +7,7 @@ const { FEATURES } = require('../services/planCatalog');
 const { normalizePhone } = require('../services/chatWhatsApp');
 const { crearGrupo, actualizarParticipantesGrupo, obtenerParticipantesGrupo, enviarMensajeGrupo } = require('../services/whatsappService');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
+const { getActiveEnrollments } = require('../services/branchContext');
 
 const router = express.Router();
 router.use(authMiddleware, ...requireFeature(FEATURES.WHATSAPP_GROUPS), requireDirector);
@@ -17,35 +18,31 @@ const activePlayer = (player) => !player.privacy_anonymized_at && String(player.
 const resolveTargetTutors = async (academyId, scope, categoryId = null) => {
   const [{ data: tutors, error: tutorError }, { data: players, error: playerError }, { data: links, error: linkError }] = await Promise.all([
     supabase.from('tutores').select('id,nombre,nombre_completo,telefono').eq('academia_id', academyId),
-    supabase.from('jugadores').select('id,categoria_id,tutor_id,apoderado_id,tutor_principal_id,estado,privacy_anonymized_at').eq('academia_id', academyId),
+    supabase.from('jugadores').select('id,tutor_id,apoderado_id,tutor_principal_id,estado,privacy_anonymized_at').eq('academia_id', academyId),
     supabase.from('jugador_tutor').select('jugador_id,tutor_id'),
   ]);
   if (tutorError) throw tutorError;
   if (playerError) throw playerError;
   if (linkError) throw linkError;
 
-  const playerIdsByCategory = new Set();
+  let eligiblePlayerIds = null;
   if (scope === 'categoria' && categoryId) {
-    const directIds = (players || []).filter((player) => activePlayer(player) && String(player.categoria_id || '') === String(categoryId)).map((player) => player.id);
-    directIds.forEach((id) => playerIdsByCategory.add(String(id)));
-    const { data: categoryLinks, error: categoryError } = await supabase.from('jugador_categoria')
-      .select('jugador_id').eq('categoria_id', categoryId);
-    if (categoryError) throw categoryError;
-    (categoryLinks || []).forEach((item) => playerIdsByCategory.add(String(item.jugador_id)));
+    const enrollments = await getActiveEnrollments({ academyId, categoryId });
+    eligiblePlayerIds = new Set(enrollments.map((item) => String(item.jugador_id)));
   }
 
   const eligiblePlayers = (players || []).filter((player) => {
     if (!activePlayer(player)) return false;
     if (scope === 'global') return true;
-    return playerIdsByCategory.has(String(player.id));
+    return eligiblePlayerIds?.has(String(player.id)) === true;
   });
-  const eligiblePlayerIds = new Set(eligiblePlayers.map((player) => String(player.id)));
+  const eligibleIds = new Set(eligiblePlayers.map((player) => String(player.id)));
   const tutorIds = new Set();
   eligiblePlayers.forEach((player) => {
     [player.tutor_id, player.apoderado_id, player.tutor_principal_id].filter(Boolean).forEach((id) => tutorIds.add(String(id)));
   });
   (links || []).forEach((link) => {
-    if (eligiblePlayerIds.has(String(link.jugador_id)) && link.tutor_id) tutorIds.add(String(link.tutor_id));
+    if (eligibleIds.has(String(link.jugador_id)) && link.tutor_id) tutorIds.add(String(link.tutor_id));
   });
 
   const uniquePhones = new Set();
@@ -66,8 +63,14 @@ const resolveTargetTutors = async (academyId, scope, categoryId = null) => {
 
 router.get('/candidates', async (req, res) => {
   try {
-    const { data: categories, error } = await supabase.from('categorias')
-      .select('id,nombre').eq('academia_id', req.user.academia_id).order('nombre');
+    const branchId = safeText(req.query?.rama_id, 80);
+    let categoryQuery = supabase.from('categorias')
+      .select('id,nombre,sede_id,rama_id,ramas(id,nombre,disciplina),sedes(id,nombre)')
+      .eq('academia_id', req.user.academia_id)
+      .order('rama_id')
+      .order('nombre');
+    if (branchId) categoryQuery = categoryQuery.eq('rama_id', branchId);
+    const { data: categories, error } = await categoryQuery;
     if (error) throw error;
     const globalTargets = await resolveTargetTutors(req.user.academia_id, 'global');
     const categoryCounts = [];
@@ -85,7 +88,7 @@ router.get('/candidates', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase.from('whatsapp_groups')
-      .select('id,academia_id,categoria_id,scope,nombre,group_jid,estado,participantes_objetivo,participantes_agregados,last_error,created_at,updated_at,last_sync_at,categorias(id,nombre)')
+      .select('id,academia_id,categoria_id,scope,nombre,group_jid,estado,participantes_objetivo,participantes_agregados,last_error,created_at,updated_at,last_sync_at,categorias(id,nombre,sede_id,rama_id,ramas(id,nombre,disciplina),sedes(id,nombre))')
       .eq('academia_id', req.user.academia_id)
       .order('created_at', { ascending: false });
     if (error) throw error;
@@ -107,11 +110,17 @@ router.post('/', async (req, res) => {
 
   let groupRow = null;
   try {
+    let category = null;
     if (categoryId) {
-      const { data: category, error: categoryError } = await supabase.from('categorias')
-        .select('id').eq('id', categoryId).eq('academia_id', req.user.academia_id).maybeSingle();
+      const { data, error: categoryError } = await supabase.from('categorias')
+        .select('id,nombre,sede_id,rama_id,ramas(id,nombre,disciplina),sedes(id,nombre)')
+        .eq('id', categoryId)
+        .eq('academia_id', req.user.academia_id)
+        .maybeSingle();
       if (categoryError) throw categoryError;
-      if (!category) return res.status(404).json({ error: 'Categoría no encontrada.' });
+      if (!data) return res.status(404).json({ error: 'Categoría no encontrada.' });
+      if (!data.rama_id || !data.sede_id) return res.status(409).json({ error: 'La categoría debe pertenecer a una sede y rama antes de crear un grupo.', code: 'CATEGORY_NOT_SCOPED' });
+      category = data;
     }
 
     const targets = await resolveTargetTutors(req.user.academia_id, scope, categoryId);
@@ -137,9 +146,12 @@ router.post('/', async (req, res) => {
     })));
     if (memberError) throw memberError;
 
+    const description = scope === 'global'
+      ? 'Grupo general de apoderados de la academia administrado por Syncademia.'
+      : `Grupo de apoderados · ${category?.ramas?.disciplina || 'Disciplina'} · ${category?.ramas?.nombre || 'Rama'} · ${category?.nombre || 'Categoría'}.`;
     const result = await crearGrupo(req.user.academia_id, {
       subject: name,
-      description: scope === 'global' ? 'Grupo general de apoderados de la academia administrado por Syncademia.' : 'Grupo de apoderados por categoría administrado por Syncademia.',
+      description,
       participants: targets.map((target) => target.telefono),
     });
     if (!result.groupJid) throw new Error('WhatsApp creó el grupo pero no devolvió un identificador reconocible.');
