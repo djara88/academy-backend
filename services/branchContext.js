@@ -1,9 +1,8 @@
 const supabase = require('../config/supabase');
+const { scopedError, assertSameBranch } = require('./branchScopeRules');
 
 const safeText = (value, max = 180) => String(value ?? '').trim().slice(0, max);
 const uniqueIds = (values) => [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean))];
-
-const scopedError = (message, status = 400, code = 'INVALID_SCOPE') => Object.assign(new Error(message), { status, code });
 
 const getBranch = async (academyId, branchId, { activeOnly = true } = {}) => {
   const id = safeText(branchId, 80);
@@ -51,12 +50,6 @@ const getTournament = async (academyId, tournamentId) => {
   if (error) throw error;
   if (!data) throw scopedError('Torneo no encontrado en la academia.', 404, 'TOURNAMENT_NOT_FOUND');
   return data;
-};
-
-const assertSameBranch = (leftBranchId, rightBranchId, message = 'Los elementos seleccionados pertenecen a ramas deportivas distintas.') => {
-  if (leftBranchId && rightBranchId && String(leftBranchId) !== String(rightBranchId)) {
-    throw scopedError(message, 409, 'BRANCH_SCOPE_MISMATCH');
-  }
 };
 
 const getActiveEnrollments = async ({ academyId, branchId, categoryId, playerIds } = {}) => {
