@@ -29,14 +29,17 @@ test('una licencia familiar vencida deja de habilitar el portal', () => {
   assert.equal(entitlements.addOns.guardians, false);
 });
 
-test('todos los planes tienen radar, pero solo Competencia y Alto Rendimiento personalizan criterios', () => {
+test('todos los planes tienen radar y catálogo estándar; solo Competencia y Alto Rendimiento personalizan', () => {
   const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
   const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
   const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
   for (const entitlements of [formation, competition, highPerformance]) assert.equal(entitlements.features.includes(FEATURES.EVALUATIONS), true);
   assert.equal(formation.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), false);
+  assert.equal(formation.features.includes(FEATURES.CUSTOM_RECOGNITIONS), false);
   assert.equal(competition.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
+  assert.equal(competition.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
   assert.equal(highPerformance.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
+  assert.equal(highPerformance.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
 });
 
 test('la prueba Full habilita Apoderados PRO y capacidad premium', () => {
@@ -46,6 +49,7 @@ test('la prueba Full habilita Apoderados PRO y capacidad premium', () => {
   assert.equal(trial.features.includes(FEATURES.GUARDIANS), true);
   assert.equal(trial.features.includes(FEATURES.WHATSAPP_GROUPS), true);
   assert.equal(trial.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
+  assert.equal(trial.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
   assert.equal(trial.addOns.guardiansIncludedByTrial, true);
   assert.equal(trial.limits.professors, 30);
   assert.equal(trial.limits.players, null);
