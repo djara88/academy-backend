@@ -82,7 +82,12 @@ jobs:
           grep -Rho "process\.env\.[A-Z0-9_]*" --include='*.js' . \
             | sed 's/process\.env\.//' \
             | sort -u > backup/meta/required-env-names.txt || true
-          find backup -type f -print0 | sort -z | xargs -0 sha256sum > backup/meta/SHA256SUMS
+          (
+            cd backup
+            find . -type f ! -path './meta/SHA256SUMS' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > meta/SHA256SUMS
+          )
 
       - name: Empaquetar y cifrar
         shell: bash
@@ -97,16 +102,14 @@ jobs:
             -pass env:BACKUP_PASSPHRASE
           sha256sum "${archive}.enc" > "${archive}.enc.sha256"
           rm -rf backup "$archive"
-          echo "BACKUP_FILE=${archive}.enc" >> "$GITHUB_ENV"
-          echo "CHECKSUM_FILE=${archive}.enc.sha256" >> "$GITHUB_ENV"
 
       - name: Guardar backup cifrado
         uses: actions/upload-artifact@v4
         with:
           name: syncademia-production-backup-${{ github.run_id }}
           path: |
-            ${{ env.BACKUP_FILE }}
-            ${{ env.CHECKSUM_FILE }}
+            syncademia-production-*.tar.gz.enc
+            syncademia-production-*.tar.gz.enc.sha256
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
