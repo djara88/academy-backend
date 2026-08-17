@@ -1,10 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { calculateGrossClp, getBillingPlan, getBillingQuote } = require('../services/billingCatalog');
+const { calculateGrossClp, getBillingPlan, getBillingQuote, guardianAddonQuote, GUARDIAN_ADDON_CLP } = require('../services/billingCatalog');
 
-test('calcula IVA chileno sin recargo por apoderados', () => {
+test('calcula IVA chileno y recargo de Apoderados PRO', () => {
+  assert.equal(GUARDIAN_ADDON_CLP, 15000);
   assert.equal(calculateGrossClp({ priceClp: 59000 }), 70210);
-  assert.equal(calculateGrossClp({ priceClp: 59000, guardians: true }), 70210);
+  assert.equal(calculateGrossClp({ priceClp: 59000, guardians: true }), 88060);
 });
 
 test('catálogo comercial coincide con precios y cupos aprobados', () => {
@@ -27,9 +28,21 @@ test('anual cobra diez meses y habilita doce', () => {
   assert.equal(quote.monthlyEquivalentNetClp, 82500);
 });
 
-test('fundador usa precio especial mensual y no se acumula con anual', () => {
-  const quote = getBillingQuote({ planCode: 'alto_rendimiento', promotionCode: 'founder' });
-  assert.equal(quote.chargedNetClp, 119000);
+test('Apoderados PRO anual cobra diez meses y dura doce', () => {
+  const addon = guardianAddonQuote('annual');
+  assert.equal(addon.chargedNetClp, 150000);
+  assert.equal(addon.regularNetClp, 180000);
+  assert.equal(addon.billingPeriodMonths, 12);
+  const quote = getBillingQuote({ planCode: 'formacion', billingCycle: 'annual', guardians: true });
+  assert.equal(quote.chargedNetClp, 740000);
+  assert.equal(quote.guardianChargedNetClp, 150000);
+});
+
+test('fundador usa precio especial mensual y add-on conserva precio lista', () => {
+  const quote = getBillingQuote({ planCode: 'alto_rendimiento', promotionCode: 'founder', guardians: true });
+  assert.equal(quote.baseChargedNetClp, 119000);
+  assert.equal(quote.guardianChargedNetClp, 15000);
+  assert.equal(quote.chargedNetClp, 134000);
   assert.equal(quote.billingCycle, 'monthly');
   assert.throws(
     () => getBillingQuote({ planCode: 'formacion', billingCycle: 'annual', promotionCode: 'founder' }),
