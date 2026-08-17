@@ -78,7 +78,7 @@ app.get('/', (_req, res) => res.send('API de Syncademia funcionando 🚀'));
 app.get('/health', (_req, res) => {
   const memory = process.memoryUsage();
   res.json({
-    status: 'ok', service: 'syncademia-backend', features: { profesores: true },
+    status: 'ok', service: 'syncademia-backend', features: { profesores: true, multirama_core: true },
     commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
     uptime_seconds: Math.round(process.uptime()),
     memory_rss_mb: Math.round(memory.rss / 1024 / 1024),
@@ -116,16 +116,23 @@ const tutorRoutes = require('./routes/tutores');
 const evaluacionRoutes = require('./routes/evaluaciones');
 const fichaMedicaRoutes = require('./routes/ficha_medica');
 const torneoRoutes = require('./routes/torneos');
+const torneoMultiramaRoutes = require('./routes/torneosMultirama');
 const partidoRoutes = require('./routes/partidos');
+const partidoMultiramaRoutes = require('./routes/partidosMultirama');
 const academiaRoutes = require('./routes/academias');
+const academyOnboardingMultiramaRoutes = require('./routes/academyOnboardingMultirama');
 const matriculaRoutes = require('./routes/matriculas');
 const whatsappRoutes = require('./routes/whatsapp');
 const whatsappBridgeRoutes = require('./routes/whatsappBridge');
 const whatsappGroupRoutes = require('./routes/whatsappGroups');
 const finanzasRoutes = require('./routes/finanzas');
+const finanzasMultiramaRoutes = require('./routes/finanzasMultirama');
 const entrenamientosRoutes = require('./routes/entrenamientos');
+const entrenamientosMultiramaRoutes = require('./routes/entrenamientosMultirama');
 const uniformesRoutes = require('./routes/uniformes');
+const uniformesMultiramaRoutes = require('./routes/uniformesMultirama');
 const profesoresRoutes = require('./routes/profesores');
+const profesoresMultiramaRoutes = require('./routes/profesoresMultirama');
 const apoderadosRoutes = require('./routes/apoderados');
 const guardianEnrollmentsRoutes = require('./routes/guardianEnrollments');
 const dashboardRoutes = require('./routes/dashboard');
@@ -162,16 +169,26 @@ app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
 app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
+
+// Rutas multirrama se montan antes de las implementaciones legacy. Solo los
+// endpoints que resuelven responden; los demás continúan hacia el router histórico.
+app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoMultiramaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
+app.use('/api/partidos', partidoMultiramaRoutes);
 app.use('/api/partidos', partidoRoutes);
+app.use('/api/academias', academyOnboardingMultiramaRoutes);
 app.use('/api/academias', academiaRoutes);
 app.use('/api/matriculas', matriculaRoutes);
 app.use('/api/whatsapp-bridge', whatsappBridgeRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/chat/whatsapp-groups', whatsappGroupRoutes);
+app.use('/api/finanzas', finanzasMultiramaRoutes);
 app.use('/api/finanzas', finanzasRoutes);
+app.use('/api/entrenamientos', entrenamientosMultiramaRoutes);
 app.use('/api/entrenamientos', entrenamientosRoutes);
+app.use('/api/uniformes', uniformesMultiramaRoutes);
 app.use('/api/uniformes', uniformesRoutes);
+app.use('/api/profesores', profesoresMultiramaRoutes);
 app.use('/api/profesores', profesoresRoutes);
 app.use('/api/apoderados/me/inscripciones-deportivas', guardianEnrollmentsRoutes);
 app.use('/api/apoderados', apoderadosRoutes);
