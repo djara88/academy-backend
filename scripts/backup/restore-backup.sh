@@ -11,6 +11,8 @@ fi
 : "${TARGET_SUPABASE_URL:?Falta TARGET_SUPABASE_URL}"
 : "${TARGET_SUPABASE_SERVICE_ROLE_KEY:?Falta TARGET_SUPABASE_SERVICE_ROLE_KEY}"
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 encrypted="$1"
 checksum="$2"
 workdir="$(mktemp -d)"
@@ -50,7 +52,7 @@ psql \
 BACKUP_STORAGE_DIR="$workdir/backup/storage" \
 TARGET_SUPABASE_URL="$TARGET_SUPABASE_URL" \
 TARGET_SUPABASE_SERVICE_ROLE_KEY="$TARGET_SUPABASE_SERVICE_ROLE_KEY" \
-node "$GITHUB_WORKSPACE/scripts/backup/restore-storage.js"
+node "$repo_root/scripts/backup/restore-storage.js"
 
 psql "$TARGET_SUPABASE_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
 select 'academias' as entidad, count(*) from public.academias
