@@ -26,14 +26,11 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  if (req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https')) {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000');
-  }
+  if (req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https')) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   next();
 });
 
 app.use(requestFailureRecorder);
-
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.has(origin)) return callback(null, true);
@@ -62,6 +59,7 @@ const registrationLimiter = createRateLimiter({
 app.use('/api', apiLimiter);
 app.use('/api/cambiar-password', sensitiveLimiter);
 app.use('/api/subscriptions/checkout', sensitiveLimiter);
+app.use('/api/subscriptions/guardian-addon/checkout', sensitiveLimiter);
 app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
 app.use('/api/prematriculas/public', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
@@ -131,7 +129,7 @@ const apoderadosRoutes = require('./routes/apoderados');
 const guardianEnrollmentsRoutes = require('./routes/guardianEnrollments');
 const dashboardRoutes = require('./routes/dashboard');
 const saasAdminRoutes = require('./routes/saasAdmin');
-const subscriptionRoutes = require('./routes/subscriptions');
+const subscriptionRoutes = require('./routes/subscriptionsPaidGuardians');
 const privacyRequestRoutes = require('./routes/privacyRequests');
 const chatRoutes = require('./routes/chat');
 const systemMetricsRoutes = require('./routes/systemMetrics');

@@ -42,7 +42,7 @@ const authMiddleware = async (req, res, next) => {
     let academy = null;
     if (usuario.academia_id) {
       const { data, error: academyError } = await supabase.from('academias')
-        .select('id,nombre,estado,plan,plan_codigo,max_profesores,max_jugadores,licencia_apoderados,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_clp,guardian_price_clp')
+        .select('id,nombre,estado,plan,plan_codigo,max_profesores,max_jugadores,licencia_apoderados,guardian_license_ends_at,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_clp,guardian_price_clp')
         .eq('id', usuario.academia_id).maybeSingle();
       if (academyError) return res.status(500).json({ error: 'Error al validar la suscripción de la academia' });
       if (!data) return res.status(403).json({ error: 'La academia asociada ya no existe', code: 'ACADEMY_NOT_FOUND' });
