@@ -1,5 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+// El generador PDF es puro. Estas variables ficticias solo permiten cargar el
+// cliente Supabase del módulo durante CI; esta prueba nunca realiza consultas.
+process.env.SUPABASE_URL ||= 'https://example.supabase.co';
+process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'test-service-role-key-for-pdf-unit-test';
+
 const { createStudentReportPdf } = require('../services/studentReport');
 
 test('genera un PDF de evolución con contexto de una sola rama', async () => {
