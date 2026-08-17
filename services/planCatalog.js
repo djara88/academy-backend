@@ -17,6 +17,7 @@ const FEATURES = Object.freeze({
   ATTENDANCE_ALERTS: 'alertas_asistencia',
   EVALUATIONS: 'evaluaciones',
   CUSTOM_EVALUATION_CRITERIA: 'criterios_evaluacion_personalizados',
+  CUSTOM_RECOGNITIONS: 'reconocimientos_personalizados',
   MEDICAL: 'ficha_medica',
   ADVANCED_ANALYTICS: 'analitica_avanzada',
   CUSTOM_BRANDING: 'marca_personalizada',
@@ -43,6 +44,7 @@ const COMPETITION_FEATURES = [
   FEATURES.MATCH_PREPARATION,
   FEATURES.ATTENDANCE_ALERTS,
   FEATURES.CUSTOM_EVALUATION_CRITERIA,
+  FEATURES.CUSTOM_RECOGNITIONS,
   FEATURES.EXPORTS,
   FEATURES.WHATSAPP_GROUPS,
 ];
