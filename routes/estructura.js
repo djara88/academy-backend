@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(authMiddleware, requireDirector);
 
 const safeText = (value, max = 180) => String(value ?? '').trim().slice(0, max);
-const ALLOWED_DISCIPLINES = ['Fútbol','Futsal','Básquetbol','Vóleibol','Tenis','Pádel','Hockey','Atletismo','Natación','Gimnasia','Artes marciales','Rugby','Otro'];
+const ALLOWED_DISCIPLINES = ['Fútbol','Futsal','Básquetbol','Vóleibol','Tenis','Pádel','Hockey','Atletismo','Natación','Gimnasia','Karate','Artes marciales','Rugby','Otro'];
 
 const assertSite = async (academyId, siteId) => {
   const { data, error } = await supabase.from('sedes').select('*').eq('id', siteId).eq('academia_id', academyId).maybeSingle();
