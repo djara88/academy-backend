@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { FEATURES } = require('../services/planCatalog');
+const { getActiveEnrollments } = require('../services/branchContext');
 const {
   resolveEvaluationProfile,
   sanitizeRadarMetrics,
@@ -102,21 +103,15 @@ const categoryAverageHandler = async (req, res) => {
       scopeId: branch?.id || undefined,
     });
 
-    const { data: links, error: linkError } = await supabase.from('jugador_categoria')
-      .select('jugador_id')
-      .eq('categoria_id', category.id);
-    if (linkError) throw linkError;
-    const linkedIds = [...new Set((links || []).map((row) => row.jugador_id).filter(Boolean))];
-    if (!linkedIds.length) return res.json({ success: true, data: {}, sample_size: 0, profile });
-
-    let playersQuery = supabase.from('jugadores')
-      .select('id,rama_id')
-      .eq('academia_id', academyId)
-      .in('id', linkedIds);
-    if (category.rama_id) playersQuery = playersQuery.eq('rama_id', category.rama_id);
-    const { data: players, error: playersError } = await playersQuery;
-    if (playersError) throw playersError;
-    const playerIds = (players || []).map((row) => row.id);
+    // jugador_categoria es la fuente de verdad de pertenencia a categorías.
+    // La inscripción confirma que esa persona sigue activa en la rama, pero su
+    // categoria_id es solo una referencia de compatibilidad y no limita el grupo.
+    const enrollments = await getActiveEnrollments({
+      academyId,
+      branchId: category.rama_id || undefined,
+      categoryId: category.id,
+    });
+    const playerIds = [...new Set(enrollments.map((row) => row.jugador_id).filter(Boolean))];
     if (!playerIds.length) return res.json({ success: true, data: {}, sample_size: 0, profile });
 
     const { data: evaluations, error: evalError } = await supabase.from('evaluaciones')
