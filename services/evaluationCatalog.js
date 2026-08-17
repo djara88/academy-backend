@@ -85,6 +85,10 @@ const aliases = new Map([
   ['natacion', 'natacion'],
   ['gimnasia', 'gimnasia'],
   ['artes marciales', 'artes_marciales'], ['arte marcial', 'artes_marciales'], ['artes_marciales', 'artes_marciales'],
+  ['karate', 'artes_marciales'], ['karate do', 'artes_marciales'], ['taekwondo', 'artes_marciales'],
+  ['judo', 'artes_marciales'], ['jiu jitsu', 'artes_marciales'], ['jiu-jitsu', 'artes_marciales'],
+  ['bjj', 'artes_marciales'], ['kickboxing', 'artes_marciales'], ['muay thai', 'artes_marciales'],
+  ['kung fu', 'artes_marciales'], ['wushu', 'artes_marciales'], ['aikido', 'artes_marciales'],
   ['rugby', 'rugby'],
   ['generico', 'generico'],
 ]);
