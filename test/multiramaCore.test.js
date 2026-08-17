@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveDiscipline, defaultBranchName, ALLOWED_DISCIPLINES } = require('../services/academyStructureService');
-const { assertSameBranch } = require('../services/branchContext');
+const { resolveDiscipline, defaultBranchName, ALLOWED_DISCIPLINES } = require('../services/disciplineCatalog');
+const { assertSameBranch } = require('../services/branchScopeRules');
 
 test('onboarding reconoce disciplinas principales canónicas y alias', () => {
   assert.equal(resolveDiscipline('Fútbol'), 'Fútbol');
