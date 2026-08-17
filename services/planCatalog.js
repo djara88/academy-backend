@@ -4,6 +4,8 @@ const PLAN_CODES = Object.freeze({
   ALTO_RENDIMIENTO: 'alto_rendimiento',
 });
 
+const GUARDIAN_ADDON_CLP = 15000;
+
 const FEATURES = Object.freeze({
   CORE: 'core',
   FINANCE: 'finanzas',
@@ -24,9 +26,8 @@ const FEATURES = Object.freeze({
   ADVANCED_COMMUNICATIONS: 'comunicaciones_avanzadas',
 });
 
-// Formación debe sentirse como un producto completo. Incluye evaluación y radar
-// multideporte con criterios estándar de Syncademia. La personalización de esos
-// criterios diferencia Competencia y Alto Rendimiento.
+// El portal familiar se comercializa como complemento independiente. La prueba
+// Full lo habilita para demostrar la experiencia completa antes de contratar.
 const BASE_FEATURES = [
   FEATURES.CORE,
   FEATURES.FINANCE,
@@ -34,7 +35,6 @@ const BASE_FEATURES = [
   FEATURES.PROFESSORS,
   FEATURES.MATCHES,
   FEATURES.TOURNAMENTS,
-  FEATURES.GUARDIANS,
   FEATURES.EVALUATIONS,
 ];
 
@@ -108,15 +108,22 @@ const resolvePlanCode = (academy = {}) => {
   return PLAN_CODES.FORMACION;
 };
 
+const guardianLicenseIsActive = (academy = {}, today = new Date().toISOString().slice(0, 10)) => {
+  if (isTrialPlan(academy)) return true;
+  if (academy.licencia_apoderados !== true) return false;
+  if (!academy.guardian_license_ends_at) return true;
+  return String(academy.guardian_license_ends_at).slice(0, 10) >= today;
+};
+
 const getPlanDefinition = (academy = {}) => PLAN_DEFINITIONS[resolvePlanCode(academy)];
 
 const getAcademyEntitlements = (academy = {}) => {
   const plan = getPlanDefinition(academy);
-  // La prueba de 15 días expone Alto Rendimiento completo, incluida capacidad
-  // multi-sede/multi-rama y criterios personalizados, para demostrar el valor real.
   const trial = isTrialPlan(academy);
   const trialPlan = PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO];
   const features = new Set(trial ? trialPlan.features : plan.features);
+  const guardianActive = guardianLicenseIsActive(academy);
+  if (guardianActive) features.add(FEATURES.GUARDIANS);
 
   const manualProfessorLimit = Number(academy.max_profesores);
   return {
@@ -132,11 +139,12 @@ const getAcademyEntitlements = (academy = {}) => {
       branches: trial ? null : plan.branchLimit,
     },
     addOns: {
-      guardians: true,
-      guardiansIncludedByPlan: true,
+      guardians: guardianActive,
+      guardiansIncludedByPlan: false,
       guardiansIncludedByTrial: trial,
+      guardianLicenseEndsAt: trial ? academy.trial_ends_at || null : academy.guardian_license_ends_at || null,
     },
-    pricing: { planClp: plan.priceClp, guardiansClp: 0 },
+    pricing: { planClp: plan.priceClp, guardiansClp: GUARDIAN_ADDON_CLP },
     features: [...features],
   };
 };
@@ -148,10 +156,12 @@ module.exports = {
   PLAN_CODES,
   PLAN_DEFINITIONS,
   FEATURES,
+  GUARDIAN_ADDON_CLP,
   normalizePlanText,
   resolvePlanCode,
   getPlanDefinition,
   getAcademyEntitlements,
+  guardianLicenseIsActive,
   hasFeature,
   getPlanProfessorLimit,
   isTrialPlan,
