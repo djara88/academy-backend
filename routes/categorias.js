@@ -135,6 +135,35 @@ const listCategories = async (req, res) => {
   }
 };
 
+const listPlayerCategories = async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const playerId = safeText(req.params.playerId, 80);
+    const branchId = safeText(req.query?.rama_id, 80);
+    if (!playerId || !branchId) {
+      return res.status(400).json({ success: false, error: 'Alumno y rama son obligatorios.' });
+    }
+    const player = await getPlayer(academyId, playerId);
+    const enrollment = await getStudentEnrollment(academyId, player.id, { branchId });
+    const categories = await getBranchMemberships(player.id, branchId);
+    return res.json({
+      success: true,
+      data: {
+        categorias: categories,
+        categoria_referencia_id: enrollment.categoria_id || null,
+        inscripcion_id: enrollment.id,
+        rama_id: enrollment.rama_id,
+      },
+    });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      success: false,
+      error: error?.message || 'No fue posible cargar las categorías del alumno.',
+      code: error?.code || undefined,
+    });
+  }
+};
+
 const createCategory = async (req, res) => {
   try {
     const academyId = req.user.academia_id;
@@ -282,6 +311,7 @@ const removePlayer = async (req, res) => {
 };
 
 router.get(['/categorias', '/jugadores/categorias'], authMiddleware, listCategories);
+router.get('/jugadores/:playerId/categorias', authMiddleware, requireDirector, listPlayerCategories);
 router.post(['/categorias', '/jugadores/categorias'], authMiddleware, requireDirector, createCategory);
 router.post(['/categorias/:categoryId/jugadores/:playerId', '/jugadores/:playerId/categorias'], authMiddleware, requireDirector, assignPlayer);
 router.delete(['/categorias/:categoryId/jugadores/:playerId', '/jugadores/:playerId/categorias/:categoryId'], authMiddleware, requireDirector, removePlayer);
