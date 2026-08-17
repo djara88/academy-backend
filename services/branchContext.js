@@ -39,6 +39,17 @@ const getCategoryContext = async (academyId, categoryId, { requireScoped = true 
   return { category, branch, site: branch?.sedes || null };
 };
 
+const getCategoryMemberIds = async (categoryId, playerIds) => {
+  const requestedIds = uniqueIds(playerIds);
+  let query = supabase.from('jugador_categoria')
+    .select('jugador_id')
+    .eq('categoria_id', categoryId);
+  if (requestedIds.length) query = query.in('jugador_id', requestedIds);
+  const { data, error } = await query;
+  if (error) throw error;
+  return uniqueIds((data || []).map((row) => row.jugador_id));
+};
+
 const getTournament = async (academyId, tournamentId) => {
   const id = safeText(tournamentId, 80);
   if (!id) throw scopedError('Selecciona un torneo.', 400, 'TOURNAMENT_REQUIRED');
@@ -52,15 +63,31 @@ const getTournament = async (academyId, tournamentId) => {
   return data;
 };
 
+// La inscripción deportiva representa la pertenencia a una rama. Las categorías
+// son una relación muchos-a-muchos mediante jugador_categoria. categoria_id en
+// inscripciones_deportivas se conserva únicamente como categoría de referencia
+// para compatibilidad con módulos históricos; nunca debe limitar membresías.
 const getActiveEnrollments = async ({ academyId, branchId, categoryId, playerIds } = {}) => {
+  const requestedIds = uniqueIds(playerIds);
+  let effectiveBranchId = safeText(branchId, 80) || null;
+  let effectivePlayerIds = requestedIds;
+
+  if (categoryId) {
+    const { category } = await getCategoryContext(academyId, categoryId);
+    if (effectiveBranchId && String(effectiveBranchId) !== String(category.rama_id)) {
+      throw scopedError('La categoría no pertenece a la rama seleccionada.', 409, 'CATEGORY_BRANCH_MISMATCH');
+    }
+    effectiveBranchId = category.rama_id;
+    effectivePlayerIds = await getCategoryMemberIds(category.id, requestedIds);
+    if (!effectivePlayerIds.length) return [];
+  }
+
   let query = supabase.from('inscripciones_deportivas')
     .select('id,jugador_id,sede_id,rama_id,categoria_id,estado,es_principal,rol_especialidad,fecha_inicio,fecha_fin,monto_matricula,monto_mensualidad')
     .eq('academia_id', academyId)
     .eq('estado', 'Activa');
-  if (branchId) query = query.eq('rama_id', branchId);
-  if (categoryId) query = query.eq('categoria_id', categoryId);
-  const ids = uniqueIds(playerIds);
-  if (ids.length) query = query.in('jugador_id', ids);
+  if (effectiveBranchId) query = query.eq('rama_id', effectiveBranchId);
+  if (effectivePlayerIds.length) query = query.in('jugador_id', effectivePlayerIds);
   const { data, error } = await query.order('es_principal', { ascending: false }).order('created_at', { ascending: true });
   if (error) throw error;
   return data || [];
@@ -89,16 +116,29 @@ const getStudentsForScope = async ({ academyId, branchId, categoryId, playerIds,
 };
 
 const getStudentEnrollment = async (academyId, playerId, { branchId, categoryId, activeOnly = true } = {}) => {
+  let effectiveBranchId = safeText(branchId, 80) || null;
+
+  if (categoryId) {
+    const { category } = await getCategoryContext(academyId, categoryId);
+    if (effectiveBranchId && String(effectiveBranchId) !== String(category.rama_id)) {
+      throw scopedError('La categoría no pertenece a la rama seleccionada.', 409, 'CATEGORY_BRANCH_MISMATCH');
+    }
+    const memberIds = await getCategoryMemberIds(category.id, [playerId]);
+    if (!memberIds.length) {
+      throw scopedError('El alumno no pertenece a la categoría seleccionada.', 409, 'CATEGORY_MEMBERSHIP_REQUIRED');
+    }
+    effectiveBranchId = category.rama_id;
+  }
+
   let query = supabase.from('inscripciones_deportivas')
     .select('id,jugador_id,sede_id,rama_id,categoria_id,estado,es_principal,rol_especialidad,monto_matricula,monto_mensualidad')
     .eq('academia_id', academyId)
     .eq('jugador_id', playerId);
   if (activeOnly) query = query.eq('estado', 'Activa');
-  if (branchId) query = query.eq('rama_id', branchId);
-  if (categoryId) query = query.eq('categoria_id', categoryId);
+  if (effectiveBranchId) query = query.eq('rama_id', effectiveBranchId);
   const { data, error } = await query.order('es_principal', { ascending: false }).order('created_at', { ascending: true }).limit(1).maybeSingle();
   if (error) throw error;
-  if (!data) throw scopedError('El alumno no tiene una inscripción activa en la rama/categoría seleccionada.', 409, 'ACTIVE_ENROLLMENT_REQUIRED');
+  if (!data) throw scopedError('El alumno no tiene una inscripción activa en la rama seleccionada.', 409, 'ACTIVE_ENROLLMENT_REQUIRED');
   return data;
 };
 
@@ -120,6 +160,7 @@ module.exports = {
   scopedError,
   getBranch,
   getCategoryContext,
+  getCategoryMemberIds,
   getTournament,
   assertSameBranch,
   getActiveEnrollments,
