@@ -111,6 +111,7 @@ const prematriculaRoutes = require('./routes/prematriculas');
 const importacionRoutes = require('./routes/importaciones');
 const jugadorRoutes = require('./routes/jugadores');
 const alumnosRecognitionNotificationsRoutes = require('./routes/alumnosRecognitionNotifications');
+const alumnosReportsRoutes = require('./routes/alumnosReports');
 const alumnosRoutes = require('./routes/alumnos');
 const categoriaRoutes = require('./routes/categorias');
 const tutorRoutes = require('./routes/tutores');
@@ -164,6 +165,7 @@ app.get('/api/jugadores/categorias/:categoriaId/promedio', authMiddleware, ...re
 
 app.use('/api', categoriaRoutes);
 app.use('/api/alumnos', alumnosRecognitionNotificationsRoutes);
+app.use('/api/alumnos', alumnosReportsRoutes);
 app.use('/api/alumnos', alumnosRoutes);
 app.use('/api/jugadores', jugadorRoutes);
 app.use('/api/inscripciones', inscripcionesRoutes);
