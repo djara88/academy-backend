@@ -22,6 +22,24 @@ test('arquero de fútbol usa perfil específico', () => {
   assert.equal(profile.metrics.includes('Juego aéreo'), true);
 });
 
+test('Karate usa radar estándar propio y cambia según Kata o Kumite', () => {
+  const general = resolveEvaluationProfile({ discipline: 'Karate' });
+  assert.equal(general.code, 'karate');
+  assert.equal(general.metrics.includes('Kihon / técnica base'), true);
+  assert.equal(general.metrics.includes('Kumite'), true);
+
+  const kata = resolveEvaluationProfile({ discipline: 'Karate', role: 'Kata' });
+  assert.equal(kata.profileCode, 'karate:kata');
+  assert.equal(kata.metrics.includes('Precisión'), true);
+  assert.equal(kata.metrics.includes('Concentración'), true);
+  assert.equal(kata.metrics.includes('Kihon / técnica base'), false);
+
+  const kumite = resolveEvaluationProfile({ discipline: 'Karate', role: 'Kumite' });
+  assert.equal(kumite.profileCode, 'karate:kumite');
+  assert.equal(kumite.metrics.includes('Distancia / Maai'), true);
+  assert.equal(kumite.metrics.includes('Timing'), true);
+});
+
 test('disciplina desconocida usa perfil genérico seguro', () => {
   const profile = resolveEvaluationProfile({ discipline: 'Escalada deportiva' });
   assert.equal(profile.code, 'generico');

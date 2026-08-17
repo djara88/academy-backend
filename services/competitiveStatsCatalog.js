@@ -93,6 +93,14 @@ const PROFILES = Object.freeze({
       metric('puntaje', 'Mejor puntaje', { aggregate: 'max', decimals: 3 }), metric('penalizaciones', 'Penalizaciones', { decimals: 3 }),
     ],
   },
+  karate: {
+    code: 'karate', label: 'Karate', icon: '🥋', activityLabel: 'Participación', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
+    metrics: [
+      metric('combates', 'Combates'), metric('victorias', 'Victorias'), metric('puntos', 'Puntos'),
+      metric('ippon', 'Ippon'), metric('waza_ari', 'Waza-ari'), metric('medallas', 'Medallas'),
+      metric('puntaje_kata', 'Mejor puntaje Kata', { aggregate: 'max', decimals: 2 }),
+    ],
+  },
   artes_marciales: {
     code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Combate', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: true,
     metrics: [

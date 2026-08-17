@@ -6,11 +6,12 @@ const {
   findRecognition,
 } = require('../services/recognitionCatalog');
 
-test('artes marciales recibe reconocimientos formativos y competitivos propios', () => {
+test('Karate recibe reconocimientos formativos y competitivos propios', () => {
   const catalog = getRecognitionCatalog({ discipline: 'Karate', allowCustom: false });
   assert.equal(catalog.customization.allowed, false);
-  assert.ok(catalog.standard.some((item) => item.code === 'marcial_espiritu' && item.kind === 'formacion'));
-  assert.ok(catalog.standard.some((item) => item.code === 'marcial_combate' && item.kind === 'competencia'));
+  assert.ok(catalog.standard.some((item) => item.code === 'karate_espiritu' && item.kind === 'formacion'));
+  assert.ok(catalog.standard.some((item) => item.code === 'karate_kata_destacado' && item.kind === 'competencia'));
+  assert.ok(catalog.standard.some((item) => item.code === 'karate_kumite_destacado' && item.kind === 'competencia'));
   assert.ok(catalog.standard.some((item) => item.code === 'formacion_companerismo'));
 });
 
@@ -35,9 +36,9 @@ test('los reconocimientos personalizados se limpian, deduplican y limitan', () =
 });
 
 test('un reconocimiento personalizado solo se resuelve cuando el plan lo permite', () => {
-  const customConfig = { items: [{ code: 'espiritu_dojo', name: 'Espíritu del dojo', emoji: '🥋', kind: 'formacion' }] };
+  const customConfig = { items: [{ code: 'espiritu_dojo', name: 'Espíritu del dojo propio', emoji: '🥋', kind: 'formacion' }] };
   assert.equal(findRecognition({ discipline: 'Karate', code: 'custom_espiritu_dojo', customConfig, allowCustom: false }), null);
   const found = findRecognition({ discipline: 'Karate', code: 'custom_espiritu_dojo', customConfig, allowCustom: true });
-  assert.equal(found?.name, 'Espíritu del dojo');
+  assert.equal(found?.name, 'Espíritu del dojo propio');
   assert.equal(found?.source, 'academy');
 });
