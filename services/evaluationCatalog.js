@@ -59,6 +59,16 @@ const PROFILES = Object.freeze({
     code: 'gimnasia', label: 'Gimnasia', roleLabel: 'Aparato / especialidad', roles: [],
     metrics: ['Técnica', 'Flexibilidad', 'Fuerza', 'Coordinación', 'Equilibrio', 'Ejecución'],
   },
+  karate: {
+    code: 'karate', label: 'Karate', roleLabel: 'Modalidad / especialidad',
+    roles: ['Kata', 'Kumite', 'Formativo / Kihon'],
+    metrics: ['Kihon / técnica base', 'Kata', 'Kumite', 'Velocidad', 'Control', 'Condición física'],
+    roleProfiles: {
+      Kata: ['Técnica', 'Precisión', 'Equilibrio', 'Ritmo', 'Potencia', 'Concentración'],
+      Kumite: ['Técnica', 'Distancia / Maai', 'Timing', 'Velocidad', 'Defensa', 'Control'],
+      'Formativo / Kihon': ['Posturas', 'Técnica', 'Coordinación', 'Velocidad', 'Control', 'Disciplina'],
+    },
+  },
   artes_marciales: {
     code: 'artes_marciales', label: 'Artes marciales', roleLabel: 'Disciplina / especialidad', roles: [],
     metrics: ['Técnica', 'Velocidad', 'Potencia', 'Defensa', 'Control', 'Condición física'],
@@ -84,9 +94,9 @@ const aliases = new Map([
   ['atletismo', 'atletismo'],
   ['natacion', 'natacion'],
   ['gimnasia', 'gimnasia'],
+  ['karate', 'karate'], ['karate do', 'karate'], ['karate-do', 'karate'],
   ['artes marciales', 'artes_marciales'], ['arte marcial', 'artes_marciales'], ['artes_marciales', 'artes_marciales'],
-  ['karate', 'artes_marciales'], ['karate do', 'artes_marciales'], ['taekwondo', 'artes_marciales'],
-  ['judo', 'artes_marciales'], ['jiu jitsu', 'artes_marciales'], ['jiu-jitsu', 'artes_marciales'],
+  ['taekwondo', 'artes_marciales'], ['judo', 'artes_marciales'], ['jiu jitsu', 'artes_marciales'], ['jiu-jitsu', 'artes_marciales'],
   ['bjj', 'artes_marciales'], ['kickboxing', 'artes_marciales'], ['muay thai', 'artes_marciales'],
   ['kung fu', 'artes_marciales'], ['wushu', 'artes_marciales'], ['aikido', 'artes_marciales'],
   ['rugby', 'rugby'],
