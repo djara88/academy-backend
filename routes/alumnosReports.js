@@ -3,6 +3,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
+const { withRecognitionImage } = require('../services/recognitionIcon');
 const {
   loadStudentReportData,
   createStudentReportPdf,
@@ -25,6 +26,13 @@ router.post('/:id/informe', authMiddleware, requireDirector, ...requireFeature(F
       playerId: req.params.id,
       branchId,
     });
+
+    // Los reconocimientos multirrama actuales se guardan con un emoji como
+    // identidad visual. El informe premium histórico esperaba icono_url; por eso
+    // convertimos el emoji a una imagen PNG estable antes de renderizar el PDF.
+    // Si una medalla personalizada ya trae icono_url, se respeta esa imagen.
+    data.awards = (data.awards || []).map(withRecognitionImage);
+
     const pdfBuffer = await createStudentReportPdf(data, comments);
     const email = sendEmail
       ? await sendStudentReportEmail({ data, pdfBuffer, comments })
