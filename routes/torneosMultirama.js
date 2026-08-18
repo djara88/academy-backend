@@ -17,6 +17,8 @@ const {
 const router = express.Router();
 router.use(authMiddleware);
 
+const getStudentTutorId = (student) => student?.tutor_id || student?.tutor_principal_id || student?.apoderado_id || null;
+
 const resolveTournamentBranch = async (academyId, requestedBranchId) => {
   const requested = safeText(requestedBranchId, 80);
   if (requested) return getBranch(academyId, requested);
@@ -109,7 +111,7 @@ router.get('/:id/elegibles', async (req, res) => {
       academyId,
       branchId: tournament.rama_id,
       categoryId: category.id,
-      playerSelect: 'id,nombre,foto_base64,foto_url,avatar_url,tutor_id,telefono',
+      playerSelect: 'id,nombre,foto_base64,foto_url,avatar_url,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado',
     });
     return res.json({ success: true, data: students, categoria: category, torneo: tournament });
   } catch (error) {
@@ -155,14 +157,14 @@ router.post('/:id/convocar', async (req, res) => {
       branchId: tournament.rama_id,
       categoryId: category.id,
       playerIds: requestedIds.length ? requestedIds : undefined,
-      playerSelect: 'id,nombre,tutor_id,telefono',
+      playerSelect: 'id,nombre,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado',
     });
     if (!eligible.length) return res.status(400).json({ error: 'No hay alumnos con inscripción activa en esta rama y categoría.' });
     if (requestedIds.length && eligible.length !== requestedIds.length) {
       return res.status(409).json({ error: 'Uno o más alumnos seleccionados no tienen inscripción activa en la rama/categoría del torneo.', code: 'INVALID_TOURNAMENT_ROSTER' });
     }
 
-    const tutorIds = uniqueIds(eligible.map((student) => student.tutor_id));
+    const tutorIds = uniqueIds(eligible.map((student) => getStudentTutorId(student)));
     let tutorMap = new Map();
     if (tutorIds.length) {
       const { data: tutors, error } = await supabase.from('tutores')
@@ -172,7 +174,7 @@ router.post('/:id/convocar', async (req, res) => {
     }
 
     const calls = eligible.map((student) => {
-      const tutor = tutorMap.get(String(student.tutor_id));
+      const tutor = tutorMap.get(String(getStudentTutorId(student)));
       return {
         torneo_id: tournament.id,
         jugador_id: student.id,
@@ -180,7 +182,7 @@ router.post('/:id/convocar', async (req, res) => {
         rama_id: tournament.rama_id,
         categoria_id: category.id,
         inscripcion_id: student.inscripcion?.id || null,
-        telefono_apoderado: tutor?.telefono || student.telefono || '',
+        telefono_apoderado: tutor?.telefono || student.telefono_apoderado || '',
         respuesta_participacion: 'Pendiente',
         pago_en_cuotas: false,
         numero_cuotas: 1,
@@ -217,8 +219,8 @@ router.post('/:id/convocar', async (req, res) => {
     const priceText = price > 0 ? `$${price.toLocaleString('es-CL')}` : 'Gratuito';
     let sent = 0;
     for (const student of eligible) {
-      const tutor = tutorMap.get(String(student.tutor_id));
-      const phoneSource = tutor?.telefono || student.telefono;
+      const tutor = tutorMap.get(String(getStudentTutorId(student)));
+      const phoneSource = tutor?.telefono || student.telefono_apoderado;
       if (!phoneSource) continue;
       let phone = String(phoneSource).replace(/\D/g, '');
       if (!phone.startsWith('56') && phone.length === 9) phone = `56${phone}`;
