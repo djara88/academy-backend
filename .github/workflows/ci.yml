@@ -23,7 +23,9 @@ jobs:
       - name: Instalar dependencias bloqueadas
         run: npm ci
       - name: Validar sintaxis del servidor
-        run: node --check server.js
+        run: |
+          node --check server.js
+          node --check routes/professorOps.js
       - name: Ejecutar pruebas
         run: npm test
       - name: Auditar dependencias de producción
