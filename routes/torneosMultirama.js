@@ -164,6 +164,22 @@ router.post('/:id/convocar', async (req, res) => {
       return res.status(409).json({ error: 'Uno o más alumnos seleccionados no tienen inscripción activa en la rama/categoría del torneo.', code: 'INVALID_TOURNAMENT_ROSTER' });
     }
 
+    const eligibleIds = eligible.map((student) => student.id);
+    const { data: existingParticipants, error: existingError } = await supabase
+      .from('torneo_participantes')
+      .select('id,jugador_id,categoria_id,respuesta_participacion,pago_en_cuotas,numero_cuotas,paso_bot,estado_pago,created_at')
+      .eq('torneo_id', tournament.id)
+      .in('jugador_id', eligibleIds)
+      .order('created_at', { ascending: true });
+    if (existingError) throw existingError;
+
+    const existingByPlayer = new Map();
+    for (const row of existingParticipants || []) {
+      const key = String(row.jugador_id);
+      if (!existingByPlayer.has(key)) existingByPlayer.set(key, []);
+      existingByPlayer.get(key).push(row);
+    }
+
     const tutorIds = uniqueIds(eligible.map((student) => getStudentTutorId(student)));
     let tutorMap = new Map();
     if (tutorIds.length) {
@@ -173,8 +189,56 @@ router.post('/:id/convocar', async (req, res) => {
       tutorMap = new Map((tutors || []).map((tutor) => [String(tutor.id), tutor]));
     }
 
+    const notificationMode = new Map();
     const calls = eligible.map((student) => {
       const tutor = tutorMap.get(String(getStudentTutorId(student)));
+      const history = existingByPlayer.get(String(student.id)) || [];
+      const sameCategory = history.find((row) => String(row.categoria_id || '') === String(category.id));
+      const confirmed = history.find((row) => row.respuesta_participacion === 'Si');
+      const pending = history.find((row) => ['ESPERANDO_PARTICIPACION', 'ESPERANDO_CUOTAS'].includes(row.paso_bot));
+      const rejected = history.find((row) => row.respuesta_participacion === 'No');
+      const source = sameCategory || pending || confirmed || rejected || history[0] || null;
+
+      let mode = 'initial';
+      let response = 'Pendiente';
+      let installments = false;
+      let installmentCount = 1;
+      let botStep = 'ESPERANDO_PARTICIPACION';
+      let paymentStatus = 'Pendiente';
+
+      if (sameCategory) {
+        mode = 'same_category';
+        response = sameCategory.respuesta_participacion || 'Pendiente';
+        installments = Boolean(sameCategory.pago_en_cuotas);
+        installmentCount = Math.max(1, Number(sameCategory.numero_cuotas) || 1);
+        botStep = sameCategory.paso_bot || 'FINALIZADO';
+        paymentStatus = sameCategory.estado_pago || 'Pendiente';
+      } else if (confirmed) {
+        mode = 'additional_confirmed';
+        response = 'Si';
+        installments = Boolean(confirmed.pago_en_cuotas);
+        installmentCount = Math.max(1, Number(confirmed.numero_cuotas) || 1);
+        botStep = 'FINALIZADO';
+        paymentStatus = confirmed.estado_pago || 'Pendiente';
+      } else if (pending) {
+        mode = 'additional_pending';
+        response = 'Pendiente';
+        installments = Boolean(pending.pago_en_cuotas);
+        installmentCount = Math.max(1, Number(pending.numero_cuotas) || 1);
+        botStep = 'FINALIZADO';
+        paymentStatus = pending.estado_pago || 'Pendiente';
+      } else if (rejected) {
+        mode = 'reinvite';
+      } else if (source) {
+        mode = 'additional_pending';
+        response = source.respuesta_participacion || 'Pendiente';
+        installments = Boolean(source.pago_en_cuotas);
+        installmentCount = Math.max(1, Number(source.numero_cuotas) || 1);
+        botStep = 'FINALIZADO';
+        paymentStatus = source.estado_pago || 'Pendiente';
+      }
+
+      notificationMode.set(String(student.id), mode);
       return {
         torneo_id: tournament.id,
         jugador_id: student.id,
@@ -183,15 +247,15 @@ router.post('/:id/convocar', async (req, res) => {
         categoria_id: category.id,
         inscripcion_id: student.inscripcion?.id || null,
         telefono_apoderado: tutor?.telefono || student.telefono_apoderado || '',
-        respuesta_participacion: 'Pendiente',
-        pago_en_cuotas: false,
-        numero_cuotas: 1,
-        paso_bot: 'ESPERANDO_PARTICIPACION',
-        estado_pago: 'Pendiente',
+        respuesta_participacion: response,
+        pago_en_cuotas: installments,
+        numero_cuotas: installmentCount,
+        paso_bot: botStep,
+        estado_pago: paymentStatus,
       };
     });
     const { error: participantError } = await supabase.from('torneo_participantes')
-      .upsert(calls, { onConflict: 'torneo_id,jugador_id' });
+      .upsert(calls, { onConflict: 'torneo_id,jugador_id,categoria_id' });
     if (participantError) throw participantError;
 
     const price = Math.max(0, Number(tournament.costo_inscripcion) || 0);
@@ -218,25 +282,61 @@ router.post('/:id/convocar', async (req, res) => {
     const profile = resolveCompetitiveProfile({ discipline: tournament.ramas?.disciplina || tournament.ramas?.nombre || 'Otro' });
     const priceText = price > 0 ? `$${price.toLocaleString('es-CL')}` : 'Gratuito';
     let sent = 0;
+    let additional = 0;
+    let unchanged = 0;
     for (const student of eligible) {
+      const mode = notificationMode.get(String(student.id)) || 'initial';
+      if (mode === 'same_category') { unchanged += 1; continue; }
+
       const tutor = tutorMap.get(String(getStudentTutorId(student)));
       const phoneSource = tutor?.telefono || student.telefono_apoderado;
       if (!phoneSource) continue;
       let phone = String(phoneSource).replace(/\D/g, '');
       if (!phone.startsWith('56') && phone.length === 9) phone = `56${phone}`;
-      const message = academyMessage(academyName,
-        `🏆 *CONVOCATORIA · ${String(profile.label).toUpperCase()}*\n\n` +
-        `*${student.nombre}* ha sido convocado/a a *${tournament.nombre}*.\n` +
-        `${profile.icon} *Rama:* ${tournament.ramas?.nombre || profile.label}\n` +
-        `🏷️ *Categoría:* ${category.nombre}\n` +
-        `💰 *Valor inscripción:* ${priceText}\n` +
-        (tournament.permite_cuotas ? `💳 *Pago:* hasta ${tournament.max_cuotas} cuotas.\n` : '') +
-        `\nResponde:\n1️⃣ Confirmar participación\n2️⃣ Rechazar invitación`);
-      try { await enviarMensaje(academyId, phone, message); sent += 1; }
+
+      let body = '';
+      if (mode === 'additional_confirmed') {
+        additional += 1;
+        body = `🏷️ *ACTUALIZACIÓN DE CONVOCATORIA*\n\n` +
+          `*${student.nombre}* también quedó registrado/a en *${category.nombre}* para *${tournament.nombre}*.\n` +
+          `✅ Tu confirmación al torneo sigue vigente.\n` +
+          `💰 *Inscripción única:* esta categoría adicional no genera un cobro extra.\n\n` +
+          `No necesitas responder a este aviso.`;
+      } else if (mode === 'additional_pending') {
+        additional += 1;
+        body = `🏷️ *ACTUALIZACIÓN DE CONVOCATORIA*\n\n` +
+          `*${student.nombre}* también quedó registrado/a en *${category.nombre}* para *${tournament.nombre}*.\n` +
+          `💰 *Inscripción única:* esta categoría adicional no genera un cobro extra.\n\n` +
+          `ℹ️ No necesitas responder a este aviso. La convocatoria inicial sigue pendiente; responde *1* o *2* al mensaje de confirmación.`;
+      } else if (mode === 'reinvite') {
+        body = `🔄 *CONVOCATORIA ACTUALIZADA · ${String(profile.label).toUpperCase()}*\n\n` +
+          `*${student.nombre}* fue incorporado/a también a *${category.nombre}* en *${tournament.nombre}*.\n` +
+          `💰 *Inscripción única:* ${priceText}; no se cobra nuevamente por esta categoría.\n\n` +
+          `Como la convocatoria anterior había sido rechazada, necesitamos confirmar nuevamente:\n` +
+          `1️⃣ Confirmar participación\n2️⃣ Rechazar invitación`;
+      } else {
+        body = `🏆 *CONVOCATORIA · ${String(profile.label).toUpperCase()}*\n\n` +
+          `*${student.nombre}* ha sido convocado/a a *${tournament.nombre}*.\n` +
+          `${profile.icon} *Rama:* ${tournament.ramas?.nombre || profile.label}\n` +
+          `🏷️ *Categoría:* ${category.nombre}\n` +
+          `💰 *Valor inscripción:* ${priceText}\n` +
+          (tournament.permite_cuotas ? `💳 *Pago:* hasta ${tournament.max_cuotas} cuotas.\n` : '') +
+          `\nResponde:\n1️⃣ Confirmar participación\n2️⃣ Rechazar invitación`;
+      }
+
+      try { await enviarMensaje(academyId, phone, academyMessage(academyName, body)); sent += 1; }
       catch (sendError) { console.error(`No se pudo enviar convocatoria a ${student.nombre}:`, sendError?.message || sendError); }
     }
 
-    return res.json({ success: true, message: `Convocatoria registrada para ${eligible.length} alumnos; ${sent} mensajes enviados.`, convocados: eligible.length, enviados: sent });
+    return res.json({
+      success: true,
+      message: `Registro actualizado para ${eligible.length} alumnos; ${sent} mensajes enviados.`,
+      convocados: eligible.length,
+      enviados: sent,
+      categorias_adicionales: additional,
+      ya_registrados: unchanged,
+      cobro_unico_por_torneo: true,
+    });
   } catch (error) {
     console.error('Error convocando torneo multirrama:', error?.message || error);
     return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible enviar la convocatoria.', code: error?.code });
