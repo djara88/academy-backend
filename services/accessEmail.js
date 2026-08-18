@@ -1,5 +1,8 @@
 const { fetchWithTimeout } = require('./httpClient');
 
+const BRAND_NAME = 'Lestra';
+const BRAND_TAGLINE = 'Gestión que mueve el deporte.';
+
 const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[character]));
@@ -17,16 +20,16 @@ const sendProfessorAccessEmail = async ({ email, name, academyName, temporaryPas
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      sender: { name: 'Syncademia', email: senderEmail },
+      sender: { name: BRAND_NAME, email: senderEmail },
       to: [{ email, name }],
       subject: `Tu acceso como profesor de ${academyName}`,
       htmlContent: `
         <div style="font-family:Arial,sans-serif;color:#17202a;line-height:1.6">
           <h2>Hola ${escapeHtml(name)}</h2>
-          <p><strong>${escapeHtml(academyName)}</strong> te ha creado un acceso de profesor en Syncademia.</p>
+          <p><strong>${escapeHtml(academyName)}</strong> te ha creado un acceso de profesor en ${BRAND_NAME}.</p>
           <p>Correo: <strong>${escapeHtml(email)}</strong><br>Contraseña temporal: <strong>${escapeHtml(temporaryPassword)}</strong></p>
           <p>Al ingresar se te pedirá crear una contraseña personal. Tu portal mostrará únicamente las categorías asignadas por la dirección.</p>
-          <p>Syncademia · Gestión de academias deportivas, tu ecosistema de élite.</p>
+          <p>${BRAND_NAME} · ${BRAND_TAGLINE}</p>
         </div>`,
     }),
   }, 10000);
@@ -43,16 +46,16 @@ const sendGuardianAccessEmail = async ({ email, name, academyName, temporaryPass
     method: 'POST',
     headers: { accept: 'application/json', 'api-key': apiKey, 'content-type': 'application/json' },
     body: JSON.stringify({
-      sender: { name: 'Syncademia', email: senderEmail },
+      sender: { name: BRAND_NAME, email: senderEmail },
       to: [{ email, name }],
       subject: `Tu acceso de apoderado a ${academyName}`,
       htmlContent: `
         <div style="font-family:Arial,sans-serif;color:#17202a;line-height:1.6">
           <h2>Hola ${escapeHtml(name)}</h2>
-          <p><strong>${escapeHtml(academyName)}</strong> habilitó tu acceso privado de apoderado en Syncademia.</p>
+          <p><strong>${escapeHtml(academyName)}</strong> habilitó tu acceso privado de apoderado en ${BRAND_NAME}.</p>
           <p>Correo: <strong>${escapeHtml(email)}</strong><br>Contraseña temporal: <strong>${escapeHtml(temporaryPassword)}</strong></p>
           <p>Solo podrás consultar información de los jugadores vinculados a tu cuenta. Al ingresar se te pedirá crear una contraseña personal.</p>
-          <p>Syncademia · Gestión de academias deportivas, tu ecosistema de élite.</p>
+          <p>${BRAND_NAME} · ${BRAND_TAGLINE}</p>
         </div>`,
     }),
   }, 10000);
