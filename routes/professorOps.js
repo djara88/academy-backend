@@ -5,6 +5,7 @@ const { requireDirector, requireProfessor } = require('../middleware/professorAc
 const { toProfessorPlayer } = require('../services/professorPlayerView');
 const { buildAttendanceAlertRows } = require('../services/attendanceAlerts');
 const { getCategoryContext, getStudentsForScope } = require('../services/branchContext');
+const { notifyProfessorAbsences, closeCorrectedAbsenceFollowups } = require('../services/absenceFollowupService');
 const {
   COMPETITIVE_STATS_VERSION,
   publicProfile,
@@ -193,7 +194,7 @@ const getCaseMessages = async (academyId, caseId) => {
     if (result.error) throw result.error;
     authorMap = new Map((result.data || []).map((item) => [String(item.id), item.nombre_completo]));
   }
-  return (data || []).map((item) => ({ ...item, autor_nombre: authorMap.get(String(item.autor_id)) || (item.autor_rol === 'director' ? 'Dirección' : 'Profesor') }));
+  return (data || []).map((item) => ({ ...item, autor_nombre: authorMap.get(String(item.autor_id)) || (item.autor_rol === 'director' ? 'Dirección' : item.autor_rol === 'apoderado' ? 'Apoderado/a' : 'Profesor') }));
 };
 
 // Agenda enriquecida: mantiene la misma ruta y agrega contexto para acciones rápidas y operación en vivo.
@@ -316,8 +317,28 @@ router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requirePro
     } catch (alertError) {
       console.error('No se pudieron actualizar las alertas de asistencia:', alertError?.message || alertError);
     }
+    let absenceFollowup = { solicitadas: 0, enviadas: 0, omitidas: 0, fallidas: 0, duplicadas: 0, casos_creados: 0 };
+    try {
+      await closeCorrectedAbsenceFollowups({
+        academyId: req.user.academia_id, professorId: req.user.id, trainingId: training.id, attendance: items,
+      });
+      absenceFollowup = await notifyProfessorAbsences({
+        academyId: req.user.academia_id,
+        professorId: req.user.id,
+        category,
+        training: { ...training, fecha: date },
+        attendance: items,
+      });
+    } catch (followupError) {
+      console.error('No se pudo completar el seguimiento WhatsApp de inasistencia:', followupError?.message || followupError);
+      absenceFollowup.fallidas = items.filter((item) => item.estado === 'Ausente').length;
+      absenceFollowup.solicitadas = absenceFollowup.fallidas;
+    }
     await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id);
-    return res.json({ success: true, message: `Asistencia guardada: ${items.length} alumnos.`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts });
+    const whatsappSummary = absenceFollowup.solicitadas > 0
+      ? ` WhatsApp: ${absenceFollowup.enviadas} consulta${absenceFollowup.enviadas === 1 ? '' : 's'} enviada${absenceFollowup.enviadas === 1 ? '' : 's'}${absenceFollowup.duplicadas ? `, ${absenceFollowup.duplicadas} ya notificada${absenceFollowup.duplicadas === 1 ? '' : 's'}` : ''}${absenceFollowup.omitidas ? `, ${absenceFollowup.omitidas} sin teléfono` : ''}${absenceFollowup.fallidas ? `, ${absenceFollowup.fallidas} con error` : ''}.`
+      : '';
+    return res.json({ success: true, message: `Asistencia guardada: ${items.length} alumnos.${whatsappSummary}`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts, avisos_ausencia: absenceFollowup });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible guardar la asistencia.' });
   }

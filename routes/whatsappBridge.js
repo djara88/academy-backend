@@ -8,6 +8,7 @@ const {
   ingestInboundWhatsApp,
   updateWhatsAppDelivery,
 } = require('../services/chatWhatsApp');
+const { captureAbsenceReply } = require('../services/absenceFollowupService');
 
 const router = express.Router();
 const BACKEND_URL = process.env.BACKEND_URL ? process.env.BACKEND_URL.replace(/\/$/, '') : 'https://academy-backend-kqsv.onrender.com';
@@ -79,6 +80,18 @@ const processMessageUpsert = async (academyId, body) => {
   if (!phone) return;
 
   const automationPending = await hasPendingAutomation(academyId, phone);
+  const looksLikeAutomationReply = /^(si|sí|no|confirmo|confirmar|rechazo|acepto)$/i.test(text);
+  if (automationPending && looksLikeAutomationReply) {
+    await forwardToAutomationWebhook(academyId, body);
+    return;
+  }
+
+  const absenceReply = await captureAbsenceReply({ academyId, phone, body: text });
+  if (absenceReply.handled) {
+    await ingestInboundWhatsApp({ academyId, phone, body: text, externalMessageId: extractMessageId(body) });
+    return;
+  }
+
   if (automationPending) {
     await forwardToAutomationWebhook(academyId, body);
     return;
