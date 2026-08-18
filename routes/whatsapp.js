@@ -207,7 +207,7 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
       .select('*, torneos!inner(*)')
       .eq('torneos.academia_id', academiaId)
       .like('telefono_apoderado', `%${ultimos8Digitos}%`)
-      .neq('paso_bot', 'FINALIZADO')
+      .in('paso_bot', ['ESPERANDO_PARTICIPACION', 'ESPERANDO_CUOTAS'])
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -278,18 +278,40 @@ router.post('/webhook/:academiaId', requireWebhookSecret, async (req, res) => {
       }
     }
 
-    // Actualización de estado en Supabase
-    updateData.paso_bot = nuevoPaso;
-    const { error: errUpdate } = await supabase
-      .from('torneo_participantes')
-      .update(updateData)
-      .eq('id', participacion.id)
-      .eq('torneo_id', participacion.torneo_id);
+    // La decisión y las cuotas pertenecen al jugador dentro del torneo, no a una categoría aislada.
+    // Sincronizamos todas sus categorías y dejamos, como máximo, una fila interactiva pendiente.
+    const changed = Object.keys(updateData).length > 0 || nuevoPaso !== participacion.paso_bot;
+    let errUpdate = null;
+    if (changed) {
+      if (nuevoPaso === 'ESPERANDO_CUOTAS') {
+        const { error: groupError } = await supabase
+          .from('torneo_participantes')
+          .update({ ...updateData, paso_bot: 'FINALIZADO' })
+          .eq('torneo_id', participacion.torneo_id)
+          .eq('jugador_id', participacion.jugador_id);
+        errUpdate = groupError;
+        if (!errUpdate) {
+          const { error: primaryError } = await supabase
+            .from('torneo_participantes')
+            .update({ ...updateData, paso_bot: 'ESPERANDO_CUOTAS' })
+            .eq('id', participacion.id)
+            .eq('torneo_id', participacion.torneo_id);
+          errUpdate = primaryError;
+        }
+      } else {
+        const { error: groupError } = await supabase
+          .from('torneo_participantes')
+          .update({ ...updateData, paso_bot: nuevoPaso })
+          .eq('torneo_id', participacion.torneo_id)
+          .eq('jugador_id', participacion.jugador_id);
+        errUpdate = groupError;
+      }
+    }
 
     if (errUpdate) {
       console.error('❌ Error actualizando la convocatoria en BD:', errUpdate);
-    } else {
-      console.log(`✅ Convocatoria actualizada en BD -> paso_bot: ${nuevoPaso}`);
+    } else if (changed) {
+      console.log(`✅ Convocatoria sincronizada para todas las categorías -> paso_bot: ${nuevoPaso}`);
     }
 
     // Envío del mensaje de respuesta automática
