@@ -1,0 +1,73 @@
+name: Patch Professor Absence WhatsApp
+
+on:
+  push:
+    branches: [fix/professor-absence-whatsapp]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/professor-absence-whatsapp
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Aplicar parche acotado
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('routes/professorOps.js')
+          s = p.read_text()
+          anchor = "const { getCategoryContext, getStudentsForScope } = require('../services/branchContext');\n"
+          addition = anchor + "const { notifyProfessorAbsences, closeCorrectedAbsenceFollowups } = require('../services/absenceFollowupService');\n"
+          if "absenceFollowupService" not in s:
+              if anchor not in s: raise SystemExit('No se encontró anchor import professorOps')
+              s = s.replace(anchor, addition, 1)
+
+          old = """    await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id);\n    return res.json({ success: true, message: `Asistencia guardada: ${items.length} alumnos.`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts });"""
+          new = """    let absenceFollowup = { solicitadas: 0, enviadas: 0, omitidas: 0, fallidas: 0, duplicadas: 0, casos_creados: 0 };\n    try {\n      await closeCorrectedAbsenceFollowups({\n        academyId: req.user.academia_id, professorId: req.user.id, trainingId: training.id, attendance: items,\n      });\n      absenceFollowup = await notifyProfessorAbsences({\n        academyId: req.user.academia_id,\n        professorId: req.user.id,\n        category,\n        training: { ...training, fecha: date },\n        attendance: items,\n      });\n    } catch (followupError) {\n      console.error('No se pudo completar el seguimiento WhatsApp de inasistencia:', followupError?.message || followupError);\n      absenceFollowup.fallidas = items.filter((item) => item.estado === 'Ausente').length;\n      absenceFollowup.solicitadas = absenceFollowup.fallidas;\n    }\n    await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id);\n    const whatsappSummary = absenceFollowup.solicitadas > 0\n      ? ` WhatsApp: ${absenceFollowup.enviadas} consulta${absenceFollowup.enviadas === 1 ? '' : 's'} enviada${absenceFollowup.enviadas === 1 ? '' : 's'}${absenceFollowup.duplicadas ? `, ${absenceFollowup.duplicadas} ya notificada${absenceFollowup.duplicadas === 1 ? '' : 's'}` : ''}${absenceFollowup.omitidas ? `, ${absenceFollowup.omitidas} sin teléfono` : ''}${absenceFollowup.fallidas ? `, ${absenceFollowup.fallidas} con error` : ''}.`\n      : '';\n    return res.json({ success: true, message: `Asistencia guardada: ${items.length} alumnos.${whatsappSummary}`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts, avisos_ausencia: absenceFollowup });"""
+          if old not in s: raise SystemExit('No se encontró bloque de respuesta de asistencia')
+          s = s.replace(old, new, 1)
+          s = s.replace("item.autor_rol === 'director' ? 'Dirección' : 'Profesor'", "item.autor_rol === 'director' ? 'Dirección' : item.autor_rol === 'apoderado' ? 'Apoderado/a' : 'Profesor'")
+          p.write_text(s)
+
+          p = Path('routes/whatsappBridge.js')
+          s = p.read_text()
+          import_anchor = "const {\n  comparablePhone,\n  extractMessageId,\n  ingestInboundWhatsApp,\n  updateWhatsAppDelivery,\n} = require('../services/chatWhatsApp');\n"
+          import_new = import_anchor + "const { captureAbsenceReply } = require('../services/absenceFollowupService');\n"
+          if "captureAbsenceReply" not in s:
+              if import_anchor not in s: raise SystemExit('No se encontró anchor import whatsappBridge')
+              s = s.replace(import_anchor, import_new, 1)
+          old_logic = """  const automationPending = await hasPendingAutomation(academyId, phone);\n  if (automationPending) {\n    await forwardToAutomationWebhook(academyId, body);\n    return;\n  }\n\n  const result = await ingestInboundWhatsApp({\n    academyId,\n    phone,\n    body: text,\n    externalMessageId: extractMessageId(body),\n  });"""
+          new_logic = """  const automationPending = await hasPendingAutomation(academyId, phone);\n  const looksLikeAutomationReply = /^(si|sí|no|confirmo|confirmar|rechazo|acepto)$/i.test(text);\n  if (automationPending && looksLikeAutomationReply) {\n    await forwardToAutomationWebhook(academyId, body);\n    return;\n  }\n\n  const absenceReply = await captureAbsenceReply({ academyId, phone, body: text });\n  if (absenceReply.handled) {\n    await ingestInboundWhatsApp({ academyId, phone, body: text, externalMessageId: extractMessageId(body) });\n    return;\n  }\n\n  if (automationPending) {\n    await forwardToAutomationWebhook(academyId, body);\n    return;\n  }\n\n  const result = await ingestInboundWhatsApp({\n    academyId,\n    phone,\n    body: text,\n    externalMessageId: extractMessageId(body),\n  });"""
+          if old_logic not in s: raise SystemExit('No se encontró lógica inbound whatsapp')
+          s = s.replace(old_logic, new_logic, 1)
+          p.write_text(s)
+
+          test = Path('test/professorAbsenceWhatsapp.test.js')
+          test.write_text("""const test = require('node:test');\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\n\nconst professorOps = fs.readFileSync(path.join(__dirname, '..', 'routes', 'professorOps.js'), 'utf8');\nconst bridge = fs.readFileSync(path.join(__dirname, '..', 'routes', 'whatsappBridge.js'), 'utf8');\nconst service = fs.readFileSync(path.join(__dirname, '..', 'services', 'absenceFollowupService.js'), 'utf8');\n\ntest('profesor dispara seguimiento de ausencia al guardar asistencia', () => {\n  assert.match(professorOps, /notifyProfessorAbsences/);\n  assert.match(professorOps, /avisos_ausencia/);\n});\n\ntest('seguimiento evita duplicados por entrenamiento y alumno', () => {\n  assert.match(service, /asistencia_seguimientos_whatsapp/);\n  assert.match(service, /duplicadas/);\n});\n\ntest('respuesta WhatsApp del apoderado se captura en Casos', () => {\n  assert.match(bridge, /captureAbsenceReply/);\n  assert.match(service, /autor_rol: 'apoderado'/);\n  assert.match(service, /estado: 'en_revision'/);\n});\n""")
+          PY
+      - name: Validar sintaxis
+        run: |
+          node --check routes/professorOps.js
+          node --check routes/whatsappBridge.js
+          node --check services/absenceFollowupService.js
+      - name: Ejecutar tests
+        run: npm test
+      - name: Commit limpio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/patch-professor-absence-whatsapp.yml
+          git add routes/professorOps.js routes/whatsappBridge.js services/absenceFollowupService.js test/professorAbsenceWhatsapp.test.js
+          git commit -m "fix: conectar inasistencia del profesor con WhatsApp y Casos"
+          git push
