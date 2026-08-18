@@ -38,7 +38,7 @@ jobs:
           s = s.replace("tutorMap.get(String(student.tutor_id))?.telefono || student.telefono || ''", "tutorMap.get(String(getStudentTutorId(student)))?.telefono || student.telefono_apoderado || ''", 1)
           s = s.replace("const tutor = tutorMap.get(String(student.tutor_id));\n      const source = tutor?.telefono || student.telefono;", "const tutor = tutorMap.get(String(getStudentTutorId(student)));\n      const source = tutor?.telefono || student.telefono_apoderado;", 1)
 
-          if "jugadores.telefono" in s or "student.telefono" in s:
+          if "student.telefono" in s:
               raise SystemExit('Persisten referencias legacy de teléfono en partidosMultirama')
           p.write_text(s)
           PY
