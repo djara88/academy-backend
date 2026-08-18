@@ -117,24 +117,6 @@ router.post('/', async (req, res) => {
     }).select('*,torneos(id,nombre,rama_id),categorias(id,nombre,rama_id),ramas(id,nombre,disciplina),sedes(id,nombre)').single();
     if (error) throw error;
     match = data;
-
-    const expenses = [];
-    const refereeCost = Math.max(0, Number(req.body?.costo_arbitraje_total) || 0);
-    const venueCost = Math.max(0, Number(req.body?.costo_cancha) || 0);
-    if (refereeCost > 0) expenses.push({
-      academia_id: academyId, sede_id: context.category.sede_id, rama_id: context.category.rama_id, partido_id: data.id,
-      concepto: `Arbitraje / jueces · ${data.rival}`, categoria_gasto: 'Arbitraje', centro_costo: context.branch.nombre,
-      monto: refereeCost, fecha_gasto: data.fecha,
-    });
-    if (venueCost > 0) expenses.push({
-      academia_id: academyId, sede_id: context.category.sede_id, rama_id: context.category.rama_id, partido_id: data.id,
-      concepto: `Arriendo recinto · ${data.rival}`, categoria_gasto: 'Arriendo Canchas', centro_costo: context.branch.nombre,
-      monto: venueCost, fecha_gasto: data.fecha,
-    });
-    if (expenses.length) {
-      const { error: expenseError } = await supabase.from('egresos').insert(expenses);
-      if (expenseError) throw expenseError;
-    }
     return res.status(201).json({ success: true, data: { ...data, sport_profile: publicProfile(context.profile) } });
   } catch (error) {
     if (match?.id) await supabase.from('partidos').delete().eq('id', match.id).eq('academia_id', req.user.academia_id);
