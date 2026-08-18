@@ -17,6 +17,8 @@ app.set('trust proxy', 1);
 
 const allowedOrigins = new Set([
   'https://academy-frontend-wheat.vercel.app',
+  'https://lestra.app',
+  'https://www.lestra.app',
   'http://localhost:5173',
   ...(process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean)
 ]);
@@ -74,7 +76,7 @@ app.use('/api/academias/registro-publico', (req, res, next) => {
   return next();
 });
 
-app.get('/', (_req, res) => res.send('API de Syncademia funcionando 🚀'));
+app.get('/', (_req, res) => res.send('API de Lestra funcionando 🚀'));
 app.get('/health', (_req, res) => {
   const memory = process.memoryUsage();
   res.json({
