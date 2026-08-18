@@ -2,6 +2,32 @@ const { resolveDisciplineCode } = require('./evaluationCatalog');
 
 const COMPETITIVE_STATS_VERSION = 1;
 
+const TEAM_EVENT_CODES = new Set(['futbol', 'futsal', 'basquetbol', 'voleibol', 'hockey', 'rugby']);
+const RACKET_EVENT_CODES = new Set(['tenis', 'padel']);
+const EQUIPMENT_META = Object.freeze({
+  tenis: { label: 'Indumentaria / equipamiento', placeholder: 'Ej: camiseta oficial, raqueta y accesorios' },
+  padel: { label: 'Indumentaria / equipamiento', placeholder: 'Ej: camiseta oficial, pala y accesorios' },
+  natacion: { label: 'Implementación / indumentaria', placeholder: 'Ej: traje de baño, gorro y lentes' },
+  atletismo: { label: 'Indumentaria / implementos', placeholder: 'Ej: uniforme oficial, clavos o implemento de prueba' },
+  gimnasia: { label: 'Indumentaria / implementos', placeholder: 'Ej: malla oficial o implementos requeridos' },
+  karate: { label: 'Indumentaria / protección', placeholder: 'Ej: karategi blanco, cinturón y protecciones' },
+  artes_marciales: { label: 'Indumentaria / protección', placeholder: 'Ej: uniforme, guantes, casco o protector' },
+});
+
+const eventUiForProfile = (profile) => {
+  const code = profile?.code || 'generico';
+  if (TEAM_EVENT_CODES.has(code)) {
+    return { conditionMode: 'required', equipmentMode: 'uniform', equipmentLabel: 'Indumentaria', equipmentPlaceholder: null };
+  }
+  const meta = EQUIPMENT_META[code] || { label: 'Indumentaria / equipamiento', placeholder: 'Ej: equipamiento o implementación requerida' };
+  return {
+    conditionMode: RACKET_EVENT_CODES.has(code) ? 'optional' : 'hidden',
+    equipmentMode: 'freeform',
+    equipmentLabel: meta.label,
+    equipmentPlaceholder: meta.placeholder,
+  };
+};
+
 const metric = (code, label, options = {}) => Object.freeze({
   code,
   label,
@@ -124,6 +150,7 @@ const publicProfile = (profile) => ({
   opponentLabel: profile.opponentLabel,
   scoreLabel: profile.scoreLabel,
   usesHeadToHeadScore: profile.usesHeadToHeadScore,
+  eventUi: eventUiForProfile(profile),
   metricVersion: COMPETITIVE_STATS_VERSION,
   metrics: profile.metrics.map(({ legacyField, ...definition }) => definition),
 });
