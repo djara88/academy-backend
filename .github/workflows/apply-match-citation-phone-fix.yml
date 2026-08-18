@@ -1,0 +1,54 @@
+name: Apply match citation phone fix
+
+on:
+  push:
+    branches: [fix/match-citation-phone]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/match-citation-phone
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Corregir resolución de teléfono en citaciones
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('routes/partidosMultirama.js')
+          s = p.read_text()
+
+          anchor = "const router = express.Router();\nrouter.use(authMiddleware);\n"
+          replacement = "const router = express.Router();\nrouter.use(authMiddleware);\n\nconst getStudentTutorId = (student) => student?.tutor_id || student?.tutor_principal_id || student?.apoderado_id || null;\n"
+          if 'const getStudentTutorId' not in s:
+              if anchor not in s: raise SystemExit('No se encontró ancla del router')
+              s = s.replace(anchor, replacement, 1)
+
+          s = s.replace("playerSelect: 'id,nombre,tutor_id,telefono',", "playerSelect: 'id,nombre,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado',", 1)
+          s = s.replace("const tutorIds = uniqueIds(students.map((student) => student.tutor_id));", "const tutorIds = uniqueIds(students.map((student) => getStudentTutorId(student)));", 1)
+          s = s.replace("tutorMap.get(String(student.tutor_id))?.telefono || student.telefono || ''", "tutorMap.get(String(getStudentTutorId(student)))?.telefono || student.telefono_apoderado || ''", 1)
+          s = s.replace("const tutor = tutorMap.get(String(student.tutor_id));\n      const source = tutor?.telefono || student.telefono;", "const tutor = tutorMap.get(String(getStudentTutorId(student)));\n      const source = tutor?.telefono || student.telefono_apoderado;", 1)
+
+          if "jugadores.telefono" in s or "student.telefono" in s:
+              raise SystemExit('Persisten referencias legacy de teléfono en partidosMultirama')
+          p.write_text(s)
+          PY
+      - run: node --check routes/partidosMultirama.js
+      - run: npm test
+      - name: Commit limpio y retirar workflow temporal
+        run: |
+          rm .github/workflows/apply-match-citation-phone-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add routes/partidosMultirama.js .github/workflows/apply-match-citation-phone-fix.yml
+          git commit -m "fix: corregir teléfono de apoderado en citaciones de partidos"
+          git push
