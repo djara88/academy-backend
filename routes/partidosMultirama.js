@@ -16,6 +16,8 @@ const {
 const router = express.Router();
 router.use(authMiddleware);
 
+const getStudentTutorId = (student) => student?.tutor_id || student?.tutor_principal_id || student?.apoderado_id || null;
+
 const normalizeTime = (value) => {
   const time = String(value || '').trim().slice(0, 5);
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(time) ? time : null;
@@ -161,10 +163,10 @@ router.post('/:id/citacion', async (req, res) => {
       academyId,
       branchId: match.rama_id,
       categoryId: match.categoria_id,
-      playerSelect: 'id,nombre,tutor_id,telefono',
+      playerSelect: 'id,nombre,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado',
     });
     if (!students.length) return res.status(400).json({ error: 'No hay alumnos con inscripción activa en esta categoría.' });
-    const tutorIds = uniqueIds(students.map((student) => student.tutor_id));
+    const tutorIds = uniqueIds(students.map((student) => getStudentTutorId(student)));
     let tutorMap = new Map();
     if (tutorIds.length) {
       const { data: tutors, error } = await supabase.from('tutores').select('id,nombre_completo,telefono')
@@ -176,7 +178,7 @@ router.post('/:id/citacion', async (req, res) => {
     const citations = students.map((student) => ({
       partido_id: match.id,
       jugador_id: student.id,
-      telefono_apoderado: tutorMap.get(String(student.tutor_id))?.telefono || student.telefono || '',
+      telefono_apoderado: tutorMap.get(String(getStudentTutorId(student)))?.telefono || student.telefono_apoderado || '',
       respuesta: 'Pendiente',
       paso_bot: 'ESPERANDO_CITACION',
     }));
@@ -209,8 +211,8 @@ router.post('/:id/citacion', async (req, res) => {
     const kind = match.es_amistoso ? `🤝 *${profile.activityLabel.toUpperCase()} AMISTOSO*` : `🏆 *${match.torneos?.nombre || 'COMPETENCIA'}*`;
     let sent = 0;
     for (const student of students) {
-      const tutor = tutorMap.get(String(student.tutor_id));
-      const source = tutor?.telefono || student.telefono;
+      const tutor = tutorMap.get(String(getStudentTutorId(student)));
+      const source = tutor?.telefono || student.telefono_apoderado;
       if (!source) continue;
       let phone = String(source).replace(/\D/g, '');
       if (!phone.startsWith('56') && phone.length === 9) phone = `56${phone}`;
