@@ -15,6 +15,8 @@ const {
   formatCompetitiveMetric,
 } = require('../services/competitiveStatsCatalog');
 
+const getPlayerTutorId = (player) => player?.tutor_id || player?.tutor_principal_id || player?.apoderado_id || null;
+
 const normalizeTime = (value) => {
   const time = String(value || '').trim().slice(0, 5);
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(time) ? time : null;
@@ -489,12 +491,12 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
       const jugadorIds = normalizedStats.map((row) => row.jugador_id);
       const { data: jugadores, error: playersError } = await supabase
         .from('jugadores')
-        .select('id,nombre,tutor_id')
+        .select('id,nombre,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado')
         .eq('academia_id', academia_id)
         .in('id', jugadorIds);
       if (playersError) throw playersError;
 
-      const tutorIds = (jugadores || []).map((j) => j.tutor_id).filter(Boolean);
+      const tutorIds = (jugadores || []).map((j) => getPlayerTutorId(j)).filter(Boolean);
       let tutores = [];
       if (tutorIds.length) {
         const tutorResult = await supabase
@@ -531,10 +533,11 @@ router.post('/:id/guardar-resultado', authMiddleware, async (req, res) => {
       for (const stat of normalizedStats) {
         const jug = jugMap[stat.jugador_id];
         if (!jug) continue;
-        const tutor = tutorMap[jug.tutor_id];
-        if (!tutor?.telefono) continue;
+        const tutor = tutorMap[getPlayerTutorId(jug)];
+        const sourcePhone = tutor?.telefono || jug.telefono_apoderado || '';
+        if (!sourcePhone) continue;
 
-        let numLimpio = tutor.telefono.replace(/\D/g, '');
+        let numLimpio = String(sourcePhone).replace(/\D/g, '');
         if (!numLimpio.startsWith('56') && numLimpio.length === 9) numLimpio = `56${numLimpio}`;
 
         const metricsTxt = profile.metrics
