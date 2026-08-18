@@ -1,0 +1,74 @@
+name: Result registration multisport
+
+on:
+  push:
+    branches: [fix/result-registration-multisport]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/result-registration-multisport
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Adaptar resultados y contacto familiar
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          catalog = Path('services/competitiveStatsCatalog.js')
+          s = catalog.read_text()
+          old = "code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Combate', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: true,"
+          new = "code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Competencia', opponentLabel: 'Evento / rival', scoreLabel: 'Puntos', usesHeadToHeadScore: false,"
+          if s.count(old) != 1:
+              raise SystemExit(f'Perfil Artes marciales inesperado: {s.count(old)} coincidencias')
+          catalog.write_text(s.replace(old, new, 1))
+
+          route = Path('routes/partidos.js')
+          s = route.read_text()
+          anchor = "const normalizeTime = (value) => {"
+          helper = "const getPlayerTutorId = (player) => player?.tutor_id || player?.tutor_principal_id || player?.apoderado_id || null;\n\nconst normalizeTime = (value) => {"
+          if s.count(anchor) != 1:
+              raise SystemExit('No se encontró normalizeTime una sola vez')
+          s = s.replace(anchor, helper, 1)
+
+          old_select = ".select('id,nombre,tutor_id')"
+          new_select = ".select('id,nombre,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado')"
+          if s.count(old_select) != 1:
+              raise SystemExit(f'Select de reporte inesperado: {s.count(old_select)}')
+          s = s.replace(old_select, new_select, 1)
+
+          old_ids = "const tutorIds = (jugadores || []).map((j) => j.tutor_id).filter(Boolean);"
+          new_ids = "const tutorIds = (jugadores || []).map((j) => getPlayerTutorId(j)).filter(Boolean);"
+          if s.count(old_ids) != 1:
+              raise SystemExit('No se encontró tutorIds del reporte')
+          s = s.replace(old_ids, new_ids, 1)
+
+          old_tutor = "const tutor = tutorMap[jug.tutor_id];\n        if (!tutor?.telefono) continue;\n\n        let numLimpio = tutor.telefono.replace(/\\D/g, '');"
+          new_tutor = "const tutor = tutorMap[getPlayerTutorId(jug)];\n        const sourcePhone = tutor?.telefono || jug.telefono_apoderado || '';\n        if (!sourcePhone) continue;\n\n        let numLimpio = String(sourcePhone).replace(/\\D/g, '');"
+          if s.count(old_tutor) != 1:
+              raise SystemExit('No se encontró resolución de teléfono del reporte')
+          s = s.replace(old_tutor, new_tutor, 1)
+          route.write_text(s)
+          PY
+      - run: node --check routes/partidos.js
+      - run: node --check services/competitiveStatsCatalog.js
+      - run: npm test
+      - name: Guardar cambio limpio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/result-registration-multisport.yml
+          git add routes/partidos.js services/competitiveStatsCatalog.js
+          git commit -m "fix: adaptar registro de resultados por disciplina"
+          git push origin HEAD:fix/result-registration-multisport
