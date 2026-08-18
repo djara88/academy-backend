@@ -93,7 +93,10 @@ const getActiveEnrollments = async ({ academyId, branchId, categoryId, playerIds
   return data || [];
 };
 
-const getPlayersForEnrollments = async (academyId, enrollments, select = 'id,nombre,rut,rut_pasaporte,numero_documento,fecha_nacimiento,foto_base64,foto_url,avatar_url,tutor_id,telefono,alerta_medica,telefono_emergencia') => {
+// `jugadores` no tiene columna `telefono`. Para mantener compatibilidad con
+// consumidores que esperan `student.telefono`, exponemos telefono_apoderado con
+// alias `telefono` en la selección por defecto de este helper.
+const getPlayersForEnrollments = async (academyId, enrollments, select = 'id,nombre,rut,rut_pasaporte,numero_documento,fecha_nacimiento,foto_base64,foto_url,avatar_url,tutor_id,telefono:telefono_apoderado,alerta_medica,telefono_emergencia') => {
   const ids = uniqueIds((enrollments || []).map((row) => row.jugador_id));
   if (!ids.length) return [];
   const { data, error } = await supabase.from('jugadores')
