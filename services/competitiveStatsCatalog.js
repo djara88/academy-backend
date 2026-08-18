@@ -128,7 +128,7 @@ const PROFILES = Object.freeze({
     ],
   },
   artes_marciales: {
-    code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Combate', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: true,
+    code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Competencia', opponentLabel: 'Evento / rival', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
     metrics: [
       metric('combates', 'Combates'), metric('victorias', 'Victorias'), metric('puntos', 'Puntos'),
       metric('ippon', 'Ippon'), metric('knockdowns', 'Knockdowns'), metric('medallas', 'Medallas'),
