@@ -136,6 +136,7 @@ const entrenamientosMultiramaRoutes = require('./routes/entrenamientosMultirama'
 const attendanceRosterRoutes = require('./routes/attendanceRoster');
 const uniformesRoutes = require('./routes/uniformes');
 const uniformesMultiramaRoutes = require('./routes/uniformesMultirama');
+const professorOpsRoutes = require('./routes/professorOps');
 const profesoresRoutes = require('./routes/profesores');
 const profesoresMultiramaRoutes = require('./routes/profesoresMultirama');
 const apoderadosRoutes = require('./routes/apoderados');
@@ -196,6 +197,7 @@ app.use('/api/entrenamientos', entrenamientosMultiramaRoutes);
 app.use('/api/entrenamientos', entrenamientosRoutes);
 app.use('/api/uniformes', uniformesMultiramaRoutes);
 app.use('/api/uniformes', uniformesRoutes);
+app.use('/api/profesores', professorOpsRoutes);
 app.use('/api/profesores', profesoresMultiramaRoutes);
 app.use('/api/profesores', profesoresRoutes);
 app.use('/api/apoderados/me/inscripciones-deportivas', guardianEnrollmentsRoutes);
