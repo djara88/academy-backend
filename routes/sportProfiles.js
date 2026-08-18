@@ -12,6 +12,7 @@ const {
 const {
   resolveCompetitiveProfile,
   aggregateCompetitiveStats,
+  publicProfile,
 } = require('../services/competitiveStatsCatalog');
 
 const router = express.Router();
@@ -71,6 +72,7 @@ router.get('/', loadAcademyEntitlements, async (req, res) => {
           disciplina: branch.disciplina,
           sede_id: branch.sede_id,
         },
+        competitive: publicProfile(resolveCompetitiveProfile({ discipline: branch.disciplina })),
         customization: {
           allowed: customizationAllowed,
           active: customizationAllowed && profile.custom,

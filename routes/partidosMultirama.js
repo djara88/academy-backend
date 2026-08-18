@@ -93,6 +93,7 @@ router.post('/', async (req, res) => {
   try {
     const academyId = req.user.academia_id;
     const context = await resolveMatchContext(academyId, req.body);
+    const eventUi = publicProfile(context.profile).eventUi;
     const { matchTime, callTime } = validateSchedule(req.body?.hora, req.body?.hora_citacion);
     const { data, error } = await supabase.from('partidos').insert({
       academia_id: academyId,
@@ -108,8 +109,8 @@ router.post('/', async (req, res) => {
       hora_citacion: callTime,
       ubicacion: safeText(req.body?.ubicacion, 300),
       link_maps: safeText(req.body?.link_maps, 1000),
-      color_uniforme: safeText(req.body?.color_uniforme, 120) || 'Indumentaria principal',
-      condicion: safeText(req.body?.condicion, 40) || 'Local',
+      color_uniforme: safeText(req.body?.color_uniforme, 120) || (eventUi.equipmentMode === 'uniform' ? 'Titular' : ''),
+      condicion: safeText(req.body?.condicion, 40) || (eventUi.conditionMode === 'required' ? 'Local' : 'Evento'),
       cobra_arbitraje: req.body?.cobra_arbitraje === true,
       monto_arbitraje_jugador: req.body?.cobra_arbitraje === true ? Math.max(0, Number(req.body?.monto_arbitraje_jugador) || 0) : 0,
       estado: 'Programado',
@@ -208,7 +209,12 @@ router.post('/:id/citacion', async (req, res) => {
     }
 
     const profile = resolveCompetitiveProfile({ discipline: match.ramas?.disciplina, code: match.disciplina_codigo });
+    const eventUi = publicProfile(profile).eventUi;
     const kind = match.es_amistoso ? `🤝 *${profile.activityLabel.toUpperCase()} AMISTOSO*` : `🏆 *${match.torneos?.nombre || 'COMPETENCIA'}*`;
+    const conditionLine = eventUi.conditionMode !== 'hidden' && match.condicion && match.condicion !== 'Evento'
+      ? `📍 *Condición:* ${match.condicion}\n` : '';
+    const equipmentLine = match.color_uniforme
+      ? `🎽 *${eventUi.equipmentLabel}:* ${match.color_uniforme}\n` : '';
     let sent = 0;
     for (const student of students) {
       const tutor = tutorMap.get(String(getStudentTutorId(student)));
@@ -220,7 +226,8 @@ router.post('/:id/citacion', async (req, res) => {
         `📋 *CITACIÓN · ${profile.label.toUpperCase()}*\n\n` +
         `*${student.nombre}* ha sido citado/a:\n${kind}\n${profile.icon} *${profile.opponentLabel}:* ${match.rival}\n` +
         `🏷️ *Categoría:* ${match.categorias?.nombre || ''}\n📅 *Fecha:* ${match.fecha}\n📣 *Citación:* ${String(match.hora_citacion || '').slice(0,5)} hrs\n` +
-        `⏰ *Inicio:* ${String(match.hora || '').slice(0,5)} hrs\n🏟️ *Lugar:* ${match.ubicacion || 'Por confirmar'}\n👕 *Indumentaria:* ${match.color_uniforme || 'Por confirmar'}\n\n` +
+        `⏰ *Inicio:* ${String(match.hora || '').slice(0,5)} hrs\n🏟️ *Lugar:* ${match.ubicacion || 'Por confirmar'}\n` +
+        conditionLine + equipmentLine + `\n` +
         `Responde:\n1️⃣ Confirmar asistencia\n2️⃣ Informar ausencia`);
       try { await enviarMensaje(academyId, phone, message); sent += 1; }
       catch (sendError) { console.error(`No se pudo enviar citación a ${student.nombre}:`, sendError?.message || sendError); }
