@@ -6,13 +6,17 @@ on:
       - brand-lestra-v1
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: brand-lestra-v1
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -23,3 +27,12 @@ jobs:
         run: node --check server.js
       - name: Run backend tests
         run: npm test
+      - name: Record successful validation
+        shell: bash
+        run: |
+          printf 'Backend Lestra validation OK\ncommit=%s\n' "$GITHUB_SHA" > .lestra-backend-check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .lestra-backend-check
+          git commit -m "ci: registrar validación exitosa backend Lestra"
+          git push origin HEAD:brand-lestra-v1
