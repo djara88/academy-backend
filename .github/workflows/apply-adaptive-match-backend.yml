@@ -1,0 +1,86 @@
+name: Apply adaptive match backend
+
+on:
+  push:
+    branches: [feat/adaptive-match-form]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/adaptive-match-form
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Añadir metadatos adaptativos y citaciones por disciplina
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('services/competitiveStatsCatalog.js')
+          s = p.read_text()
+          anchor = "const COMPETITIVE_STATS_VERSION = 1;\n"
+          block = """const COMPETITIVE_STATS_VERSION = 1;\n\nconst TEAM_EVENT_CODES = new Set(['futbol', 'futsal', 'basquetbol', 'voleibol', 'hockey', 'rugby']);\nconst RACKET_EVENT_CODES = new Set(['tenis', 'padel']);\nconst EQUIPMENT_META = Object.freeze({\n  tenis: { label: 'Indumentaria / equipamiento', placeholder: 'Ej: camiseta oficial, raqueta y accesorios' },\n  padel: { label: 'Indumentaria / equipamiento', placeholder: 'Ej: camiseta oficial, pala y accesorios' },\n  natacion: { label: 'Implementación / indumentaria', placeholder: 'Ej: traje de baño, gorro y lentes' },\n  atletismo: { label: 'Indumentaria / implementos', placeholder: 'Ej: uniforme oficial, clavos o implemento de prueba' },\n  gimnasia: { label: 'Indumentaria / implementos', placeholder: 'Ej: malla oficial o implementos requeridos' },\n  karate: { label: 'Indumentaria / protección', placeholder: 'Ej: karategi blanco, cinturón y protecciones' },\n  artes_marciales: { label: 'Indumentaria / protección', placeholder: 'Ej: uniforme, guantes, casco o protector' },\n});\n\nconst eventUiForProfile = (profile) => {\n  const code = profile?.code || 'generico';\n  if (TEAM_EVENT_CODES.has(code)) {\n    return { conditionMode: 'required', equipmentMode: 'uniform', equipmentLabel: 'Indumentaria', equipmentPlaceholder: null };\n  }\n  const meta = EQUIPMENT_META[code] || { label: 'Indumentaria / equipamiento', placeholder: 'Ej: equipamiento o implementación requerida' };\n  return {\n    conditionMode: RACKET_EVENT_CODES.has(code) ? 'optional' : 'hidden',\n    equipmentMode: 'freeform',\n    equipmentLabel: meta.label,\n    equipmentPlaceholder: meta.placeholder,\n  };\n};\n"""
+          if 'const TEAM_EVENT_CODES' not in s:
+              if anchor not in s: raise SystemExit('No se encontró ancla COMPETITIVE_STATS_VERSION')
+              s = s.replace(anchor, block, 1)
+          target = "  usesHeadToHeadScore: profile.usesHeadToHeadScore,\n  metricVersion: COMPETITIVE_STATS_VERSION,"
+          replacement = "  usesHeadToHeadScore: profile.usesHeadToHeadScore,\n  eventUi: eventUiForProfile(profile),\n  metricVersion: COMPETITIVE_STATS_VERSION,"
+          if 'eventUi: eventUiForProfile(profile)' not in s:
+              if target not in s: raise SystemExit('No se encontró publicProfile')
+              s = s.replace(target, replacement, 1)
+          p.write_text(s)
+
+          p = Path('routes/sportProfiles.js')
+          s = p.read_text()
+          old = "const {\n  resolveCompetitiveProfile,\n  aggregateCompetitiveStats,\n} = require('../services/competitiveStatsCatalog');"
+          new = "const {\n  resolveCompetitiveProfile,\n  aggregateCompetitiveStats,\n  publicProfile,\n} = require('../services/competitiveStatsCatalog');"
+          if '  publicProfile,' not in s:
+              if old not in s: raise SystemExit('No se encontró import competitivo')
+              s = s.replace(old, new, 1)
+          target = "        branch: {\n          id: branch.id,\n          nombre: branch.nombre,\n          disciplina: branch.disciplina,\n          sede_id: branch.sede_id,\n        },\n        customization: {"
+          replacement = "        branch: {\n          id: branch.id,\n          nombre: branch.nombre,\n          disciplina: branch.disciplina,\n          sede_id: branch.sede_id,\n        },\n        competitive: publicProfile(resolveCompetitiveProfile({ discipline: branch.disciplina })),\n        customization: {"
+          if 'competitive: publicProfile' not in s:
+              if target not in s: raise SystemExit('No se encontró bloque branch')
+              s = s.replace(target, replacement, 1)
+          p.write_text(s)
+
+          p = Path('routes/partidosMultirama.js')
+          s = p.read_text()
+          target = "    const context = await resolveMatchContext(academyId, req.body);\n    const { matchTime, callTime } = validateSchedule(req.body?.hora, req.body?.hora_citacion);"
+          replacement = "    const context = await resolveMatchContext(academyId, req.body);\n    const eventUi = publicProfile(context.profile).eventUi;\n    const { matchTime, callTime } = validateSchedule(req.body?.hora, req.body?.hora_citacion);"
+          if 'const eventUi = publicProfile(context.profile).eventUi;' not in s:
+              if target not in s: raise SystemExit('No se encontró contexto creación')
+              s = s.replace(target, replacement, 1)
+          s = s.replace("      color_uniforme: safeText(req.body?.color_uniforme, 120) || 'Indumentaria principal',\n      condicion: safeText(req.body?.condicion, 40) || 'Local',", "      color_uniforme: safeText(req.body?.color_uniforme, 120) || (eventUi.equipmentMode === 'uniform' ? 'Titular' : ''),\n      condicion: safeText(req.body?.condicion, 40) || (eventUi.conditionMode === 'required' ? 'Local' : 'Evento'),", 1)
+          target = "    const profile = resolveCompetitiveProfile({ discipline: match.ramas?.disciplina, code: match.disciplina_codigo });\n    const kind = match.es_amistoso ? `🤝 *${profile.activityLabel.toUpperCase()} AMISTOSO*` : `🏆 *${match.torneos?.nombre || 'COMPETENCIA'}*`;"
+          replacement = "    const profile = resolveCompetitiveProfile({ discipline: match.ramas?.disciplina, code: match.disciplina_codigo });\n    const eventUi = publicProfile(profile).eventUi;\n    const kind = match.es_amistoso ? `🤝 *${profile.activityLabel.toUpperCase()} AMISTOSO*` : `🏆 *${match.torneos?.nombre || 'COMPETENCIA'}*`;\n    const conditionLine = eventUi.conditionMode !== 'hidden' && match.condicion && match.condicion !== 'Evento'\n      ? `📍 *Condición:* ${match.condicion}\\n` : '';\n    const equipmentLine = match.color_uniforme\n      ? `🎽 *${eventUi.equipmentLabel}:* ${match.color_uniforme}\\n` : '';"
+          if 'const conditionLine = eventUi.conditionMode' not in s:
+              if target not in s: raise SystemExit('No se encontró perfil de citación')
+              s = s.replace(target, replacement, 1)
+          target = "        `⏰ *Inicio:* ${String(match.hora || '').slice(0,5)} hrs\\n🏟️ *Lugar:* ${match.ubicacion || 'Por confirmar'}\\n👕 *Indumentaria:* ${match.color_uniforme || 'Por confirmar'}\\n\\n` +"
+          replacement = "        `⏰ *Inicio:* ${String(match.hora || '').slice(0,5)} hrs\\n🏟️ *Lugar:* ${match.ubicacion || 'Por confirmar'}\\n` +\n        conditionLine + equipmentLine + `\\n` +"
+          if target not in s: raise SystemExit('No se encontró línea de indumentaria de citación')
+          s = s.replace(target, replacement, 1)
+          p.write_text(s)
+          PY
+      - run: node --check services/competitiveStatsCatalog.js
+      - run: node --check routes/sportProfiles.js
+      - run: node --check routes/partidosMultirama.js
+      - run: npm test
+      - name: Commit limpio
+        run: |
+          rm .github/workflows/apply-adaptive-match-backend.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/competitiveStatsCatalog.js routes/sportProfiles.js routes/partidosMultirama.js .github/workflows/apply-adaptive-match-backend.yml
+          git commit -m "feat: adaptar encuentros según disciplina"
+          git push
