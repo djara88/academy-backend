@@ -99,14 +99,13 @@ const decorateMatch = (match) => ({
   sport_profile: publicProfile(resolveCompetitiveProfile({ code: match.disciplina_codigo })),
 });
 
-// 1. CREAR ENCUENTRO + EGRESOS AUTOMÁTICOS
+// 1. CREAR ENCUENTRO
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
     const {
       torneo_id, categoria_id, es_amistoso, rival, fecha, hora, hora_citacion,
       ubicacion, link_maps, color_uniforme, condicion, cobra_arbitraje, monto_arbitraje_jugador,
-      costo_arbitraje_total, costo_cancha,
     } = req.body;
 
     const { matchTime, callTime } = validateSchedule(hora, hora_citacion);
@@ -137,33 +136,6 @@ router.post('/', authMiddleware, async (req, res) => {
       .single();
 
     if (error) throw error;
-
-    const egresosPartidos = [];
-    if (Number(costo_arbitraje_total) > 0) {
-      egresosPartidos.push({
-        academia_id,
-        partido_id: data.id,
-        concepto: `Arbitraje / jueces: ${context.profile.activityLabel} · ${rival}`,
-        categoria_gasto: 'Arbitraje',
-        centro_costo: context.profile.label,
-        monto: Number(costo_arbitraje_total),
-        fecha_gasto: fecha,
-      });
-    }
-
-    if (Number(costo_cancha) > 0) {
-      egresosPartidos.push({
-        academia_id,
-        partido_id: data.id,
-        concepto: `Arriendo recinto: ${context.profile.activityLabel} · ${rival}`,
-        categoria_gasto: 'Arriendo Canchas',
-        centro_costo: context.profile.label,
-        monto: Number(costo_cancha),
-        fecha_gasto: fecha,
-      });
-    }
-
-    if (egresosPartidos.length > 0) await supabase.from('egresos').insert(egresosPartidos);
 
     res.json({ success: true, data: { ...data, sport_profile: publicProfile(context.profile) } });
   } catch (error) {
