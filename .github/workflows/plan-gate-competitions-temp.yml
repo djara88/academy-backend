@@ -1,11 +1,12 @@
 name: Gate competitions by plan
 on:
-  push:
-    branches: [ fix/competitions-plan-gate-20260819 ]
+  pull_request:
+    branches: [ main ]
 permissions:
   contents: write
 jobs:
   apply:
+    if: github.head_ref == 'fix/competitions-plan-gate-20260819'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
