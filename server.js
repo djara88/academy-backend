@@ -54,7 +54,7 @@ const sensitiveLimiter = createRateLimiter({
 });
 const registrationLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
-  max: Math.max(3, Number(process.env.REGISTRATION_API_RATE_LIMIT_MAX || process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
+  max: Math.max(3, Number(process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
   message: 'Se alcanzó temporalmente el límite de registros desde esta conexión.',
 });
 
@@ -183,7 +183,7 @@ app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
 // Captura de rendimiento forma parte de Competencia+. La vista consolidada de
 // Analítica avanzada queda reservada a Alto Rendimiento (y Trial Full).
-app.use('/api/rendimiento', authMiddleware, ...requireFeature(FEATURES.ADVANCED_ANALYTICS), rendimientoAnalyticsRoutes);
+app.use('/api/rendimiento/analitica', authMiddleware, ...requireFeature(FEATURES.ADVANCED_ANALYTICS), rendimientoAnalyticsRoutes);
 app.use('/api/rendimiento', authMiddleware, ...requireFeature(FEATURES.MATCHES), rendimientoRoutes);
 
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoLifecycleRoutes);
