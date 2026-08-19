@@ -11,11 +11,14 @@ const FEATURES = Object.freeze({
   FINANCE: 'finanzas',
   UNIFORMS: 'uniformes',
   PROFESSORS: 'profesores',
+  EVALUATIONS: 'evaluaciones',
+  FRIENDLIES: 'amistosos',
+  BASIC_EXPORTS: 'exportaciones_basicas',
+  OPERATIONAL_NOTIFICATIONS: 'notificaciones_operativas',
   MATCHES: 'partidos',
   TOURNAMENTS: 'torneos',
   MATCH_PREPARATION: 'preparacion_partidos',
   ATTENDANCE_ALERTS: 'alertas_asistencia',
-  EVALUATIONS: 'evaluaciones',
   CUSTOM_EVALUATION_CRITERIA: 'criterios_evaluacion_personalizados',
   CUSTOM_RECOGNITIONS: 'reconocimientos_personalizados',
   MEDICAL: 'ficha_medica',
@@ -27,14 +30,18 @@ const FEATURES = Object.freeze({
   ADVANCED_COMMUNICATIONS: 'comunicaciones_avanzadas',
 });
 
-// El portal familiar se comercializa como complemento independiente. La prueba
-// Full lo habilita para demostrar la experiencia completa antes de contratar.
+// Formación cubre la operación diaria completa de la academia. Los amistosos
+// permiten probar la agenda competitiva sin entregar el motor premium de
+// torneos, rendimiento, PB/SB y analítica.
 const BASE_FEATURES = [
   FEATURES.CORE,
   FEATURES.FINANCE,
   FEATURES.UNIFORMS,
   FEATURES.PROFESSORS,
   FEATURES.EVALUATIONS,
+  FEATURES.FRIENDLIES,
+  FEATURES.BASIC_EXPORTS,
+  FEATURES.OPERATIONAL_NOTIFICATIONS,
 ];
 
 const COMPETITION_FEATURES = [
@@ -53,8 +60,8 @@ const PLAN_DEFINITIONS = Object.freeze({
   [PLAN_CODES.FORMACION]: {
     code: PLAN_CODES.FORMACION,
     name: 'Formación',
-    audience: 'Todo lo necesario para administrar profesionalmente una academia.',
-    professorLimit: 3,
+    audience: 'Profesionaliza la operación diaria de tu academia con gestión deportiva y administrativa en un solo lugar.',
+    professorLimit: 5,
     playerLimit: 100,
     siteLimit: 1,
     branchLimit: 1,
@@ -64,7 +71,7 @@ const PLAN_DEFINITIONS = Object.freeze({
   [PLAN_CODES.COMPETENCIA]: {
     code: PLAN_CODES.COMPETENCIA,
     name: 'Competencia',
-    audience: 'Academias que quieren automatizar su operación y conectar a toda su comunidad.',
+    audience: 'Academias que quieren automatizar su operación y gestionar toda su actividad competitiva.',
     professorLimit: 10,
     playerLimit: 300,
     siteLimit: 2,
