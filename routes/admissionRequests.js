@@ -7,12 +7,14 @@ const { PRIVACY_VERSION, getConsentCatalog } = require('../services/privacyConse
 const { selectEnrollmentTerms } = require('../services/premiumPdf');
 const { fetchWithTimeout } = require('../services/httpClient');
 const { getAcademyEntitlements } = require('../services/planCatalog');
+const { assertRutAvailable } = require('../services/rutGuard');
 
 const router = express.Router();
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'https://lestra.app').replace(/\/$/, '');
 const TOKEN_TTL_DAYS = Math.max(2, Number(process.env.PREMATRICULA_TTL_DAYS || 7));
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const safeText = (value, max = 500) => String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
+const escapeHtml = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 const normalizePhone = (value) => safeText(value, 40).replace(/[^0-9+]/g, '');
 const validEmail = (value) => !value || /^\S+@\S+\.\S+$/.test(String(value).trim());
 const validDate = (value) => {
@@ -32,7 +34,7 @@ const sendDirectorNotice = async ({ academy, lead }) => {
         sender: { name: 'Lestra', email: process.env.BREVO_SENDER_EMAIL },
         to: [{ email, name: academy.nombre || 'Dirección' }],
         subject: `${academy.nombre || 'Academia'} | Nueva solicitud de inscripción`,
-        htmlContent: `<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6"><h2>Nueva solicitud desde tu página pública</h2><p><b>Alumno:</b> ${lead.alumno_nombre}</p><p><b>Apoderado:</b> ${lead.apoderado_nombre}</p><p><b>Teléfono:</b> ${lead.telefono}</p><p>Ingresa a Lestra → Solicitudes para gestionarla.</p></div>`,
+        htmlContent: `<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6"><h2>Nueva solicitud desde tu página pública</h2><p><b>Alumno:</b> ${escapeHtml(lead.alumno_nombre)}</p><p><b>Apoderado:</b> ${escapeHtml(lead.apoderado_nombre)}</p><p><b>Teléfono:</b> ${escapeHtml(lead.telefono)}</p><p>Ingresa a Lestra → Solicitudes para gestionarla.</p></div>`,
       }),
     }, 10000);
     return response.ok;
@@ -51,7 +53,7 @@ const sendPrematriculaEmail = async ({ academy, tutor, student, link }) => {
         sender: { name: academy.nombre || 'Academia Deportiva', email: process.env.BREVO_SENDER_EMAIL },
         to: [{ email: tutor.email, name: tutor.nombre_completo || '' }],
         subject: `${academy.nombre || 'Academia'} | Revisa y firma la pre-matrícula de ${student.nombre}`,
-        htmlContent: `<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;max-width:640px;margin:auto"><h2>Tu solicitud avanzó a pre-matrícula</h2><p>Hola ${tutor.nombre_completo || 'apoderado/a'},</p><p><b>${academy.nombre || 'La academia'}</b> preparó la pre-matrícula de <b>${student.nombre}</b>.</p><p style="margin:28px 0"><a href="${link}" style="display:inline-block;background:#102A43;color:white;text-decoration:none;padding:13px 20px;border-radius:10px;font-weight:700">Revisar y firmar pre-matrícula</a></p><p style="font-size:13px;color:#64748b">El enlace es personal y vence en ${TOKEN_TTL_DAYS} días.</p></div>`,
+        htmlContent: `<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;max-width:640px;margin:auto"><h2>Tu solicitud avanzó a pre-matrícula</h2><p>Hola ${escapeHtml(tutor.nombre_completo || 'apoderado/a')},</p><p><b>${escapeHtml(academy.nombre || 'La academia')}</b> preparó la pre-matrícula de <b>${escapeHtml(student.nombre)}</b>.</p><p style="margin:28px 0"><a href="${escapeHtml(link)}" style="display:inline-block;background:#102A43;color:white;text-decoration:none;padding:13px 20px;border-radius:10px;font-weight:700">Revisar y firmar pre-matrícula</a></p><p style="font-size:13px;color:#64748b">El enlace es personal y vence en ${TOKEN_TTL_DAYS} días.</p></div>`,
       }),
     }, 10000);
     return response.ok;
@@ -196,6 +198,8 @@ router.post('/:id/prematricula', async (req, res) => {
     if (academyError || countError || branchError) throw academyError || countError || branchError;
     if (!branch?.activa || String(branch.sede_id) !== String(siteId)) return res.status(409).json({ error: 'La sede o disciplina ya no está disponible en el plan actual.' });
 
+    if (alumnoRut) await assertRutAvailable({ supabase, academiaId: academyId, rut: alumnoRut });
+
     const limit = getAcademyEntitlements(academy).limits.players;
     if (Number.isInteger(limit) && Number(count || 0) >= limit) return res.status(403).json({ error: 'La academia alcanzó el límite de alumnos de su plan. Debes ampliar el plan antes de formalizar una nueva inscripción.', code: 'PLAYER_LIMIT_REACHED' });
 
@@ -257,7 +261,10 @@ router.post('/:id/prematricula', async (req, res) => {
     return res.status(201).json({ success: true, data: pre, link, email_sent: emailSent });
   } catch (error) {
     console.error('Error convirtiendo solicitud a pre-matrícula:', error?.message || error);
-    return res.status(error?.status || 500).json({ error: 'No fue posible crear la pre-matrícula desde esta solicitud.' });
+    if (['PLAYER_RUT_EXISTS', 'PRE_ENROLLMENT_RUT_EXISTS'].includes(error?.code)) {
+      return res.status(409).json({ error: error.message, code: error.code, conflict: error.conflict || null });
+    }
+    return res.status(error?.status || 500).json({ error: error?.status ? error.message : 'No fue posible crear la pre-matrícula desde esta solicitud.' });
   }
 });
 
