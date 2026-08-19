@@ -158,6 +158,41 @@ const loadCategoryAverage = async (academyId, enrollment, profile) => {
   return { metrics: average, sample_size: latestByPlayer.size };
 };
 
+const formatTimedSummaryMetric = (metric, mark) => {
+  const raw = Number(mark?.valor);
+  if (!Number.isFinite(raw) || raw < 0) return metric;
+  if (String(mark?.unidad || '').toLowerCase() !== 's') {
+    return {
+      ...metric,
+      value: raw,
+      unit: mark?.unidad || metric.unit || null,
+      decimals: String(mark?.unidad || '').toLowerCase() === 'm' ? 3 : (metric.decimals ?? 3),
+      raw_value: raw,
+    };
+  }
+
+  const totalMs = Math.max(0, Math.round(raw * 1000));
+  const minutes = Math.floor(totalMs / 60000);
+  const seconds = Math.floor((totalMs % 60000) / 1000);
+  const millis = totalMs % 1000;
+  if (minutes > 0) {
+    return {
+      ...metric,
+      value: minutes,
+      unit: `min ${String(seconds).padStart(2, '0')} seg ${String(millis).padStart(3, '0')} ms`,
+      decimals: 0,
+      raw_value: raw,
+    };
+  }
+  return {
+    ...metric,
+    value: seconds,
+    unit: `seg ${String(millis).padStart(3, '0')} ms`,
+    decimals: 0,
+    raw_value: raw,
+  };
+};
+
 const loadCompetitiveStats = async (academyId, playerId, enrollment) => {
   const discipline = enrollment?.ramas?.disciplina || 'Otro';
   const profile = resolveCompetitiveProfile({ discipline });
@@ -177,7 +212,33 @@ const loadCompetitiveStats = async (academyId, playerId, enrollment) => {
     .in('partido_id', matchIds)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return aggregateCompetitiveStats(profile, rows || []);
+
+  const summary = aggregateCompetitiveStats(profile, rows || []);
+  if (!['atletismo', 'natacion'].includes(profile.code)) return summary;
+
+  const { data: marks, error: marksError } = await supabase.from('deportista_marcas')
+    .select('valor,unidad,es_pb,es_sb,fecha,created_at,prueba_codigo,prueba_nombre,metrica_codigo')
+    .eq('academia_id', academyId)
+    .eq('jugador_id', playerId)
+    .eq('rama_id', enrollment.rama_id)
+    .eq('disciplina_codigo', profile.code)
+    .order('fecha', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (marksError) throw marksError;
+
+  const records = marks || [];
+  const latest = records[0] || null;
+  const pbCount = records.filter((row) => row.es_pb === true).length;
+  const sbCount = records.filter((row) => row.es_sb === true).length;
+  summary.metrics = (summary.metrics || [])
+    .filter((metric) => metric.code !== 'pruebas')
+    .map((metric) => {
+      if (metric.code === 'pb') return { ...metric, value: pbCount, decimals: 0 };
+      if (metric.code === 'sb') return { ...metric, value: sbCount, decimals: 0 };
+      if (latest && ['marca', 'tiempo_segundos'].includes(metric.code)) return formatTimedSummaryMetric(metric, latest);
+      return metric;
+    });
+  return summary;
 };
 
 const loadAttendance = async (academyId, playerId, branchId) => {
