@@ -121,6 +121,7 @@ const evaluacionRoutes = require('./routes/evaluaciones');
 const fichaMedicaRoutes = require('./routes/ficha_medica');
 const torneoRoutes = require('./routes/torneos');
 const torneoMultiramaRoutes = require('./routes/torneosMultirama');
+const competitionStructureRoutes = require('./routes/competitionStructure');
 const partidoRoutes = require('./routes/partidos');
 const partidoMultiramaRoutes = require('./routes/partidosMultirama');
 const academiaRoutes = require('./routes/academias');
@@ -180,6 +181,7 @@ app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL)
 
 // Rutas multirrama se montan antes de las implementaciones legacy. Solo los
 // endpoints que resuelven responden; los demás continúan hacia el router histórico.
+app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), competitionStructureRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoMultiramaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
 app.use('/api/partidos', partidoMultiramaRoutes);
