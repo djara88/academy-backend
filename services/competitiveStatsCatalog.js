@@ -71,14 +71,14 @@ const PROFILES = Object.freeze({
     ],
   },
   tenis: {
-    code: 'tenis', label: 'Tenis', icon: '🎾', activityLabel: 'Partido', opponentLabel: 'Rival', scoreLabel: 'Sets', usesHeadToHeadScore: true,
+    code: 'tenis', label: 'Tenis', icon: '🎾', activityLabel: 'Duelo', opponentLabel: 'Rival', scoreLabel: 'Sets', usesHeadToHeadScore: true,
     metrics: [
       metric('sets_ganados', 'Sets ganados'), metric('games_ganados', 'Games ganados'), metric('aces', 'Aces'),
       metric('dobles_faltas', 'Dobles faltas'), metric('quiebres', 'Quiebres'), metric('tie_breaks_ganados', 'Tie-breaks'),
     ],
   },
   padel: {
-    code: 'padel', label: 'Pádel', icon: '🎾', activityLabel: 'Partido', opponentLabel: 'Rival / pareja', scoreLabel: 'Sets', usesHeadToHeadScore: true,
+    code: 'padel', label: 'Pádel', icon: '🎾', activityLabel: 'Duelo', opponentLabel: 'Rival / pareja', scoreLabel: 'Sets', usesHeadToHeadScore: true,
     metrics: [
       metric('sets_ganados', 'Sets ganados'), metric('games_ganados', 'Games ganados'), metric('aces', 'Aces'),
       metric('quiebres', 'Quiebres'), metric('winners', 'Winners'), metric('errores_no_forzados', 'Errores no forzados'),
@@ -99,28 +99,28 @@ const PROFILES = Object.freeze({
     ],
   },
   natacion: {
-    code: 'natacion', label: 'Natación', icon: '🏊', activityLabel: 'Competencia', opponentLabel: 'Evento / prueba', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
+    code: 'natacion', label: 'Natación', icon: '🏊', activityLabel: 'Prueba', opponentLabel: 'Prueba / serie', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
     metrics: [
       metric('pruebas', 'Pruebas'), metric('podios', 'Podios'), metric('mejores_marcas', 'Mejores marcas'),
       metric('tiempo_segundos', 'Mejor tiempo', { aggregate: 'min', unit: 's', decimals: 2 }), metric('puntos', 'Puntos', { decimals: 2 }),
     ],
   },
   atletismo: {
-    code: 'atletismo', label: 'Atletismo', icon: '🏃', activityLabel: 'Competencia', opponentLabel: 'Evento / prueba', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
+    code: 'atletismo', label: 'Atletismo', icon: '🏃', activityLabel: 'Prueba', opponentLabel: 'Prueba / carrera', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
     metrics: [
       metric('pruebas', 'Pruebas'), metric('podios', 'Podios'), metric('pb', 'PB'), metric('sb', 'SB'),
       metric('marca', 'Última marca', { aggregate: 'latest', decimals: 2 }), metric('puntos', 'Puntos', { decimals: 2 }),
     ],
   },
   gimnasia: {
-    code: 'gimnasia', label: 'Gimnasia', icon: '🤸', activityLabel: 'Competencia', opponentLabel: 'Evento / aparato', scoreLabel: 'Puntaje', usesHeadToHeadScore: false,
+    code: 'gimnasia', label: 'Gimnasia', icon: '🤸', activityLabel: 'Presentación', opponentLabel: 'Aparato / presentación', scoreLabel: 'Puntaje', usesHeadToHeadScore: false,
     metrics: [
       metric('aparatos', 'Aparatos'), metric('podios', 'Podios'), metric('medallas', 'Medallas'),
       metric('puntaje', 'Mejor puntaje', { aggregate: 'max', decimals: 3 }), metric('penalizaciones', 'Penalizaciones', { decimals: 3 }),
     ],
   },
   karate: {
-    code: 'karate', label: 'Karate', icon: '🥋', activityLabel: 'Participación', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
+    code: 'karate', label: 'Karate', icon: '🥋', activityLabel: 'Duelo / presentación', opponentLabel: 'Rival / modalidad', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
     metrics: [
       metric('combates', 'Combates'), metric('victorias', 'Victorias'), metric('puntos', 'Puntos'),
       metric('ippon', 'Ippon'), metric('waza_ari', 'Waza-ari'), metric('medallas', 'Medallas'),
@@ -128,14 +128,14 @@ const PROFILES = Object.freeze({
     ],
   },
   artes_marciales: {
-    code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Competencia', opponentLabel: 'Evento / rival', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
+    code: 'artes_marciales', label: 'Artes marciales', icon: '🥋', activityLabel: 'Duelo / prueba', opponentLabel: 'Rival / modalidad', scoreLabel: 'Puntos', usesHeadToHeadScore: false,
     metrics: [
       metric('combates', 'Combates'), metric('victorias', 'Victorias'), metric('puntos', 'Puntos'),
       metric('ippon', 'Ippon'), metric('knockdowns', 'Knockdowns'), metric('medallas', 'Medallas'),
     ],
   },
   generico: {
-    code: 'generico', label: 'Deporte', icon: '🏅', activityLabel: 'Encuentro', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: true,
+    code: 'generico', label: 'Deporte', icon: '🏅', activityLabel: 'Evento', opponentLabel: 'Rival / evento', scoreLabel: 'Puntos', usesHeadToHeadScore: true,
     metrics: [
       metric('participaciones', 'Participaciones'), metric('victorias', 'Victorias'), metric('podios', 'Podios'), metric('puntos', 'Puntos', { decimals: 2 }),
     ],
