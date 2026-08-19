@@ -65,6 +65,7 @@ app.use('/api/subscriptions/guardian-addon/checkout', sensitiveLimiter);
 app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
 app.use('/api/prematriculas/public', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
+app.use('/api/solicitudes-admision/public', registrationLimiter);
 
 const bodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: bodyLimit }));
@@ -111,6 +112,7 @@ const documentoJugadorRoutes = require('./routes/documentos');
 const consentimientoRoutes = require('./routes/consentimientos');
 const prematriculaRoutes = require('./routes/prematriculas');
 const importacionRoutes = require('./routes/importaciones');
+const admissionRequestsRoutes = require('./routes/admissionRequests');
 const jugadorRoutes = require('./routes/jugadores');
 const alumnosRecognitionNotificationsRoutes = require('./routes/alumnosRecognitionNotifications');
 const alumnosReportsRoutes = require('./routes/alumnosReports');
@@ -159,6 +161,7 @@ const presenceAdminRoutes = require('./routes/presenceAdmin');
 const inscripcionesRoutes = require('./routes/inscripciones');
 
 app.use('/api/public', publicCatalogRoutes);
+app.use('/api/solicitudes-admision', admissionRequestsRoutes);
 app.use('/api/presence', presenceRoutes);
 app.use('/api/saas-admin/presence', presenceAdminRoutes);
 app.use('/api/jugadores', documentoJugadorRoutes);
@@ -181,8 +184,6 @@ app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
 app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
-// Captura de rendimiento forma parte de Competencia+. La vista consolidada de
-// Analítica avanzada queda reservada a Alto Rendimiento (y Trial Full).
 app.use('/api/rendimiento/analitica', authMiddleware, ...requireFeature(FEATURES.ADVANCED_ANALYTICS), rendimientoAnalyticsRoutes);
 app.use('/api/rendimiento', authMiddleware, ...requireFeature(FEATURES.MATCHES), rendimientoRoutes);
 
