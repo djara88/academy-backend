@@ -198,6 +198,15 @@ router.post('/:id/prematricula', async (req, res) => {
     if (academyError || countError || branchError) throw academyError || countError || branchError;
     if (!branch?.activa || String(branch.sede_id) !== String(siteId)) return res.status(409).json({ error: 'La sede o disciplina ya no está disponible en el plan actual.' });
 
+    if (lead.categoria_id) {
+      const { data: category, error: categoryError } = await supabase.from('categorias')
+        .select('id,sede_id,rama_id').eq('id', lead.categoria_id).eq('academia_id', academyId).maybeSingle();
+      if (categoryError) throw categoryError;
+      if (!category || String(category.sede_id) !== String(siteId) || String(category.rama_id) !== String(branchId)) {
+        return res.status(409).json({ error: 'La categoría solicitada ya no corresponde a la sede o disciplina seleccionada. Revisa la solicitud antes de continuar.' });
+      }
+    }
+
     if (alumnoRut) await assertRutAvailable({ supabase, academiaId: academyId, rut: alumnoRut });
 
     const limit = getAcademyEntitlements(academy).limits.players;
@@ -213,6 +222,7 @@ router.post('/:id/prematricula', async (req, res) => {
       sexo,
       sede_id: siteId,
       rama_id: branchId,
+      categoria_id: lead.categoria_id || null,
       tipo_alumno: 'Nuevo',
       certificado_medico: 'Pendiente',
       talla_apoderado: 'No desea',
