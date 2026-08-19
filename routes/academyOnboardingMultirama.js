@@ -6,6 +6,7 @@ const authIdentityMiddleware = require('../middleware/authIdentity');
 const { requireDirector } = require('../middleware/professorAccess');
 const { validatePassword } = require('../services/passwordPolicy');
 const { fetchWithTimeout } = require('../services/httpClient');
+const { getAcademyEntitlements, FEATURES } = require('../services/planCatalog');
 const {
   ALLOWED_DISCIPLINES,
   createInitialStructure,
@@ -37,6 +38,73 @@ const trialWindow = () => {
 };
 
 const safeText = (value, max = 180) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, max);
+const publicBaseUrl = () => String(process.env.FRONTEND_URL || 'https://lestra.app').replace(/\/$/, '');
+const normalizeSlug = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+
+const loadAcademyPlan = async (academyId) => {
+  const { data, error } = await supabase.from('academias')
+    .select('id,nombre,plan,plan_codigo,max_profesores,licencia_apoderados,guardian_license_ends_at,trial_ends_at,subscription_status,rama_principal_id,subdominio,pagina_publica_activa,descripcion_publica')
+    .eq('id', academyId).single();
+  if (error || !data) throw error || new Error('Academia no encontrada.');
+  return { academy: data, entitlements: getAcademyEntitlements(data) };
+};
+
+const assertFriendlies = async (academyId) => {
+  const context = await loadAcademyPlan(academyId);
+  if (!context.entitlements.features.includes(FEATURES.FRIENDLIES)) {
+    const error = new Error('Los amistosos no están habilitados en tu plan.');
+    error.status = 403;
+    error.code = 'FEATURE_NOT_INCLUDED';
+    throw error;
+  }
+  return context;
+};
+
+const getOperationalPlanSnapshot = async (academyId) => {
+  const { academy, entitlements } = await loadAcademyPlan(academyId);
+  const [players, professors, sites, branches, categories, finance, attendance] = await Promise.all([
+    supabase.from('jugadores').select('id', { count: 'exact', head: true }).eq('academia_id', academyId),
+    supabase.from('usuarios').select('id', { count: 'exact', head: true }).eq('academia_id', academyId).eq('rol', 'profesor').eq('activo', true),
+    supabase.from('sedes').select('id,nombre,principal,activa,bloqueada_por_plan', { count: 'exact' }).eq('academia_id', academyId).order('principal', { ascending: false }).order('created_at'),
+    supabase.from('ramas').select('id,nombre,disciplina,sede_id,principal,activa,bloqueada_por_plan,sedes(id,nombre)', { count: 'exact' }).eq('academia_id', academyId).order('principal', { ascending: false }).order('created_at'),
+    supabase.from('categorias').select('id', { count: 'exact', head: true }).eq('academia_id', academyId),
+    supabase.from('configuracion_financiera').select('academia_id').eq('academia_id', academyId).maybeSingle(),
+    supabase.from('asistencias').select('id', { count: 'exact', head: true }).in('entrenamiento_id', (await supabase.from('entrenamientos').select('id').eq('academia_id', academyId).limit(5000)).data?.map((item) => item.id) || []),
+  ]);
+  for (const result of [players, professors, sites, branches, categories, finance]) if (result.error) throw result.error;
+  const activeSites = (sites.data || []).filter((item) => item.activa !== false);
+  const activeBranches = (branches.data || []).filter((item) => item.activa !== false);
+  const siteLimit = entitlements.limits.sites;
+  const branchLimit = entitlements.limits.branches;
+  const structureOverLimit = (Number.isInteger(siteLimit) && activeSites.length > siteLimit)
+    || (Number.isInteger(branchLimit) && activeBranches.length > branchLimit);
+  return {
+    academy,
+    entitlements,
+    usage: {
+      players: { used: Number(players.count || 0), limit: entitlements.limits.players },
+      professors: { used: Number(professors.count || 0), limit: entitlements.limits.professors },
+      sites: { used: activeSites.length, limit: siteLimit },
+      branches: { used: activeBranches.length, limit: branchLimit },
+    },
+    structure: {
+      requiresChoice: Boolean(structureOverLimit || (Number.isInteger(branchLimit) && branchLimit === 1 && !academy.rama_principal_id)),
+      primaryBranchId: academy.rama_principal_id || null,
+      sites: sites.data || [],
+      branches: branches.data || [],
+    },
+    onboarding: [
+      { key: 'estructura', label: 'Definir sede y rama principal', done: Boolean(academy.rama_principal_id) },
+      { key: 'categorias', label: 'Crear categorías', done: Number(categories.count || 0) > 0 },
+      { key: 'profesores', label: 'Agregar al menos un profesor', done: Number(professors.count || 0) > 0 },
+      { key: 'alumnos', label: 'Registrar o importar alumnos', done: Number(players.count || 0) > 0 },
+      { key: 'finanzas', label: 'Configurar recaudación', done: Boolean(finance.data) },
+      { key: 'asistencia', label: 'Registrar la primera asistencia', done: Number(attendance.count || 0) > 0 },
+      { key: 'pagina_publica', label: 'Revisar la página pública de inscripción', done: Boolean(academy.subdominio && academy.pagina_publica_activa) },
+    ],
+  };
+};
 
 const sendWelcomeEmail = async ({ email, directorName, academyName }) => {
   const apiKey = process.env.BREVO_API_KEY;
@@ -47,10 +115,10 @@ const sendWelcomeEmail = async ({ email, directorName, academyName }) => {
       method: 'POST',
       headers: { accept: 'application/json', 'api-key': apiKey, 'content-type': 'application/json' },
       body: JSON.stringify({
-        sender: { name: 'Syncademia', email: senderEmail },
+        sender: { name: 'Lestra', email: senderEmail },
         to: [{ email }],
-        subject: '¡Bienvenido a Syncademia! 🚀',
-        htmlContent: `<div style="font-family:sans-serif;color:#333"><h2>¡Hola ${directorName}! Bienvenido a Syncademia</h2><p>Tu academia <strong>${academyName}</strong> fue creada con éxito y ya tiene configurada su primera sede y rama deportiva.</p><p>Tienes 15 días de prueba para conocer la plataforma completa.</p><p>El equipo de Syncademia</p></div>`,
+        subject: '¡Bienvenido a Lestra! 🚀',
+        htmlContent: `<div style="font-family:sans-serif;color:#333"><h2>¡Hola ${directorName}! Bienvenido a Lestra</h2><p>Tu academia <strong>${academyName}</strong> fue creada con éxito y ya tiene configurada su primera sede y rama deportiva.</p><p>Tienes 15 días de prueba Full para conocer la plataforma completa.</p><p>El equipo de Lestra</p></div>`,
       }),
     }, 10000);
     return response.ok;
@@ -67,6 +135,7 @@ const createTrialAcademy = async ({ academyName, directorName, email, address = 
     direccion: address || null,
     nombre_director: directorName,
     director_email: email,
+    correo_academia: email,
     plan: 'Prueba 15 Días',
     plan_codigo: 'formacion',
     max_profesores: 30,
@@ -78,6 +147,7 @@ const createTrialAcademy = async ({ academyName, directorName, email, address = 
     guardian_price_clp: 0,
     estado: 'Activa',
     jugadores_count: 0,
+    pagina_publica_activa: true,
   }).select('*').single();
   if (error) throw error;
   return data;
@@ -127,15 +197,8 @@ router.post('/registro-publico', async (req, res) => {
     });
     if (userError) throw userError;
 
-    const structure = await createInitialStructure({
-      academyId: academy.id,
-      discipline,
-      branchName,
-      siteName,
-      address,
-    });
+    const structure = await createInitialStructure({ academyId: academy.id, discipline, branchName, siteName, address });
     await sendWelcomeEmail({ email, directorName, academyName });
-
     return res.status(201).json({ success: true, academia: { ...academy, rama_principal_id: structure.branch.id }, estructura: structure });
   } catch (error) {
     if (academy?.id) {
@@ -170,8 +233,7 @@ router.post('/completar-google', authIdentityMiddleware, logoUpload, async (req,
 
     if (req.file) {
       uploadedLogoPath = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
-      const { error: uploadError } = await supabase.storage.from('logos-escuelas')
-        .upload(uploadedLogoPath, req.file.buffer, { contentType: req.file.mimetype });
+      const { error: uploadError } = await supabase.storage.from('logos-escuelas').upload(uploadedLogoPath, req.file.buffer, { contentType: req.file.mimetype });
       if (uploadError) throw uploadError;
       logoUrl = supabase.storage.from('logos-escuelas').getPublicUrl(uploadedLogoPath).data.publicUrl;
     }
@@ -183,15 +245,9 @@ router.post('/completar-google', authIdentityMiddleware, logoUpload, async (req,
     }
 
     const { error: userError } = await supabase.from('usuarios').insert({
-      id: authId,
-      academia_id: academy.id,
-      nombre_completo: directorName,
-      nombre: directorName,
-      email,
-      correo: email,
-      rol: 'director',
-      activo: true,
-      requiere_cambio_password: false,
+      id: authId, academia_id: academy.id,
+      nombre_completo: directorName, nombre: directorName, email, correo: email,
+      rol: 'director', activo: true, requiere_cambio_password: false,
     });
     if (userError) throw userError;
 
@@ -217,7 +273,7 @@ router.get('/rama-principal', authMiddleware, requireDirector, async (req, res) 
     ]);
     if (academyError) throw academyError;
     return res.json({ success: true, data: { rama_principal_id: academy.rama_principal_id || null, ramas: branches } });
-  } catch (error) {
+  } catch (_error) {
     return res.status(500).json({ error: 'No fue posible cargar la rama principal.' });
   }
 });
@@ -230,6 +286,188 @@ router.put('/rama-principal', authMiddleware, requireDirector, async (req, res) 
     return res.json({ success: true, data });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible cambiar la rama principal.', code: error?.code });
+  }
+});
+
+router.get('/plan-operativo', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const data = await getOperationalPlanSnapshot(req.user.academia_id);
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error cargando plan operativo:', error?.message || error);
+    return res.status(500).json({ error: 'No fue posible revisar el uso de tu plan.' });
+  }
+});
+
+router.get('/pagina-publica', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('academias')
+      .select('id,nombre,subdominio,pagina_publica_activa,descripcion_publica,logo,logo_url,direccion,telefono,correo_academia')
+      .eq('id', req.user.academia_id).single();
+    if (error) throw error;
+    return res.json({ success: true, data: { ...data, url: `${publicBaseUrl()}/a/${data.subdominio}` } });
+  } catch (_error) {
+    return res.status(500).json({ error: 'No fue posible cargar la página pública.' });
+  }
+});
+
+router.put('/pagina-publica', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const changes = {
+      pagina_publica_activa: req.body?.activa !== false,
+      descripcion_publica: safeText(req.body?.descripcion, 1200) || null,
+    };
+    if (req.body?.slug !== undefined) {
+      const slug = normalizeSlug(req.body.slug);
+      if (slug.length < 3) return res.status(400).json({ error: 'El enlace público debe tener al menos 3 caracteres.' });
+      changes.subdominio = slug;
+    }
+    const { data, error } = await supabase.from('academias').update(changes)
+      .eq('id', req.user.academia_id)
+      .select('id,nombre,subdominio,pagina_publica_activa,descripcion_publica').single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Ese enlace público ya está siendo utilizado.' });
+      throw error;
+    }
+    return res.json({ success: true, data: { ...data, url: `${publicBaseUrl()}/a/${data.subdominio}` } });
+  } catch (_error) {
+    return res.status(500).json({ error: 'No fue posible actualizar la página pública.' });
+  }
+});
+
+router.get('/amistosos', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    await assertFriendlies(req.user.academia_id);
+    const [eventsResult, tournamentsResult, branches, categoriesResult] = await Promise.all([
+      supabase.from('partidos')
+        .select('id,torneo_id,rival,fecha,hora,hora_citacion,ubicacion,condicion,estado,categoria_id,rama_id,sede_id,es_amistoso,categorias(id,nombre),ramas(id,nombre,disciplina),sedes(id,nombre),torneos(id,nombre)')
+        .eq('academia_id', req.user.academia_id).eq('es_amistoso', true)
+        .order('fecha', { ascending: true }).order('hora', { ascending: true }),
+      supabase.from('torneos')
+        .select('id,nombre,fecha_inicio,fecha_fin,organizador,ubicacion,estado,rama_id,sede_id,config_competencia,ramas(id,nombre,disciplina),sedes(id,nombre)')
+        .eq('academia_id', req.user.academia_id).contains('config_competencia', { amistoso: true })
+        .order('fecha_inicio', { ascending: true }),
+      listAcademyBranches(req.user.academia_id),
+      supabase.from('categorias').select('id,nombre,rama_id,sede_id').eq('academia_id', req.user.academia_id).order('nombre'),
+    ]);
+    if (eventsResult.error) throw eventsResult.error;
+    if (tournamentsResult.error) throw tournamentsResult.error;
+    if (categoriesResult.error) throw categoriesResult.error;
+    return res.json({ success: true, data: {
+      eventos: eventsResult.data || [],
+      competencias: tournamentsResult.data || [],
+      ramas: branches,
+      categorias: categoriesResult.data || [],
+    } });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible cargar los amistosos.', code: error?.code });
+  }
+});
+
+router.post('/amistosos/competencias', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    await assertFriendlies(req.user.academia_id);
+    const branchId = safeText(req.body?.rama_id, 80);
+    const name = safeText(req.body?.nombre, 180);
+    if (!branchId || !name) return res.status(400).json({ error: 'Selecciona una rama e ingresa el nombre de la competencia amistosa.' });
+    const { data: branch, error: branchError } = await supabase.from('ramas').select('id,sede_id,activa').eq('id', branchId).eq('academia_id', req.user.academia_id).maybeSingle();
+    if (branchError) throw branchError;
+    if (!branch || branch.activa === false) return res.status(409).json({ error: 'La rama seleccionada no está activa en tu plan.' });
+    const { data, error } = await supabase.from('torneos').insert({
+      academia_id: req.user.academia_id,
+      sede_id: branch.sede_id,
+      rama_id: branch.id,
+      nombre: name,
+      fecha_inicio: req.body?.fecha_inicio || null,
+      fecha_fin: req.body?.fecha_fin || req.body?.fecha_inicio || null,
+      tipo_gestion: 'externo',
+      formato_competencia: 'seguimiento',
+      organizador: safeText(req.body?.organizador, 180) || null,
+      ubicacion: safeText(req.body?.ubicacion, 300) || null,
+      config_competencia: { amistoso: true, formation_preview: true },
+      estructura_estado: 'no_aplica',
+      costo_inscripcion: 0,
+      permite_cuotas: false,
+      max_cuotas: 1,
+      estado: 'Activo',
+    }).select('id,nombre,fecha_inicio,fecha_fin,organizador,ubicacion,estado,rama_id,sede_id').single();
+    if (error) throw error;
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible crear la competencia amistosa.' });
+  }
+});
+
+router.post('/amistosos/eventos', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    await assertFriendlies(req.user.academia_id);
+    const branchId = safeText(req.body?.rama_id, 80);
+    const categoryId = safeText(req.body?.categoria_id, 80);
+    const reference = safeText(req.body?.rival, 180);
+    if (!branchId || !categoryId || !reference || !req.body?.fecha || !req.body?.hora) {
+      return res.status(400).json({ error: 'Rama, categoría, rival/prueba, fecha y hora son obligatorios.' });
+    }
+    const [{ data: branch, error: branchError }, { data: category, error: categoryError }] = await Promise.all([
+      supabase.from('ramas').select('id,sede_id,disciplina,activa').eq('id', branchId).eq('academia_id', req.user.academia_id).maybeSingle(),
+      supabase.from('categorias').select('id,rama_id,sede_id').eq('id', categoryId).eq('academia_id', req.user.academia_id).maybeSingle(),
+    ]);
+    if (branchError) throw branchError;
+    if (categoryError) throw categoryError;
+    if (!branch || branch.activa === false) return res.status(409).json({ error: 'La rama seleccionada no está activa en tu plan.' });
+    if (!category || String(category.rama_id) !== String(branch.id)) return res.status(409).json({ error: 'La categoría no pertenece a la rama seleccionada.' });
+
+    let tournamentId = safeText(req.body?.torneo_id, 80) || null;
+    if (tournamentId) {
+      const { data: tournament, error: tournamentError } = await supabase.from('torneos')
+        .select('id,rama_id,config_competencia').eq('id', tournamentId).eq('academia_id', req.user.academia_id).maybeSingle();
+      if (tournamentError) throw tournamentError;
+      if (!tournament || tournament.config_competencia?.amistoso !== true || String(tournament.rama_id) !== String(branch.id)) {
+        return res.status(409).json({ error: 'La competencia seleccionada no es un amistoso válido para esta rama.' });
+      }
+    }
+
+    const { data, error } = await supabase.from('partidos').insert({
+      academia_id: req.user.academia_id,
+      torneo_id: tournamentId,
+      sede_id: branch.sede_id,
+      rama_id: branch.id,
+      categoria_id: category.id,
+      disciplina_codigo: String(branch.disciplina || 'otro').toLowerCase(),
+      rival: reference,
+      fecha: req.body.fecha,
+      hora: req.body.hora,
+      hora_citacion: req.body?.hora_citacion || null,
+      ubicacion: safeText(req.body?.ubicacion, 300) || null,
+      link_maps: safeText(req.body?.link_maps, 1000) || null,
+      condicion: safeText(req.body?.condicion, 40) || null,
+      es_amistoso: true,
+      estado: 'Programado',
+      en_vivo: false,
+      temporada: String(req.body.fecha).slice(0, 4),
+    }).select('id,torneo_id,rival,fecha,hora,hora_citacion,ubicacion,condicion,estado,categoria_id,rama_id,sede_id,es_amistoso').single();
+    if (error) throw error;
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible programar el amistoso.' });
+  }
+});
+
+router.patch('/amistosos/eventos/:id', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    await assertFriendlies(req.user.academia_id);
+    const changes = {};
+    for (const key of ['fecha','hora','hora_citacion']) if (req.body?.[key] !== undefined) changes[key] = req.body[key] || null;
+    for (const [key, max] of [['rival',180],['ubicacion',300],['link_maps',1000],['condicion',40],['estado',40]]) {
+      if (req.body?.[key] !== undefined) changes[key] = safeText(req.body[key], max) || null;
+    }
+    const { data, error } = await supabase.from('partidos').update(changes)
+      .eq('id', req.params.id).eq('academia_id', req.user.academia_id).eq('es_amistoso', true)
+      .select('id,rival,fecha,hora,hora_citacion,ubicacion,condicion,estado').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Amistoso no encontrado.' });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible actualizar el amistoso.' });
   }
 });
 
