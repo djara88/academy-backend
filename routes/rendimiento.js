@@ -18,6 +18,47 @@ const router = express.Router();
 router.use(authMiddleware);
 
 const MATCH_SELECT = '*,torneos(id,nombre),categorias(id,nombre,rama_id,sede_id),ramas(id,nombre,disciplina),sedes(id,nombre)';
+const FIELD_EVENT_PATTERN = /(salto|lanzamiento|peso|disco|jabalina|martillo|altura|longitud|garrocha|triple)/i;
+
+const formatElapsedTimeForFamily = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  const totalMs = Math.max(0, Math.round(number * 1000));
+  const minutes = Math.floor(totalMs / 60000);
+  const seconds = Math.floor((totalMs % 60000) / 1000);
+  const millis = totalMs % 1000;
+  const parts = [];
+  if (minutes > 0) parts.push(`${minutes} min`);
+  parts.push(`${seconds} seg`);
+  if (millis > 0) parts.push(`${String(millis).padStart(3, '0')} ms`);
+  return parts.join(' ');
+};
+
+const isTimedMetricForFamily = (profile, definition, testName) => {
+  if (definition?.unit === 's') return true;
+  if (profile?.code === 'atletismo' && definition?.code === 'marca') {
+    return !FIELD_EVENT_PATTERN.test(String(testName || ''));
+  }
+  return false;
+};
+
+const formatMetricForFamily = (profile, definition, value, testName) => {
+  if (isTimedMetricForFamily(profile, definition, testName)) {
+    const time = formatElapsedTimeForFamily(value);
+    return time ? `Tiempo oficial: ${time}` : null;
+  }
+  return formatMetric(definition, value);
+};
+
+const formatRecordForFamily = (record) => {
+  if (!record) return '';
+  if (record.unidad === 's') return formatElapsedTimeForFamily(record.valor) || '';
+  const value = Number(record.valor);
+  const text = Number.isFinite(value)
+    ? value.toLocaleString('es-CL', { maximumFractionDigits: 3 })
+    : String(record.valor ?? '');
+  return `${text}${record.unidad ? ` ${record.unidad}` : ''}`.trim();
+};
 
 const loadMatch = async (academyId, matchId) => {
   const { data, error } = await supabase.from('partidos')
@@ -270,7 +311,7 @@ router.post('/:id/guardar-resultado', async (req, res) => {
         const metricsText = profile.metrics.map((definition) => {
           const value = stat.metricas_competitivas?.[definition.code];
           if (!Number.isFinite(Number(value)) || Number(value) <= 0) return null;
-          const line = formatMetric(definition, value);
+          const line = formatMetricForFamily(profile, definition, value, testName);
           return line ? `• ${line}` : null;
         }).filter(Boolean).slice(0, 12).join('\n');
         const participation = stat.participo
@@ -279,8 +320,8 @@ router.post('/:id/guardar-resultado', async (req, res) => {
         const pb = pbByPlayer.get(String(stat.jugador_id));
         const sb = sbByPlayer.get(String(stat.jugador_id));
         const recordText = pb
-          ? `\n🏆 *Nueva marca personal:* ${pb.valor}${pb.unidad ? ` ${pb.unidad}` : ''}`
-          : sb ? `\n📈 *Mejor marca de la temporada:* ${sb.valor}${sb.unidad ? ` ${sb.unidad}` : ''}` : '';
+          ? `\n🏆 *Nueva marca personal:* ${formatRecordForFamily(pb)}`
+          : sb ? `\n📈 *Mejor marca de la temporada:* ${formatRecordForFamily(sb)}` : '';
         const resultLine = profile.usesHeadToHeadScore
           ? `${profile.scoreLabel}: ${academyName} ${scoreFavor} - ${scoreContra} ${match.rival}`
           : `${profile.activityLabel}: ${testName}`;
