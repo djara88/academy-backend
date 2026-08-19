@@ -50,6 +50,8 @@ test('la prueba Full habilita Apoderados PRO y capacidad premium', () => {
   assert.equal(trial.features.includes(FEATURES.WHATSAPP_GROUPS), true);
   assert.equal(trial.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
   assert.equal(trial.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
+  assert.equal(trial.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(trial.features.includes(FEATURES.MATCHES), true);
   assert.equal(trial.addOns.guardiansIncludedByTrial, true);
   assert.equal(trial.limits.professors, 30);
   assert.equal(trial.limits.players, null);
@@ -57,13 +59,16 @@ test('la prueba Full habilita Apoderados PRO y capacidad premium', () => {
   assert.equal(trial.limits.branches, null);
 });
 
-test('torneos son base y las funciones avanzadas diferencian los planes', () => {
+test('competencias y resultados están disponibles desde Competencia', () => {
   const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
   const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
   const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
-  assert.equal(formation.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(formation.features.includes(FEATURES.TOURNAMENTS), false);
+  assert.equal(formation.features.includes(FEATURES.MATCHES), false);
   assert.equal(competition.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(competition.features.includes(FEATURES.MATCHES), true);
   assert.equal(highPerformance.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(highPerformance.features.includes(FEATURES.MATCHES), true);
   assert.equal(formation.features.includes(FEATURES.WHATSAPP_GROUPS), false);
   assert.equal(competition.features.includes(FEATURES.WHATSAPP_GROUPS), true);
   assert.equal(competition.features.includes(FEATURES.MEDICAL), false);

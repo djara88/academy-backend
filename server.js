@@ -184,8 +184,8 @@ app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL)
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), competitionStructureRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoMultiramaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
-app.use('/api/partidos', partidoMultiramaRoutes);
-app.use('/api/partidos', partidoRoutes);
+app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), partidoMultiramaRoutes);
+app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), partidoRoutes);
 app.use('/api/academias', academyOnboardingMultiramaRoutes);
 app.use('/api/academias', academiaRoutes);
 app.use('/api/matriculas', matriculaRoutes);
