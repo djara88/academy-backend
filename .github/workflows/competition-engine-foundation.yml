@@ -1,0 +1,103 @@
+name: Competition engine foundation
+
+on:
+  push:
+    branches: [feat/competition-engine-foundation]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/competition-engine-foundation
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Integrar arquitectura de torneos
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('routes/torneosMultirama.js')
+          s=p.read_text()
+
+          old="const { resolveCompetitiveProfile } = require('../services/competitiveStatsCatalog');"
+          new=old+"\nconst { getFormat, publicCompetitionArchitecture } = require('../services/competitionFormatCatalog');"
+          if s.count(old)!=1: raise SystemExit('import competitive catalog inesperado')
+          s=s.replace(old,new,1)
+
+          anchor="router.post('/', async (req, res) => {"
+          route="""router.get('/formatos', async (req, res) => {
+  try {
+    const branch = await resolveTournamentBranch(req.user.academia_id, req.query?.rama_id);
+    return res.json({ success: true, data: publicCompetitionArchitecture({ discipline: branch.disciplina }) });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible cargar los formatos de competencia.', code: error?.code });
+  }
+});
+
+"""
+          if s.count(anchor)!=1: raise SystemExit('POST torneo inesperado')
+          s=s.replace(anchor,route+anchor,1)
+
+          old_block="""    const name = safeText(req.body?.nombre, 180);
+    if (!name) return res.status(400).json({ success: false, error: 'El nombre del torneo es obligatorio.' });
+    const allowsInstallments = req.body?.permite_cuotas === true;
+    const { data, error } = await supabase.from('torneos').insert({"""
+          new_block="""    const name = safeText(req.body?.nombre, 180);
+    if (!name) return res.status(400).json({ success: false, error: 'El nombre del torneo es obligatorio.' });
+    const managementType = safeText(req.body?.tipo_gestion, 30) === 'organizado' ? 'organizado' : 'externo';
+    const architecture = publicCompetitionArchitecture({ discipline: branch.disciplina });
+    const defaultFormat = managementType === 'externo' ? 'seguimiento' : (architecture.formats.find((item) => item.structure)?.code || 'personalizado');
+    const formatCode = safeText(req.body?.formato_competencia, 50) || defaultFormat;
+    if (!getFormat(formatCode) || !architecture.formats.some((item) => item.code === formatCode)) {
+      return res.status(400).json({ success: false, error: 'El formato seleccionado no corresponde al perfil competitivo de esta rama.', code: 'INVALID_COMPETITION_FORMAT' });
+    }
+    const allowsInstallments = req.body?.permite_cuotas === true;
+    const { data, error } = await supabase.from('torneos').insert({"""
+          if s.count(old_block)!=1: raise SystemExit('bloque POST base inesperado')
+          s=s.replace(old_block,new_block,1)
+
+          old_fields="""      nombre: name,
+      fecha_inicio: req.body?.fecha_inicio || null,
+      fecha_fin: req.body?.fecha_fin || null,
+      costo_inscripcion: Math.max(0, Number(req.body?.costo_inscripcion) || 0),"""
+          new_fields="""      nombre: name,
+      fecha_inicio: req.body?.fecha_inicio || null,
+      fecha_fin: req.body?.fecha_fin || null,
+      tipo_gestion: managementType,
+      formato_competencia: formatCode,
+      organizador: safeText(req.body?.organizador, 180) || null,
+      ubicacion: safeText(req.body?.ubicacion, 300) || null,
+      reglamento_url: safeText(req.body?.reglamento_url, 1000) || null,
+      config_competencia: req.body?.config_competencia && typeof req.body.config_competencia === 'object' && !Array.isArray(req.body.config_competencia) ? req.body.config_competencia : {},
+      estructura_estado: managementType === 'organizado' ? 'borrador' : 'no_aplica',
+      costo_inscripcion: Math.max(0, Number(req.body?.costo_inscripcion) || 0),"""
+          if s.count(old_fields)!=1: raise SystemExit('campos insert inesperados')
+          s=s.replace(old_fields,new_fields,1)
+
+          start=s.find("    const organizationCost = Math.max(0, Number(req.body?.costo_organizacion) || 0);")
+          end=s.find("    return res.status(201).json({ success: true, data });", start)
+          if start<0 or end<0: raise SystemExit('bloque costo organizacion no encontrado')
+          s=s[:start]+s[end:]
+
+          p.write_text(s)
+          PY
+      - run: node --check routes/torneosMultirama.js
+      - run: node --check services/competitionFormatCatalog.js
+      - run: npm test
+      - name: Guardar cambio limpio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/competition-engine-foundation.yml
+          git add routes/torneosMultirama.js services/competitionFormatCatalog.js
+          git commit -m "feat: preparar arquitectura competitiva de torneos"
+          git push origin HEAD:feat/competition-engine-foundation
