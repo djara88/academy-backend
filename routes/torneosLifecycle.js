@@ -1,6 +1,5 @@
 const express = require('express');
 const supabase = require('../config/supabase');
-const authMiddleware = require('../middleware/auth');
 const {
   getBranch,
   getTournament,
@@ -9,7 +8,6 @@ const {
 } = require('../services/branchContext');
 
 const router = express.Router();
-router.use(authMiddleware);
 
 const isArchived = (tournament) => String(tournament?.estado || '').trim().toLowerCase() === 'archivado';
 
