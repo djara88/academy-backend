@@ -36,6 +36,12 @@ const resolveTournamentBranch = async (academyId, requestedBranchId) => {
   throw Object.assign(new Error('Selecciona la rama deportiva del torneo.'), { status: 400, code: 'BRANCH_REQUIRED' });
 };
 
+const requireOrganizedTournament = (tournament) => {
+  if (tournament?.tipo_gestion !== 'organizado') {
+    throw Object.assign(new Error('La estructura interna solo se configura cuando la academia organiza la competencia.'), { status: 409, code: 'TOURNAMENT_EXTERNAL_STRUCTURE' });
+  }
+};
+
 router.get('/', async (req, res) => {
   try {
     const branchId = safeText(req.query?.rama_id, 80);
@@ -152,6 +158,126 @@ router.get('/:id/participantes', async (req, res) => {
     return res.json({ success: true, data: data || [], torneo: tournament });
   } catch (error) {
     return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible cargar participantes.' });
+  }
+});
+
+router.get('/:id/estructura', async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const tournament = await getTournament(academyId, req.params.id);
+    const architecture = publicCompetitionArchitecture({ discipline: tournament.ramas?.disciplina });
+    if (tournament.tipo_gestion !== 'organizado') {
+      return res.json({ success: true, data: { torneo: tournament, arquitectura: architecture, divisiones: [], fases: [], competidores: [] } });
+    }
+    const [{ data: divisions, error: divisionError }, { data: phases, error: phaseError }, { data: competitors, error: competitorError }] = await Promise.all([
+      supabase.from('torneo_divisiones').select('*,categorias(id,nombre)').eq('academia_id', academyId).eq('torneo_id', tournament.id).order('orden').order('created_at'),
+      supabase.from('torneo_fases').select('*').eq('academia_id', academyId).eq('torneo_id', tournament.id).order('orden').order('created_at'),
+      supabase.from('torneo_competidores').select('id,division_id,tipo,origen,nombre,jugador_id,categoria_id,seed,estado,metadata').eq('academia_id', academyId).eq('torneo_id', tournament.id).order('seed', { ascending: true, nullsFirst: false }).order('created_at'),
+    ]);
+    if (divisionError) throw divisionError;
+    if (phaseError) throw phaseError;
+    if (competitorError) throw competitorError;
+    return res.json({ success: true, data: { torneo: tournament, arquitectura: architecture, divisiones: divisions || [], fases: phases || [], competidores: competitors || [] } });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible cargar la estructura de la competencia.', code: error?.code });
+  }
+});
+
+router.post('/:id/divisiones', async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const tournament = await getTournament(academyId, req.params.id);
+    requireOrganizedTournament(tournament);
+    const name = safeText(req.body?.nombre, 140);
+    if (!name) return res.status(400).json({ success: false, error: 'Ingresa el nombre de la división o modalidad.' });
+    let categoryId = safeText(req.body?.categoria_id, 80) || null;
+    if (categoryId) {
+      const { category } = await getCategoryContext(academyId, categoryId);
+      if (String(category.rama_id) !== String(tournament.rama_id)) {
+        return res.status(409).json({ success: false, error: 'La categoría seleccionada pertenece a otra rama.', code: 'DIVISION_CATEGORY_BRANCH_MISMATCH' });
+      }
+      categoryId = category.id;
+    }
+    const { data: lastRows, error: orderError } = await supabase.from('torneo_divisiones').select('orden').eq('torneo_id', tournament.id).order('orden', { ascending: false }).limit(1);
+    if (orderError) throw orderError;
+    const order = Math.max(0, Number(lastRows?.[0]?.orden) || 0) + 1;
+    const { data, error } = await supabase.from('torneo_divisiones').insert({
+      academia_id: academyId,
+      torneo_id: tournament.id,
+      categoria_id: categoryId,
+      nombre: name,
+      modalidad: safeText(req.body?.modalidad, 140) || null,
+      formato_competencia: safeText(req.body?.formato_competencia, 50) || tournament.formato_competencia,
+      orden: order,
+      config: req.body?.config && typeof req.body.config === 'object' && !Array.isArray(req.body.config) ? req.body.config : {},
+    }).select('*,categorias(id,nombre)').single();
+    if (error) throw error;
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible crear la división.', code: error?.code });
+  }
+});
+
+router.post('/:id/fases', async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const tournament = await getTournament(academyId, req.params.id);
+    requireOrganizedTournament(tournament);
+    const name = safeText(req.body?.nombre, 140);
+    const type = safeText(req.body?.tipo, 60);
+    if (!name || !type) return res.status(400).json({ success: false, error: 'Ingresa nombre y tipo de fase.' });
+    const divisionId = safeText(req.body?.division_id, 80) || null;
+    if (divisionId) {
+      const { data: division, error: divisionError } = await supabase.from('torneo_divisiones').select('id').eq('id', divisionId).eq('torneo_id', tournament.id).eq('academia_id', academyId).maybeSingle();
+      if (divisionError) throw divisionError;
+      if (!division) return res.status(404).json({ success: false, error: 'La división no pertenece a este campeonato.' });
+    }
+    let orderQuery = supabase.from('torneo_fases').select('orden').eq('torneo_id', tournament.id);
+    if (divisionId) orderQuery = orderQuery.eq('division_id', divisionId); else orderQuery = orderQuery.is('division_id', null);
+    const { data: lastRows, error: orderError } = await orderQuery.order('orden', { ascending: false }).limit(1);
+    if (orderError) throw orderError;
+    const order = Math.max(0, Number(lastRows?.[0]?.orden) || 0) + 1;
+    const { data, error } = await supabase.from('torneo_fases').insert({
+      academia_id: academyId,
+      torneo_id: tournament.id,
+      division_id: divisionId,
+      nombre: name,
+      tipo: type,
+      orden: order,
+      estado: 'Borrador',
+      config: req.body?.config && typeof req.body.config === 'object' && !Array.isArray(req.body.config) ? req.body.config : {},
+    }).select('*').single();
+    if (error) throw error;
+    await supabase.from('torneos').update({ estructura_estado: 'borrador' }).eq('id', tournament.id).eq('academia_id', academyId);
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible crear la fase.', code: error?.code });
+  }
+});
+
+router.delete('/:id/fases/:faseId', async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const tournament = await getTournament(academyId, req.params.id);
+    requireOrganizedTournament(tournament);
+    const { error } = await supabase.from('torneo_fases').delete().eq('id', req.params.faseId).eq('torneo_id', tournament.id).eq('academia_id', academyId);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible eliminar la fase.', code: error?.code });
+  }
+});
+
+router.delete('/:id/divisiones/:divisionId', async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const tournament = await getTournament(academyId, req.params.id);
+    requireOrganizedTournament(tournament);
+    const { error } = await supabase.from('torneo_divisiones').delete().eq('id', req.params.divisionId).eq('torneo_id', tournament.id).eq('academia_id', academyId);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible eliminar la división.', code: error?.code });
   }
 });
 
