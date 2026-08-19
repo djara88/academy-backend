@@ -10,6 +10,7 @@ const { validatePassword } = require('./services/passwordPolicy');
 const { requestFailureRecorder } = require('./services/systemMonitor');
 const { startSystemMetricsSampler } = require('./services/systemMetrics');
 const { startPresenceSampler } = require('./services/userPresence');
+const { startAcademyRegistrationNotifier } = require('./services/academyRegistrationNotifier');
 
 const app = express();
 app.disable('x-powered-by');
@@ -230,6 +231,7 @@ const port = process.env.PORT || 8080;
 const server = app.listen(port, '0.0.0.0', () => console.log(`Servidor escuchando en http://0.0.0.0:${port}`));
 const systemMetricsSampler = startSystemMetricsSampler();
 const presenceSampler = startPresenceSampler();
+const academyRegistrationNotifier = startAcademyRegistrationNotifier();
 
 server.requestTimeout = Math.max(15000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000));
 server.headersTimeout = Math.min(server.requestTimeout, Math.max(5000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 15000)));
@@ -241,6 +243,7 @@ const gracefulShutdown = (signal) => {
   shuttingDown = true;
   systemMetricsSampler?.stop?.();
   presenceSampler?.stop?.();
+  academyRegistrationNotifier?.stop?.();
   console.log(`${signal} recibido. Cerrando conexiones de forma ordenada...`);
   const forceTimer = setTimeout(() => {
     console.error('Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
