@@ -125,6 +125,7 @@ const torneoMultiramaRoutes = require('./routes/torneosMultirama');
 const competitionStructureRoutes = require('./routes/competitionStructure');
 const partidoRoutes = require('./routes/partidos');
 const partidoMultiramaRoutes = require('./routes/partidosMultirama');
+const rendimientoRoutes = require('./routes/rendimiento');
 const academiaRoutes = require('./routes/academias');
 const academyOnboardingMultiramaRoutes = require('./routes/academyOnboardingMultirama');
 const matriculaRoutes = require('./routes/matriculas');
@@ -189,6 +190,9 @@ app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS),
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoMultiramaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
 app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), partidoMultiramaRoutes);
+// Eventos y Rendimiento amplía estadísticas, participación, métricas de equipo y marcas PB/SB.
+// Se monta después del validador multirrama y antes del router histórico para preservar compatibilidad.
+app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), rendimientoRoutes);
 app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), partidoRoutes);
 app.use('/api/academias', academyOnboardingMultiramaRoutes);
 app.use('/api/academias', academiaRoutes);
