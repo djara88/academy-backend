@@ -73,7 +73,7 @@ const buildTeamSummary = (profile, matches) => profile.teamMetrics.map((definiti
   };
 });
 
-router.get('/analitica', async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const academyId = req.user.academia_id;
     const branchId = safeText(req.query?.rama_id, 80);
@@ -113,15 +113,30 @@ router.get('/analitica', async (req, res) => {
     }
     const playerMap = new Map(players.map((row) => [String(row.id), row]));
 
-    let marksQuery = supabase.from('deportista_marcas')
-      .select('jugador_id,rama_id,partido_id,disciplina_codigo,prueba_codigo,prueba_nombre,metrica_codigo,metrica_label,valor,unidad,comparacion,temporada,fecha,es_pb,es_sb,valor_pb_anterior,valor_sb_anterior')
-      .eq('academia_id', academyId)
-      .order('fecha', { ascending: false })
-      .limit(500);
-    if (branchId) marksQuery = marksQuery.eq('rama_id', branchId);
-    if (season) marksQuery = marksQuery.eq('temporada', season);
-    const { data: marks, error: marksError } = await marksQuery;
-    if (marksError) throw marksError;
+    let marks = [];
+    if (!categoryId || matchIds.length) {
+      let marksQuery = supabase.from('deportista_marcas')
+        .select('jugador_id,rama_id,partido_id,disciplina_codigo,prueba_codigo,prueba_nombre,metrica_codigo,metrica_label,valor,unidad,comparacion,temporada,fecha,es_pb,es_sb,valor_pb_anterior,valor_sb_anterior')
+        .eq('academia_id', academyId)
+        .order('fecha', { ascending: false })
+        .limit(500);
+      if (branchId) marksQuery = marksQuery.eq('rama_id', branchId);
+      if (season) marksQuery = marksQuery.eq('temporada', season);
+      if (categoryId && matchIds.length) marksQuery = marksQuery.in('partido_id', matchIds);
+      const result = await marksQuery;
+      if (result.error) throw result.error;
+      marks = result.data || [];
+    }
+
+    // Algunos PB pueden pertenecer a deportistas sin fila de estadísticas dentro del
+    // filtro actual; cargamos sus nombres también para no mostrar identificadores crudos.
+    const markPlayerIds = [...new Set(marks.map((row) => row.jugador_id).filter(Boolean).map(String))]
+      .filter((id) => !playerMap.has(id));
+    if (markPlayerIds.length) {
+      const { data, error } = await supabase.from('jugadores').select('id,nombre').eq('academia_id', academyId).in('id', markPlayerIds);
+      if (error) throw error;
+      for (const row of data || []) playerMap.set(String(row.id), row);
+    }
 
     const byDiscipline = new Map();
     for (const match of eventRows) {
@@ -174,38 +189,40 @@ router.get('/analitica', async (req, res) => {
       };
     }).sort((a, b) => b.resumen.eventos - a.resumen.eventos);
 
-    const activePB = (marks || []).filter((row) => row.es_pb);
-    const activeSB = (marks || []).filter((row) => row.es_sb);
-    const recentImprovements = (marks || []).filter((row) => {
+    const activePB = marks.filter((row) => row.es_pb);
+    const activeSB = marks.filter((row) => row.es_sb);
+    const recentImprovements = marks.filter((row) => {
+      if (row.valor_pb_anterior === null || row.valor_pb_anterior === undefined) return true;
       const previous = Number(row.valor_pb_anterior);
-      if (!Number.isFinite(previous)) return true;
       const current = Number(row.valor);
+      if (!Number.isFinite(previous) || !Number.isFinite(current)) return false;
       return row.comparacion === 'min' ? current < previous : current > previous;
     }).slice(0, 30).map((row) => ({ ...row, jugador_nombre: playerMap.get(String(row.jugador_id))?.nombre || 'Deportista' }));
 
     const totalStats = statsRows.filter((row) => row.participo !== false);
-    const response = {
-      filters: { rama_id: branchId || null, categoria_id: categoryId || null, temporada: season || null },
-      resumen: {
-        eventos: eventRows.length,
-        disciplinas: disciplines.length,
-        deportistas: new Set(totalStats.map((row) => String(row.jugador_id)).filter(Boolean)).size,
-        participaciones: totalStats.length,
-        minutos: round(totalStats.reduce((sum, row) => sum + number(row.minutos), 0), 1),
-        destacados: totalStats.filter((row) => row.es_mvp).length,
-        pb_vigentes: activePB.length,
-        sb_vigentes: activeSB.length,
+    return res.json({
+      success: true,
+      data: {
+        filters: { rama_id: branchId || null, categoria_id: categoryId || null, temporada: season || null },
+        resumen: {
+          eventos: eventRows.length,
+          disciplinas: disciplines.length,
+          deportistas: new Set(totalStats.map((row) => String(row.jugador_id)).filter(Boolean)).size,
+          participaciones: totalStats.length,
+          minutos: round(totalStats.reduce((sum, row) => sum + number(row.minutos), 0), 1),
+          destacados: totalStats.filter((row) => row.es_mvp).length,
+          pb_vigentes: activePB.length,
+          sb_vigentes: activeSB.length,
+        },
+        disciplinas: disciplines,
+        marcas: {
+          personal_bests: activePB.map((row) => ({ ...row, jugador_nombre: playerMap.get(String(row.jugador_id))?.nombre || 'Deportista' })),
+          season_bests: activeSB.map((row) => ({ ...row, jugador_nombre: playerMap.get(String(row.jugador_id))?.nombre || 'Deportista' })),
+          mejoras_recientes: recentImprovements,
+        },
+        truncated: eventRows.length >= 500 || marks.length >= 500,
       },
-      disciplinas: disciplines,
-      marcas: {
-        personal_bests: activePB.map((row) => ({ ...row, jugador_nombre: playerMap.get(String(row.jugador_id))?.nombre || 'Deportista' })),
-        season_bests: activeSB.map((row) => ({ ...row, jugador_nombre: playerMap.get(String(row.jugador_id))?.nombre || 'Deportista' })),
-        mejoras_recientes: recentImprovements,
-      },
-      truncated: eventRows.length >= 500 || (marks || []).length >= 500,
-    };
-
-    return res.json({ success: true, data: response });
+    });
   } catch (error) {
     console.error('Error cargando analítica avanzada:', error?.message || error);
     return res.status(500).json({ success: false, error: 'No fue posible cargar la analítica avanzada.' });
