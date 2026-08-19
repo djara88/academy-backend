@@ -6,12 +6,12 @@ permissions:
   contents: write
 jobs:
   apply:
-    if: github.head_ref == 'fix/competitions-plan-gate-20260819'
+    if: github.head_ref == 'fix/competitions-plan-gate-v2-20260819'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/competitions-plan-gate-20260819
+          ref: fix/competitions-plan-gate-v2-20260819
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -75,4 +75,4 @@ jobs:
           git rm .github/workflows/plan-gate-competitions-temp.yml
           git add services/planCatalog.js routes/torneosMultirama.js routes/partidosMultirama.js test/planCatalog.test.js
           git commit -m "Restringir competencias a planes Competencia y Alto Rendimiento"
-          git push origin HEAD:fix/competitions-plan-gate-20260819
+          git push origin HEAD:fix/competitions-plan-gate-v2-20260819
