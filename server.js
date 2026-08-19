@@ -180,18 +180,13 @@ app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
 app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
+app.use('/api/rendimiento', authMiddleware, ...requireFeature(FEATURES.MATCHES), rendimientoRoutes);
 
-// El router de ciclo de vida resuelve listado, edición y Almacén antes de los
-// routers multirrama/legacy. Los endpoints no resueltos continúan normalmente.
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoLifecycleRoutes);
-// Rutas multirrama se montan antes de las implementaciones legacy. Solo los
-// endpoints que resuelven responden; los demás continúan hacia el router histórico.
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), competitionStructureRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoMultiramaRoutes);
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoRoutes);
 app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), partidoMultiramaRoutes);
-// Eventos y Rendimiento amplía estadísticas, participación, métricas de equipo y marcas PB/SB.
-// Se monta después del validador multirrama y antes del router histórico para preservar compatibilidad.
 app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), rendimientoRoutes);
 app.use('/api/partidos', authMiddleware, ...requireFeature(FEATURES.MATCHES), partidoRoutes);
 app.use('/api/academias', academyOnboardingMultiramaRoutes);
