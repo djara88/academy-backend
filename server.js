@@ -120,6 +120,7 @@ const tutorRoutes = require('./routes/tutores');
 const evaluacionRoutes = require('./routes/evaluaciones');
 const fichaMedicaRoutes = require('./routes/ficha_medica');
 const torneoRoutes = require('./routes/torneos');
+const torneoLifecycleRoutes = require('./routes/torneosLifecycle');
 const torneoMultiramaRoutes = require('./routes/torneosMultirama');
 const competitionStructureRoutes = require('./routes/competitionStructure');
 const partidoRoutes = require('./routes/partidos');
@@ -179,6 +180,9 @@ app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATI
 app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
 
+// El router de ciclo de vida resuelve listado, edición y Almacén antes de los
+// routers multirrama/legacy. Los endpoints no resueltos continúan normalmente.
+app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoLifecycleRoutes);
 // Rutas multirrama se montan antes de las implementaciones legacy. Solo los
 // endpoints que resuelven responden; los demás continúan hacia el router histórico.
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), competitionStructureRoutes);
