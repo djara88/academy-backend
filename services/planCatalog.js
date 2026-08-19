@@ -82,7 +82,7 @@ const PLAN_DEFINITIONS = Object.freeze({
   [PLAN_CODES.ALTO_RENDIMIENTO]: {
     code: PLAN_CODES.ALTO_RENDIMIENTO,
     name: 'Alto Rendimiento',
-    audience: 'Organizaciones deportivas que requieren operación, rendimiento y trazabilidad avanzados.',
+    audience: 'Organizaciones que necesitan medir, proteger y mejorar el rendimiento de sus deportistas con seguimiento longitudinal.',
     professorLimit: 30,
     playerLimit: null,
     siteLimit: null,
@@ -92,8 +92,6 @@ const PLAN_DEFINITIONS = Object.freeze({
       ...COMPETITION_FEATURES,
       FEATURES.MEDICAL,
       FEATURES.ADVANCED_ANALYTICS,
-      FEATURES.CUSTOM_BRANDING,
-      FEATURES.ADVANCED_COMMUNICATIONS,
     ],
   },
 });
