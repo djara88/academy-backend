@@ -41,14 +41,38 @@ jobs:
               if f"requireFeature(FEATURES.{feature})" not in s:
                   s = s.replace(marker, gated, 1)
               p.write_text(s)
+
+          p = Path('test/planCatalog.test.js')
+          s = p.read_text()
+          old = """test('torneos son base y las funciones avanzadas diferencian los planes', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
+  assert.equal(formation.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(competition.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(highPerformance.features.includes(FEATURES.TOURNAMENTS), true);
+"""
+          new = """test('competencias y resultados están disponibles desde Competencia', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
+  assert.equal(formation.features.includes(FEATURES.TOURNAMENTS), false);
+  assert.equal(formation.features.includes(FEATURES.MATCHES), false);
+  assert.equal(competition.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(competition.features.includes(FEATURES.MATCHES), true);
+  assert.equal(highPerformance.features.includes(FEATURES.TOURNAMENTS), true);
+  assert.equal(highPerformance.features.includes(FEATURES.MATCHES), true);
+"""
+          if old not in s: raise SystemExit('No se encontró la prueba de torneos esperada')
+          p.write_text(s.replace(old,new,1))
           PY
-      - run: node --check services/planCatalog.js && node --check routes/torneosMultirama.js && node --check routes/partidosMultirama.js
+      - run: node --check services/planCatalog.js && node --check routes/torneosMultirama.js && node --check routes/partidosMultirama.js && node --check test/planCatalog.test.js
       - run: npm test
       - name: Guardar cambio y retirar workflow temporal
         run: |
           git config user.name "djara88"
           git config user.email "d.jarazerene@gmail.com"
           git rm .github/workflows/plan-gate-competitions-temp.yml
-          git add services/planCatalog.js routes/torneosMultirama.js routes/partidosMultirama.js
+          git add services/planCatalog.js routes/torneosMultirama.js routes/partidosMultirama.js test/planCatalog.test.js
           git commit -m "Restringir competencias a planes Competencia y Alto Rendimiento"
           git push origin HEAD:fix/competitions-plan-gate-20260819
