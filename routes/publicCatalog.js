@@ -1,5 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const publicPageAdminRoutes = require('./publicPageAdmin');
 const {
   BILLING_PLANS,
   VAT_RATE,
@@ -46,6 +47,10 @@ router.get('/plans', async (_req, res) => {
     res.status(500).json({ error: 'No fue posible cargar el catálogo público.' });
   }
 });
+
+// El editor vive bajo /api/public/page-admin pero está completamente protegido
+// por auth + requireDirector dentro de su propio router.
+router.use('/page-admin', publicPageAdminRoutes);
 
 router.get('/academias/:slug', async (req, res) => {
   try {
