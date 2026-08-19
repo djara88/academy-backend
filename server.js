@@ -54,7 +54,7 @@ const sensitiveLimiter = createRateLimiter({
 });
 const registrationLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
-  max: Math.max(3, Number(process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
+  max: Math.max(3, Number(process.env.REGISTRATION_API_RATE_LIMIT_MAX || process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
   message: 'Se alcanzó temporalmente el límite de registros desde esta conexión.',
 });
 
@@ -80,7 +80,7 @@ app.get('/', (_req, res) => res.send('API de Lestra funcionando 🚀'));
 app.get('/health', (_req, res) => {
   const memory = process.memoryUsage();
   res.json({
-    status: 'ok', service: 'syncademia-backend', features: { profesores: true, multirama_core: true },
+    status: 'ok', service: 'syncademia-backend', features: { profesores: true, multirama_core: true, eventos_rendimiento: true },
     commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
     uptime_seconds: Math.round(process.uptime()),
     memory_rss_mb: Math.round(memory.rss / 1024 / 1024),
@@ -126,6 +126,7 @@ const competitionStructureRoutes = require('./routes/competitionStructure');
 const partidoRoutes = require('./routes/partidos');
 const partidoMultiramaRoutes = require('./routes/partidosMultirama');
 const rendimientoRoutes = require('./routes/rendimiento');
+const rendimientoAnalyticsRoutes = require('./routes/rendimientoAnalytics');
 const academiaRoutes = require('./routes/academias');
 const academyOnboardingMultiramaRoutes = require('./routes/academyOnboardingMultirama');
 const matriculaRoutes = require('./routes/matriculas');
@@ -180,6 +181,9 @@ app.use('/api/tutores', tutorRoutes);
 app.use('/api/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), evaluacionRoutes);
 app.use('/api/sport-profiles', sportProfileRoutes);
 app.use('/api/ficha-medica', authMiddleware, ...requireFeature(FEATURES.MEDICAL), fichaMedicaRoutes);
+// Captura de rendimiento forma parte de Competencia+. La vista consolidada de
+// Analítica avanzada queda reservada a Alto Rendimiento (y Trial Full).
+app.use('/api/rendimiento', authMiddleware, ...requireFeature(FEATURES.ADVANCED_ANALYTICS), rendimientoAnalyticsRoutes);
 app.use('/api/rendimiento', authMiddleware, ...requireFeature(FEATURES.MATCHES), rendimientoRoutes);
 
 app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoLifecycleRoutes);
