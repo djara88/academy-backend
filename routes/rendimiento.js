@@ -77,6 +77,22 @@ const loadRoster = async (academyId, match) => {
   return { players: students, source: 'categoria' };
 };
 
+const assertStatsRoster = async (academyId, match, submittedStats) => {
+  const requestedIds = [...new Set((submittedStats || [])
+    .map((row) => safeText(row?.jugador_id, 80))
+    .filter(Boolean))];
+  if (!requestedIds.length) return;
+  const roster = await loadRoster(academyId, match);
+  const allowed = new Set((roster.players || []).map((player) => String(player.id)));
+  const invalid = requestedIds.filter((id) => !allowed.has(String(id)));
+  if (invalid.length) {
+    throw Object.assign(new Error('Las estadísticas contienen uno o más deportistas fuera del plantel válido de este evento.'), {
+      status: 403,
+      code: 'INVALID_EVENT_ROSTER',
+    });
+  }
+};
+
 router.get('/perfil', async (req, res) => {
   try {
     const branchId = safeText(req.query?.rama_id, 80);
@@ -155,6 +171,8 @@ router.post('/:id/guardar-resultado', async (req, res) => {
     const match = await loadMatch(academyId, req.params.id);
     const profile = profileForMatch(match);
     const submittedStats = Array.isArray(req.body?.estadisticas) ? req.body.estadisticas : [];
+    await assertStatsRoster(academyId, match, submittedStats);
+
     const teamMetrics = sanitizeMetricMap(req.body?.metricas_equipo || {}, profile.teamMetrics);
     const scoreFavor = Math.max(0, Number(req.body?.resultado_favor ?? req.body?.goles_favor) || 0);
     const scoreContra = Math.max(0, Number(req.body?.resultado_contra ?? req.body?.goles_contra) || 0);
@@ -290,7 +308,7 @@ router.post('/:id/guardar-resultado', async (req, res) => {
     });
   } catch (error) {
     console.error('Error guardando Eventos y Rendimiento:', error?.message || error);
-    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible guardar el rendimiento.' });
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible guardar el rendimiento.', code: error?.code });
   }
 });
 
