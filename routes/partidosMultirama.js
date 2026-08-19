@@ -215,13 +215,32 @@ router.post('/:id/citacion', async (req, res) => {
     const match = await loadMatch(academyId, req.params.id);
     if (!match.categoria_id || !match.rama_id) return res.status(409).json({ error: 'El encuentro no está correctamente vinculado a una rama y categoría.' });
 
-    const students = await getStudentsForScope({
+    let students = await getStudentsForScope({
       academyId,
       branchId: match.rama_id,
       categoryId: match.categoria_id,
       playerSelect: 'id,nombre,tutor_id,tutor_principal_id,apoderado_id,telefono_apoderado',
     });
-    if (!students.length) return res.status(400).json({ error: 'No hay alumnos con inscripción activa en esta categoría.' });
+
+    if (match.torneo_id) {
+      const { data: tournamentParticipants, error: participantError } = await supabase.from('torneo_participantes')
+        .select('jugador_id')
+        .eq('academia_id', academyId)
+        .eq('torneo_id', match.torneo_id)
+        .eq('categoria_id', match.categoria_id)
+        .eq('respuesta_participacion', 'Si');
+      if (participantError) throw participantError;
+      const allowedPlayers = new Set((tournamentParticipants || []).map((item) => String(item.jugador_id)));
+      students = students.filter((student) => allowedPlayers.has(String(student.id)));
+    }
+
+    if (!students.length) {
+      return res.status(400).json({
+        error: match.torneo_id
+          ? 'No hay alumnos confirmados en esta categoría para esta competencia.'
+          : 'No hay alumnos con inscripción activa en esta categoría.',
+      });
+    }
     const tutorIds = uniqueIds(students.map((student) => getStudentTutorId(student)));
     let tutorMap = new Map();
     if (tutorIds.length) {
