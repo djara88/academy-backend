@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/auth');
 const { enviarMensaje } = require('../services/whatsappService');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 const { resolveCompetitiveProfile } = require('../services/competitiveStatsCatalog');
+const { getFormat, publicCompetitionArchitecture } = require('../services/competitionFormatCatalog');
 const {
   getBranch,
   getCategoryContext,
@@ -51,6 +52,15 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/formatos', async (req, res) => {
+  try {
+    const branch = await resolveTournamentBranch(req.user.academia_id, req.query?.rama_id);
+    return res.json({ success: true, data: publicCompetitionArchitecture({ discipline: branch.disciplina }) });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible cargar los formatos de competencia.', code: error?.code });
+  }
+});
+
 router.post('/', async (req, res) => {
   let tournament = null;
   try {
@@ -58,6 +68,20 @@ router.post('/', async (req, res) => {
     const branch = await resolveTournamentBranch(academyId, req.body?.rama_id);
     const name = safeText(req.body?.nombre, 180);
     if (!name) return res.status(400).json({ success: false, error: 'El nombre del torneo es obligatorio.' });
+
+    const managementType = safeText(req.body?.tipo_gestion, 30) === 'organizado' ? 'organizado' : 'externo';
+    const architecture = publicCompetitionArchitecture({ discipline: branch.disciplina });
+    const defaultFormat = managementType === 'externo'
+      ? 'seguimiento'
+      : (architecture.formats.find((item) => item.structure)?.code || 'personalizado');
+    const formatCode = safeText(req.body?.formato_competencia, 50) || defaultFormat;
+    if (!getFormat(formatCode) || !architecture.formats.some((item) => item.code === formatCode)) {
+      return res.status(400).json({ success: false, error: 'El formato seleccionado no corresponde al perfil competitivo de esta rama.', code: 'INVALID_COMPETITION_FORMAT' });
+    }
+    if (managementType === 'externo' && formatCode !== 'seguimiento') {
+      return res.status(400).json({ success: false, error: 'Los campeonatos externos se registran en modo seguimiento. Lestra no debe reemplazar la estructura oficial administrada por terceros.', code: 'EXTERNAL_TOURNAMENT_TRACKING_ONLY' });
+    }
+
     const allowsInstallments = req.body?.permite_cuotas === true;
     const { data, error } = await supabase.from('torneos').insert({
       academia_id: academyId,
@@ -66,6 +90,15 @@ router.post('/', async (req, res) => {
       nombre: name,
       fecha_inicio: req.body?.fecha_inicio || null,
       fecha_fin: req.body?.fecha_fin || null,
+      tipo_gestion: managementType,
+      formato_competencia: formatCode,
+      organizador: safeText(req.body?.organizador, 180) || null,
+      ubicacion: safeText(req.body?.ubicacion, 300) || null,
+      reglamento_url: safeText(req.body?.reglamento_url, 1000) || null,
+      config_competencia: req.body?.config_competencia && typeof req.body.config_competencia === 'object' && !Array.isArray(req.body.config_competencia)
+        ? req.body.config_competencia
+        : {},
+      estructura_estado: managementType === 'organizado' ? 'borrador' : 'no_aplica',
       costo_inscripcion: Math.max(0, Number(req.body?.costo_inscripcion) || 0),
       permite_cuotas: allowsInstallments,
       max_cuotas: allowsInstallments ? Math.max(2, Math.min(12, Math.round(Number(req.body?.max_cuotas) || 2))) : 1,
@@ -74,21 +107,6 @@ router.post('/', async (req, res) => {
     if (error) throw error;
     tournament = data;
 
-    const organizationCost = Math.max(0, Number(req.body?.costo_organizacion) || 0);
-    if (organizationCost > 0) {
-      const { error: expenseError } = await supabase.from('egresos').insert({
-        academia_id: academyId,
-        sede_id: branch.sede_id,
-        rama_id: branch.id,
-        torneo_id: data.id,
-        concepto: `Inscripción organización · ${name}`,
-        categoria_gasto: 'Competencia',
-        centro_costo: branch.nombre || branch.disciplina,
-        monto: organizationCost,
-        fecha_gasto: req.body?.fecha_inicio || new Date().toISOString().slice(0, 10),
-      });
-      if (expenseError) throw expenseError;
-    }
     return res.status(201).json({ success: true, data });
   } catch (error) {
     if (tournament?.id) await supabase.from('torneos').delete().eq('id', tournament.id).eq('academia_id', req.user.academia_id);
