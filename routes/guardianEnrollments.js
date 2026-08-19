@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireGuardian } = require('../middleware/professorAccess');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
+const { updateTournamentParticipation, updateCitation } = require('../services/sportsResponseService');
 
 const guardianFeature = requireFeature(FEATURES.GUARDIANS);
 router.use(authMiddleware, requireGuardian, ...guardianFeature);
@@ -64,6 +65,99 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error cargando disciplinas del apoderado:', error?.message || error);
     return res.status(error?.statusCode || 500).json({ error: error?.statusCode ? error.message : 'No fue posible cargar las disciplinas de tus alumnos.' });
+  }
+});
+
+router.get('/respuestas', async (req, res) => {
+  try {
+    const { academiaId, ownPlayers } = await loadGuardianContext(req.user);
+    const playerIds = ownPlayers.map((player) => player.id);
+    if (!playerIds.length) return res.json({ success: true, data: { participaciones: [], citaciones: [] } });
+    const playerMap = new Map(ownPlayers.map((player) => [String(player.id), player]));
+    const [participationResult, citationResult] = await Promise.all([
+      supabase.from('torneo_participantes')
+        .select('id,torneo_id,jugador_id,categoria_id,respuesta_participacion,pago_en_cuotas,numero_cuotas,paso_bot,estado_pago,canal_respuesta,canal_cuotas,created_at,torneos!inner(id,nombre,academia_id,fecha_inicio,fecha_fin,costo_inscripcion,permite_cuotas,max_cuotas,estado),categorias(id,nombre)')
+        .eq('academia_id', academiaId).eq('torneos.academia_id', academiaId).in('jugador_id', playerIds)
+        .order('created_at', { ascending: false }).limit(200),
+      supabase.from('partido_citaciones')
+        .select('id,partido_id,jugador_id,respuesta,motivo_ausencia,paso_bot,canal_respuesta,respuesta_actualizada_at,created_at,partidos!inner(id,academia_id,rival,fecha,hora,hora_citacion,ubicacion,categoria_id,categorias(nombre))')
+        .eq('partidos.academia_id', academiaId).in('jugador_id', playerIds)
+        .order('created_at', { ascending: false }).limit(200),
+    ]);
+    if (participationResult.error) throw participationResult.error;
+    if (citationResult.error) throw citationResult.error;
+
+    const groups = new Map();
+    for (const row of participationResult.data || []) {
+      const key = `${row.torneo_id}:${row.jugador_id}`;
+      const current = groups.get(key) || {
+        torneo_id: row.torneo_id,
+        jugador_id: row.jugador_id,
+        jugador: playerMap.get(String(row.jugador_id)) || null,
+        torneo: row.torneos,
+        categorias: [],
+        respuesta_participacion: row.respuesta_participacion || 'Pendiente',
+        pago_en_cuotas: Boolean(row.pago_en_cuotas),
+        numero_cuotas: Math.max(1, Number(row.numero_cuotas) || 1),
+        paso_bot: row.paso_bot || 'FINALIZADO',
+        estado_pago: row.estado_pago || 'Pendiente',
+        canal_respuesta: row.canal_respuesta || null,
+        canal_cuotas: row.canal_cuotas || null,
+      };
+      if (row.categorias && !current.categorias.some((item) => String(item.id) === String(row.categorias.id))) current.categorias.push(row.categorias);
+      if (row.respuesta_participacion === 'Si') current.respuesta_participacion = 'Si';
+      else if (row.respuesta_participacion === 'No' && current.respuesta_participacion !== 'Si') current.respuesta_participacion = 'No';
+      if (row.paso_bot === 'ESPERANDO_CUOTAS') current.paso_bot = 'ESPERANDO_CUOTAS';
+      groups.set(key, current);
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const citaciones = (citationResult.data || [])
+      .filter((row) => String(row.partidos?.fecha || '') >= today)
+      .map((row) => ({ ...row, jugador: playerMap.get(String(row.jugador_id)) || null, partido: row.partidos }));
+
+    return res.json({ success: true, data: { participaciones: [...groups.values()], citaciones } });
+  } catch (error) {
+    console.error('Error cargando respuestas deportivas del apoderado:', error?.message || error);
+    return res.status(error?.statusCode || 500).json({ error: error?.statusCode ? error.message : 'No fue posible cargar tus confirmaciones deportivas.' });
+  }
+});
+
+router.patch('/respuestas/participacion/:torneoId/:jugadorId', async (req, res) => {
+  try {
+    const { academiaId, ownPlayers } = await loadGuardianContext(req.user);
+    if (!ownPlayers.some((player) => String(player.id) === String(req.params.jugadorId))) return res.status(403).json({ error: 'Solo puedes responder por alumnos vinculados a tu cuenta.' });
+    const data = await updateTournamentParticipation({
+      academyId: academiaId,
+      tournamentId: req.params.torneoId,
+      playerId: req.params.jugadorId,
+      response: req.body?.respuesta,
+      installments: req.body?.cuotas,
+      channel: 'portal_apoderado',
+      actorUserId: req.user.id,
+    });
+    return res.json({ success: true, data, message: data.pending_installments ? 'Participación confirmada. Ahora selecciona la cantidad de cuotas.' : 'Respuesta registrada correctamente.' });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible registrar la participación.' });
+  }
+});
+
+router.patch('/respuestas/citacion/:partidoId/:jugadorId', async (req, res) => {
+  try {
+    const { academiaId, ownPlayers } = await loadGuardianContext(req.user);
+    if (!ownPlayers.some((player) => String(player.id) === String(req.params.jugadorId))) return res.status(403).json({ error: 'Solo puedes responder por alumnos vinculados a tu cuenta.' });
+    const data = await updateCitation({
+      academyId: academiaId,
+      matchId: req.params.partidoId,
+      playerId: req.params.jugadorId,
+      response: req.body?.respuesta,
+      reason: req.body?.motivo,
+      channel: 'portal_apoderado',
+      actorUserId: req.user.id,
+    });
+    return res.json({ success: true, data, message: data.respuesta === 'Si' ? 'Asistencia confirmada.' : 'Inasistencia registrada.' });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible responder la citación.' });
   }
 });
 
