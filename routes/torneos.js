@@ -3,8 +3,100 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireDirector } = require('../middleware/professorAccess');
 const { enviarMensaje } = require('../services/whatsappService');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
+const { updateTournamentParticipation, updateCitation } = require('../services/sportsResponseService');
+
+// CENTRO DE RESPUESTAS DEPORTIVAS PARA DIRECCIÓN
+router.get('/respuestas/centro', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const tournamentId = String(req.query?.torneo_id || '').trim();
+    let participationQuery = supabase.from('torneo_participantes')
+      .select('id,torneo_id,jugador_id,categoria_id,respuesta_participacion,pago_en_cuotas,numero_cuotas,paso_bot,estado_pago,canal_respuesta,canal_cuotas,created_at,jugadores(id,nombre,foto_url,foto_base64),torneos!inner(id,nombre,academia_id,fecha_inicio,fecha_fin,costo_inscripcion,permite_cuotas,max_cuotas,estado),categorias(id,nombre)')
+      .eq('academia_id', academyId).eq('torneos.academia_id', academyId)
+      .order('created_at', { ascending: false }).limit(500);
+    if (tournamentId) participationQuery = participationQuery.eq('torneo_id', tournamentId);
+
+    let citationQuery = supabase.from('partido_citaciones')
+      .select('id,partido_id,jugador_id,respuesta,motivo_ausencia,paso_bot,canal_respuesta,respuesta_actualizada_at,created_at,jugadores(id,nombre,foto_url,foto_base64),partidos!inner(id,academia_id,torneo_id,rival,fecha,hora,hora_citacion,ubicacion,categoria_id,categorias(nombre))')
+      .eq('partidos.academia_id', academyId)
+      .order('created_at', { ascending: false }).limit(500);
+    if (tournamentId) citationQuery = citationQuery.eq('partidos.torneo_id', tournamentId);
+
+    const [participationResult, citationResult] = await Promise.all([participationQuery, citationQuery]);
+    if (participationResult.error) throw participationResult.error;
+    if (citationResult.error) throw citationResult.error;
+
+    const groups = new Map();
+    for (const row of participationResult.data || []) {
+      const key = `${row.torneo_id}:${row.jugador_id}`;
+      const current = groups.get(key) || {
+        torneo_id: row.torneo_id,
+        jugador_id: row.jugador_id,
+        jugador: row.jugadores || null,
+        torneo: row.torneos,
+        categorias: [],
+        respuesta_participacion: row.respuesta_participacion || 'Pendiente',
+        pago_en_cuotas: Boolean(row.pago_en_cuotas),
+        numero_cuotas: Math.max(1, Number(row.numero_cuotas) || 1),
+        paso_bot: row.paso_bot || 'FINALIZADO',
+        estado_pago: row.estado_pago || 'Pendiente',
+        canal_respuesta: row.canal_respuesta || null,
+        canal_cuotas: row.canal_cuotas || null,
+      };
+      if (row.categorias && !current.categorias.some((item) => String(item.id) === String(row.categorias.id))) current.categorias.push(row.categorias);
+      if (row.respuesta_participacion === 'Si') current.respuesta_participacion = 'Si';
+      else if (row.respuesta_participacion === 'No' && current.respuesta_participacion !== 'Si') current.respuesta_participacion = 'No';
+      if (row.paso_bot === 'ESPERANDO_CUOTAS') current.paso_bot = 'ESPERANDO_CUOTAS';
+      groups.set(key, current);
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const citations = (citationResult.data || []).filter((row) => String(row.partidos?.fecha || '') >= today)
+      .map((row) => ({ ...row, jugador: row.jugadores || null, partido: row.partidos }));
+
+    return res.json({ success: true, data: { participaciones: [...groups.values()], citaciones: citations } });
+  } catch (error) {
+    console.error('Error cargando centro de respuestas:', error?.message || error);
+    return res.status(500).json({ error: 'No fue posible cargar las confirmaciones deportivas.' });
+  }
+});
+
+router.patch('/respuestas/participacion/:torneoId/:jugadorId', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const data = await updateTournamentParticipation({
+      academyId: req.user.academia_id,
+      tournamentId: req.params.torneoId,
+      playerId: req.params.jugadorId,
+      response: req.body?.respuesta,
+      installments: req.body?.cuotas,
+      channel: 'director',
+      actorUserId: req.user.id,
+    });
+    return res.json({ success: true, data, message: data.pending_installments ? 'Participación confirmada. Falta definir las cuotas.' : 'Respuesta registrada por dirección.' });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible registrar la participación.' });
+  }
+});
+
+router.patch('/respuestas/citacion/:partidoId/:jugadorId', authMiddleware, requireDirector, async (req, res) => {
+  try {
+    const data = await updateCitation({
+      academyId: req.user.academia_id,
+      matchId: req.params.partidoId,
+      playerId: req.params.jugadorId,
+      response: req.body?.respuesta,
+      reason: req.body?.motivo,
+      channel: 'director',
+      actorUserId: req.user.id,
+    });
+    return res.json({ success: true, data, message: data.respuesta === 'Si' ? 'Asistencia confirmada por dirección.' : 'Inasistencia registrada por dirección.' });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible responder la citación.' });
+  }
+});
 
 // 1. CREAR TORNEO + EGRESO ORGANIZACIÓN (SI APLICA)
 router.post('/', authMiddleware, async (req, res) => {
@@ -12,7 +104,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const { academia_id } = req.user;
     const { 
       nombre, fecha_inicio, fecha_fin, costo_inscripcion, permite_cuotas, max_cuotas,
-      costo_organizacion // Opcional: gasto que paga la academia por participar
+      costo_organizacion
     } = req.body;
 
     const { data, error } = await supabase
@@ -31,7 +123,6 @@ router.post('/', authMiddleware, async (req, res) => {
 
     if (error) throw error;
 
-    // 🔥 GENERAR EGRESO SI LA ACADEMIA PAGA POR PARTICIPAR EN EL TORNEO
     if (Number(costo_organizacion) > 0) {
       await supabase.from('egresos').insert([{
         academia_id,
@@ -145,7 +236,7 @@ router.get('/:id/participantes', authMiddleware, async (req, res) => {
   }
 });
 
-// 5. ENVIAR CONVOCATORIA MASIVA (+ COBROS Y WHATSAPP) 🔥
+// 5. ENVIAR CONVOCATORIA MASIVA (+ COBROS Y WHATSAPP)
 router.post('/:id/convocar', authMiddleware, async (req, res) => {
   try {
     const { academia_id } = req.user;
@@ -212,7 +303,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
 
     if (errUpsert) throw errUpsert;
 
-    // 🔥 VÍNCULO AUTOMÁTICO CON FINANZAS: REGISTRAR COBROS DE TORNEO EN CUENTAS CORRIENTES
     const precioTorneo = Number(torneo.costo_inscripcion) || 0;
     if (precioTorneo > 0) {
       const cobrosTorneo = jugadores.map(j => ({
@@ -248,7 +338,6 @@ router.post('/:id/convocar', authMiddleware, async (req, res) => {
       ? `$${Number(torneo.costo_inscripcion).toLocaleString('es-CL')}` 
       : 'Gratuito';
 
-    // Disparar WhatsApp
     for (const jugador of jugadores) {
       const idTutor = jugador.tutor_id || jugador.apoderado_id || jugador.tutor_principal_id;
       const tutor = tutoresMap[idTutor];
