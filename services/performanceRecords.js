@@ -123,11 +123,17 @@ const syncPersonalRecords = async ({ academyId, match, profile, stats }) => {
         };
         groups.set(groupKey(config), config);
 
-        // Como ya retiramos la fila anterior del evento, estos son los verdaderos
-        // PB/SB previos contra los cuales debe compararse la nueva corrección.
+        // La PB se compara contra toda la historia; la SB solo contra la temporada.
         const [previousPB, previousSB] = await Promise.all([
+          bestMark({
+            academyId,
+            playerId: config.playerId,
+            disciplineCode: config.disciplineCode,
+            testCode: config.testCode,
+            metricCode: config.metricCode,
+            compare: config.compare,
+          }),
           bestMark({ academyId, ...config }),
-          bestMark({ academyId, ...config, season }),
         ]);
 
         const isNewPB = betterThan(value, previousPB?.valor, rule.compare);
