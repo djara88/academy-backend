@@ -10,6 +10,8 @@ const betterThan = (value, previous, compare) => {
 };
 
 const orderAscending = (compare) => compare === 'min';
+const groupKey = ({ playerId, disciplineCode, testCode, metricCode, compare, season }) =>
+  [playerId, disciplineCode, testCode, metricCode, compare, season].map((item) => String(item ?? '')).join('::');
 
 const bestMark = async ({ academyId, playerId, disciplineCode, testCode, metricCode, compare, season, excludeMatchId }) => {
   let query = supabase.from('deportista_marcas')
@@ -31,8 +33,7 @@ const bestMark = async ({ academyId, playerId, disciplineCode, testCode, metricC
 };
 
 const recalculateFlags = async ({ academyId, playerId, disciplineCode, testCode, metricCode, compare, season }) => {
-  const base = supabase.from('deportista_marcas');
-  let result = await base.update({ es_pb: false })
+  let result = await supabase.from('deportista_marcas').update({ es_pb: false })
     .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .eq('disciplina_codigo', disciplineCode)
@@ -67,95 +68,139 @@ const recalculateFlags = async ({ academyId, playerId, disciplineCode, testCode,
 
 const syncPersonalRecords = async ({ academyId, match, profile, stats }) => {
   const recordMetrics = (profile.metrics || []).filter((item) => item.record);
-  if (!recordMetrics.length || !Array.isArray(stats) || !stats.length) return { newPB: [], newSB: [], marks: [] };
-
   const testName = String(match.prueba_nombre || match.rival || profile.activityLabel || 'Evento').trim();
   const testCode = String(match.prueba_codigo || slugifyEvent(testName));
   const season = String(match.temporada || String(match.fecha || '').slice(0, 4) || new Date().getFullYear());
   const newPB = [];
   const newSB = [];
   const marks = [];
+  const groups = new Map();
 
-  for (const stat of stats) {
-    for (const definition of recordMetrics) {
-      const raw = stat.metricas_competitivas?.[definition.code];
-      const value = Number(raw);
-      if (!Number.isFinite(value) || value <= 0) continue;
+  // Al editar un evento, retiramos primero sus marcas anteriores. Así una corrección
+  // a "no participó", cero o una prueba distinta nunca deja un PB/SB fantasma.
+  const { data: previousRows, error: previousError } = await supabase.from('deportista_marcas')
+    .select('jugador_id,disciplina_codigo,prueba_codigo,metrica_codigo,comparacion,temporada')
+    .eq('academia_id', academyId)
+    .eq('partido_id', match.id);
+  if (previousError) throw previousError;
 
-      const rule = resolveRecordRule(profile, testName, definition);
-      if (!rule) continue;
+  for (const row of previousRows || []) {
+    const config = {
+      playerId: row.jugador_id,
+      disciplineCode: row.disciplina_codigo,
+      testCode: row.prueba_codigo,
+      metricCode: row.metrica_codigo,
+      compare: row.comparacion,
+      season: row.temporada,
+    };
+    groups.set(groupKey(config), config);
+  }
 
-      const [previousPB, previousSB] = await Promise.all([
-        bestMark({
-          academyId,
-          playerId: stat.jugador_id,
-          disciplineCode: profile.code,
-          testCode,
-          metricCode: definition.code,
-          compare: rule.compare,
-          excludeMatchId: match.id,
-        }),
-        bestMark({
-          academyId,
+  if ((previousRows || []).length) {
+    const { error: deleteError } = await supabase.from('deportista_marcas')
+      .delete()
+      .eq('academia_id', academyId)
+      .eq('partido_id', match.id);
+    if (deleteError) throw deleteError;
+  }
+
+  if (recordMetrics.length && Array.isArray(stats) && stats.length) {
+    for (const stat of stats) {
+      for (const definition of recordMetrics) {
+        const raw = stat.metricas_competitivas?.[definition.code];
+        const value = Number(raw);
+        if (!Number.isFinite(value) || value <= 0) continue;
+
+        const rule = resolveRecordRule(profile, testName, definition);
+        if (!rule) continue;
+        const config = {
           playerId: stat.jugador_id,
           disciplineCode: profile.code,
           testCode,
           metricCode: definition.code,
           compare: rule.compare,
           season,
-          excludeMatchId: match.id,
-        }),
-      ]);
+        };
+        groups.set(groupKey(config), config);
 
-      const isNewPB = betterThan(value, previousPB?.valor, rule.compare);
-      const isNewSB = betterThan(value, previousSB?.valor, rule.compare);
-      const row = {
-        academia_id: academyId,
-        jugador_id: stat.jugador_id,
-        rama_id: match.rama_id || null,
-        partido_id: match.id,
-        disciplina_codigo: profile.code,
-        prueba_codigo: testCode,
-        prueba_nombre: testName,
-        metrica_codigo: definition.code,
-        metrica_label: definition.label,
-        valor: value,
-        unidad: rule.unit || definition.unit || null,
-        comparacion: rule.compare,
-        temporada: season,
-        fecha: match.fecha,
-        es_pb: false,
-        es_sb: false,
-        valor_pb_anterior: previousPB?.valor ?? null,
-        valor_sb_anterior: previousSB?.valor ?? null,
-        metadata: { source: 'eventos_rendimiento', metric_version: match.metricas_equipo_version || 1 },
-        updated_at: new Date().toISOString(),
-      };
+        // Como ya retiramos la fila anterior del evento, estos son los verdaderos
+        // PB/SB previos contra los cuales debe compararse la nueva corrección.
+        const [previousPB, previousSB] = await Promise.all([
+          bestMark({ academyId, ...config }),
+          bestMark({ academyId, ...config, season }),
+        ]);
 
-      const { data, error } = await supabase.from('deportista_marcas')
-        .upsert(row, { onConflict: 'partido_id,jugador_id,metrica_codigo' })
-        .select('*')
-        .single();
-      if (error) throw error;
+        const isNewPB = betterThan(value, previousPB?.valor, rule.compare);
+        const isNewSB = betterThan(value, previousSB?.valor, rule.compare);
+        const row = {
+          academia_id: academyId,
+          jugador_id: stat.jugador_id,
+          rama_id: match.rama_id || null,
+          partido_id: match.id,
+          disciplina_codigo: profile.code,
+          prueba_codigo: testCode,
+          prueba_nombre: testName,
+          metrica_codigo: definition.code,
+          metrica_label: definition.label,
+          valor: value,
+          unidad: rule.unit || definition.unit || null,
+          comparacion: rule.compare,
+          temporada: season,
+          fecha: match.fecha,
+          es_pb: false,
+          es_sb: false,
+          valor_pb_anterior: previousPB?.valor ?? null,
+          valor_sb_anterior: previousSB?.valor ?? null,
+          metadata: { source: 'eventos_rendimiento', metric_version: match.metricas_equipo_version || 1 },
+          updated_at: new Date().toISOString(),
+        };
 
-      const flags = await recalculateFlags({
-        academyId,
-        playerId: stat.jugador_id,
-        disciplineCode: profile.code,
-        testCode,
-        metricCode: definition.code,
-        compare: rule.compare,
-        season,
-      });
+        const { data, error } = await supabase.from('deportista_marcas')
+          .insert(row)
+          .select('*')
+          .single();
+        if (error) throw error;
 
-      const enriched = { ...data, es_pb: flags.pb?.id === data.id, es_sb: flags.sb?.id === data.id };
-      marks.push(enriched);
-      if (isNewPB) newPB.push(enriched);
-      if (isNewSB) newSB.push(enriched);
+        marks.push({ ...data, _wasNewPB: isNewPB, _wasNewSB: isNewSB });
+      }
     }
   }
 
-  return { newPB, newSB, marks };
+  // Recalcular tanto los grupos actuales como aquellos que desaparecieron por una
+  // edición. Esto garantiza un único PB y un único SB vigentes por prueba/métrica.
+  const flagsByGroup = new Map();
+  for (const [key, config] of groups) {
+    flagsByGroup.set(key, await recalculateFlags({ academyId, ...config }));
+  }
+
+  const enrichedMarks = marks.map((row) => {
+    const config = {
+      playerId: row.jugador_id,
+      disciplineCode: row.disciplina_codigo,
+      testCode: row.prueba_codigo,
+      metricCode: row.metrica_codigo,
+      compare: row.comparacion,
+      season: row.temporada,
+    };
+    const flags = flagsByGroup.get(groupKey(config)) || {};
+    const enriched = {
+      ...row,
+      es_pb: flags.pb?.id === row.id,
+      es_sb: flags.sb?.id === row.id,
+    };
+    delete enriched._wasNewPB;
+    delete enriched._wasNewSB;
+    return enriched;
+  });
+
+  for (let index = 0; index < marks.length; index += 1) {
+    const source = marks[index];
+    const enriched = enrichedMarks[index];
+    if (source._wasNewPB && enriched.es_pb) newPB.push(enriched);
+    if (source._wasNewSB && enriched.es_sb) newSB.push(enriched);
+  }
+
+  return { newPB, newSB, marks: enrichedMarks };
 };
 
 const getCurrentRecordSummary = async ({ academyId, playerIds, disciplineCode, testCode }) => {
