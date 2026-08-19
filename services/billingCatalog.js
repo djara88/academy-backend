@@ -7,7 +7,7 @@ const FOUNDER_SLOTS = 10;
 const BILLING_PLANS = Object.freeze({
   [PLAN_CODES.FORMACION]: {
     code: PLAN_CODES.FORMACION, name: 'Formación', priceClp: 59000,
-    founderPriceClp: 49000, professorLimit: 3, playerLimit: 100,
+    founderPriceClp: 49000, professorLimit: 5, playerLimit: 100,
   },
   [PLAN_CODES.COMPETENCIA]: {
     code: PLAN_CODES.COMPETENCIA, name: 'Competencia', priceClp: 99000,
@@ -42,7 +42,6 @@ const guardianAddonQuote = (billingCycle = 'monthly') => {
 const getBillingQuote = ({ planCode, billingCycle = 'monthly', promotionCode = null, guardians = false }) => {
   const plan = getBillingPlan(planCode);
   if (!plan) return null;
-
   const cycle = billingCycle === 'annual' ? 'annual' : 'monthly';
   const promotion = promotionCode === 'founder' ? 'founder' : null;
   if (promotion && cycle !== 'monthly') {
@@ -50,7 +49,6 @@ const getBillingQuote = ({ planCode, billingCycle = 'monthly', promotionCode = n
     error.code = 'PROMOTION_NOT_STACKABLE';
     throw error;
   }
-
   const baseRegularNet = cycle === 'annual' ? plan.priceClp * 12 : plan.priceClp;
   const baseChargedNet = promotion === 'founder'
     ? plan.founderPriceClp
@@ -64,7 +62,6 @@ const getBillingQuote = ({ planCode, billingCycle = 'monthly', promotionCode = n
   };
   const regularNet = baseRegularNet + addon.regularNetClp;
   const chargedNet = baseChargedNet + addon.chargedNetClp;
-
   return {
     plan,
     billingCycle: cycle,
@@ -87,10 +84,7 @@ const getBillingQuote = ({ planCode, billingCycle = 'monthly', promotionCode = n
 
 const publicPlanPricing = (plan) => ({
   ...plan,
-  monthly: {
-    netClp: plan.priceClp,
-    grossClp: gross(plan.priceClp),
-  },
+  monthly: { netClp: plan.priceClp, grossClp: gross(plan.priceClp) },
   annual: {
     netClp: plan.priceClp * 10,
     grossClp: gross(plan.priceClp * 10),
