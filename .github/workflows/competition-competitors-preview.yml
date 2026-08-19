@@ -1,0 +1,51 @@
+name: Competition competitors preview
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/competition-competitors-preview
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Montar router competitivo
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('server.js')
+          s=p.read_text()
+          old="const torneoMultiramaRoutes = require('./routes/torneosMultirama');"
+          new=old+"\nconst competitionStructureRoutes = require('./routes/competitionStructure');"
+          if s.count(old)!=1: raise SystemExit('import torneos multirrama inesperado')
+          s=s.replace(old,new,1)
+          old="app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), torneoMultiramaRoutes);"
+          new="app.use('/api/torneos', authMiddleware, ...requireFeature(FEATURES.TOURNAMENTS), competitionStructureRoutes);\n"+old
+          if s.count(old)!=1: raise SystemExit('mount torneos inesperado')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - run: node --check server.js
+      - run: node --check routes/competitionStructure.js
+      - run: node --check services/competitionStructurePreview.js
+      - run: npm test
+      - name: Guardar cambio limpio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/competition-competitors-preview.yml
+          git add server.js routes/competitionStructure.js services/competitionStructurePreview.js
+          git commit -m "feat: competidores y preview seguro de competencia"
+          git push origin HEAD:feat/competition-competitors-preview
