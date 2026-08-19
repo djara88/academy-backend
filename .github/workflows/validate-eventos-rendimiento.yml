@@ -1,0 +1,33 @@
+name: Validate Eventos y Rendimiento
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Check server syntax
+        run: node --check server.js
+      - name: Check performance catalog
+        run: node --check services/performanceCatalog.js
+      - name: Check performance records
+        run: node --check services/performanceRecords.js
+      - name: Check performance routes
+        run: node --check routes/rendimiento.js
+      - name: Check analytics routes
+        run: node --check routes/rendimientoAnalytics.js
+      - name: Check competition lifecycle routes
+        run: node --check routes/torneosLifecycle.js
