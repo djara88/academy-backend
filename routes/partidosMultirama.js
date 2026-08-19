@@ -16,6 +16,7 @@ const {
 const router = express.Router();
 router.use(authMiddleware);
 
+const MATCH_SELECT = '*,torneos(id,nombre,rama_id,sede_id,tipo_gestion,formato_competencia,estructura_estado),categorias(id,nombre,rama_id,sede_id),ramas(id,nombre,disciplina),sedes(id,nombre),torneo_divisiones(id,nombre,categoria_id,modalidad),torneo_fases(id,nombre,tipo,division_id,orden)';
 const getStudentTutorId = (student) => student?.tutor_id || student?.tutor_principal_id || student?.apoderado_id || null;
 
 const normalizeTime = (value) => {
@@ -39,11 +40,54 @@ const validateSchedule = (matchValue, callValue) => {
 
 const loadMatch = async (academyId, id) => {
   const { data, error } = await supabase.from('partidos')
-    .select('*,torneos(id,nombre,rama_id,sede_id),categorias(id,nombre,rama_id,sede_id),ramas(id,nombre,disciplina),sedes(id,nombre)')
+    .select(MATCH_SELECT)
     .eq('id', id).eq('academia_id', academyId).maybeSingle();
   if (error) throw error;
   if (!data) throw Object.assign(new Error('Encuentro no encontrado.'), { status: 404 });
   return data;
+};
+
+const resolveTournamentStructure = async (academyId, tournament, category, body) => {
+  const divisionId = safeText(body?.torneo_division_id, 80) || null;
+  const phaseId = safeText(body?.torneo_fase_id, 80) || null;
+
+  if (!tournament) {
+    if (divisionId || phaseId) throw Object.assign(new Error('No puedes asignar una división o fase sin seleccionar una competencia.'), { status: 409, code: 'MATCH_STRUCTURE_WITHOUT_TOURNAMENT' });
+    return { division: null, phase: null };
+  }
+
+  if (tournament.tipo_gestion !== 'organizado') {
+    if (divisionId || phaseId) throw Object.assign(new Error('Las competencias externas usan la estructura oficial del organizador; no requieren división/fase interna.'), { status: 409, code: 'EXTERNAL_TOURNAMENT_STRUCTURE_NOT_ALLOWED' });
+    return { division: null, phase: null };
+  }
+
+  if (!divisionId || !phaseId) {
+    throw Object.assign(new Error('Selecciona la división y fase de este encuentro dentro de la competencia organizada.'), { status: 400, code: 'ORGANIZED_MATCH_STRUCTURE_REQUIRED' });
+  }
+
+  const { data: division, error: divisionError } = await supabase.from('torneo_divisiones')
+    .select('id,nombre,categoria_id,modalidad,formato_competencia')
+    .eq('id', divisionId)
+    .eq('academia_id', academyId)
+    .eq('torneo_id', tournament.id)
+    .maybeSingle();
+  if (divisionError) throw divisionError;
+  if (!division) throw Object.assign(new Error('La división seleccionada no pertenece a esta competencia.'), { status: 409, code: 'MATCH_DIVISION_TOURNAMENT_MISMATCH' });
+  if (division.categoria_id && String(division.categoria_id) !== String(category.id)) {
+    throw Object.assign(new Error(`La división “${division.nombre}” está vinculada a otra categoría.`), { status: 409, code: 'MATCH_DIVISION_CATEGORY_MISMATCH' });
+  }
+
+  const { data: phase, error: phaseError } = await supabase.from('torneo_fases')
+    .select('id,nombre,tipo,division_id,orden,estado')
+    .eq('id', phaseId)
+    .eq('academia_id', academyId)
+    .eq('torneo_id', tournament.id)
+    .eq('division_id', division.id)
+    .maybeSingle();
+  if (phaseError) throw phaseError;
+  if (!phase) throw Object.assign(new Error('La fase seleccionada no pertenece a la división del encuentro.'), { status: 409, code: 'MATCH_PHASE_DIVISION_MISMATCH' });
+
+  return { division, phase };
 };
 
 const resolveMatchContext = async (academyId, body) => {
@@ -58,8 +102,9 @@ const resolveMatchContext = async (academyId, body) => {
       throw Object.assign(new Error('El torneo y la categoría pertenecen a ramas deportivas distintas.'), { status: 409, code: 'TOURNAMENT_MATCH_BRANCH_MISMATCH' });
     }
   }
+  const structure = await resolveTournamentStructure(academyId, tournament, category, body);
   const profile = resolveCompetitiveProfile({ discipline: branch.disciplina });
-  return { category, branch, tournament, profile };
+  return { category, branch, tournament, profile, ...structure };
 };
 
 router.get('/', async (req, res) => {
@@ -69,7 +114,7 @@ router.get('/', async (req, res) => {
     const tournamentId = safeText(req.query?.torneo_id, 80);
     const type = safeText(req.query?.tipo, 30);
     let query = supabase.from('partidos')
-      .select('*,torneos(id,nombre,rama_id),categorias(id,nombre,rama_id),ramas(id,nombre,disciplina),sedes(id,nombre)')
+      .select(MATCH_SELECT)
       .eq('academia_id', academyId)
       .order('fecha', { ascending: false });
     if (branchId) query = query.eq('rama_id', branchId);
@@ -98,6 +143,9 @@ router.post('/', async (req, res) => {
     const { data, error } = await supabase.from('partidos').insert({
       academia_id: academyId,
       torneo_id: req.body?.es_amistoso === true ? null : (req.body?.torneo_id || null),
+      torneo_division_id: context.division?.id || null,
+      torneo_fase_id: context.phase?.id || null,
+      ronda_etiqueta: context.phase?.nombre || null,
       categoria_id: context.category.id,
       sede_id: context.category.sede_id,
       rama_id: context.category.rama_id,
@@ -114,7 +162,7 @@ router.post('/', async (req, res) => {
       cobra_arbitraje: req.body?.cobra_arbitraje === true,
       monto_arbitraje_jugador: req.body?.cobra_arbitraje === true ? Math.max(0, Number(req.body?.monto_arbitraje_jugador) || 0) : 0,
       estado: 'Programado',
-    }).select('*,torneos(id,nombre,rama_id),categorias(id,nombre,rama_id),ramas(id,nombre,disciplina),sedes(id,nombre)').single();
+    }).select(MATCH_SELECT).single();
     if (error) throw error;
     match = data;
     return res.status(201).json({ success: true, data: { ...data, sport_profile: publicProfile(context.profile) } });
@@ -124,14 +172,39 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', async (req, res) => {
   try {
     const academyId = req.user.academia_id;
-    await loadMatch(academyId, req.params.id);
-    await resolveMatchContext(academyId, req.body);
-    return next();
+    const current = await loadMatch(academyId, req.params.id);
+    const context = await resolveMatchContext(academyId, req.body);
+    const eventUi = publicProfile(context.profile).eventUi;
+    const { matchTime, callTime } = validateSchedule(req.body?.hora, req.body?.hora_citacion);
+    const { data, error } = await supabase.from('partidos').update({
+      torneo_id: req.body?.es_amistoso === true ? null : (req.body?.torneo_id || null),
+      torneo_division_id: context.division?.id || null,
+      torneo_fase_id: context.phase?.id || null,
+      ronda_etiqueta: context.phase?.nombre || null,
+      categoria_id: context.category.id,
+      sede_id: context.category.sede_id,
+      rama_id: context.category.rama_id,
+      disciplina_codigo: context.profile.code,
+      es_amistoso: req.body?.es_amistoso === true,
+      rival: safeText(req.body?.rival, 180) || 'Evento / rival por confirmar',
+      fecha: req.body?.fecha,
+      hora: matchTime,
+      hora_citacion: callTime,
+      ubicacion: safeText(req.body?.ubicacion, 300),
+      link_maps: safeText(req.body?.link_maps, 1000),
+      color_uniforme: safeText(req.body?.color_uniforme, 120) || (eventUi.equipmentMode === 'uniform' ? 'Titular' : ''),
+      condicion: safeText(req.body?.condicion, 40) || (eventUi.conditionMode === 'required' ? 'Local' : 'Evento'),
+      cobra_arbitraje: req.body?.cobra_arbitraje === true,
+      monto_arbitraje_jugador: req.body?.cobra_arbitraje === true ? Math.max(0, Number(req.body?.monto_arbitraje_jugador) || 0) : 0,
+      estado: safeText(req.body?.estado, 40) || current.estado || 'Programado',
+    }).eq('id', current.id).eq('academia_id', academyId).select(MATCH_SELECT).single();
+    if (error) throw error;
+    return res.json({ success: true, data: { ...data, sport_profile: publicProfile(context.profile) } });
   } catch (error) {
-    return res.status(error?.status || 500).json({ success: false, error: error?.message, code: error?.code });
+    return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible editar el encuentro.', code: error?.code });
   }
 });
 
@@ -193,6 +266,9 @@ router.post('/:id/citacion', async (req, res) => {
     const profile = resolveCompetitiveProfile({ discipline: match.ramas?.disciplina, code: match.disciplina_codigo });
     const eventUi = publicProfile(profile).eventUi;
     const kind = match.es_amistoso ? `🤝 *${profile.activityLabel.toUpperCase()} AMISTOSO*` : `🏆 *${match.torneos?.nombre || 'COMPETENCIA'}*`;
+    const structureLine = match.torneo_divisiones?.nombre || match.torneo_fases?.nombre
+      ? `🧩 *Etapa:* ${[match.torneo_divisiones?.nombre, match.torneo_fases?.nombre].filter(Boolean).join(' · ')}\n`
+      : '';
     const conditionLine = eventUi.conditionMode !== 'hidden' && match.condicion && match.condicion !== 'Evento'
       ? `📍 *Condición:* ${match.condicion}\n` : '';
     const equipmentLine = match.color_uniforme
@@ -207,7 +283,7 @@ router.post('/:id/citacion', async (req, res) => {
       const message = academyMessage(academyName,
         `📋 *CITACIÓN · ${profile.label.toUpperCase()}*\n\n` +
         `*${student.nombre}* ha sido citado/a:\n${kind}\n${profile.icon} *${profile.opponentLabel}:* ${match.rival}\n` +
-        `🏷️ *Categoría:* ${match.categorias?.nombre || ''}\n📅 *Fecha:* ${match.fecha}\n📣 *Citación:* ${String(match.hora_citacion || '').slice(0,5)} hrs\n` +
+        `🏷️ *Categoría:* ${match.categorias?.nombre || ''}\n${structureLine}📅 *Fecha:* ${match.fecha}\n📣 *Citación:* ${String(match.hora_citacion || '').slice(0,5)} hrs\n` +
         `⏰ *Inicio:* ${String(match.hora || '').slice(0,5)} hrs\n🏟️ *Lugar:* ${match.ubicacion || 'Por confirmar'}\n` +
         conditionLine + equipmentLine + `\n` +
         `Responde:\n1️⃣ Confirmar asistencia\n2️⃣ Informar ausencia`);
