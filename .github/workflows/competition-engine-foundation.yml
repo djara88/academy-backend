@@ -3,6 +3,8 @@ name: Competition engine foundation
 on:
   push:
     branches: [feat/competition-engine-foundation]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -98,6 +100,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/competition-engine-foundation.yml
+          git rm -f .ci-competition-trigger
           git add routes/torneosMultirama.js services/competitionFormatCatalog.js
           git commit -m "feat: preparar arquitectura competitiva de torneos"
           git push origin HEAD:feat/competition-engine-foundation
