@@ -77,3 +77,25 @@ test('competencias y resultados están disponibles desde Competencia', () => {
   assert.deepEqual([formation.limits.sites, competition.limits.sites, highPerformance.limits.sites], [1, 2, null]);
   assert.deepEqual([formation.limits.branches, competition.limits.branches, highPerformance.limits.branches], [1, 2, null]);
 });
+
+test('los cupos de profesores coinciden con la oferta comercial', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
+  assert.deepEqual([formation.limits.professors, competition.limits.professors, highPerformance.limits.professors], [5, 10, 30]);
+});
+
+test('Alto Rendimiento agrega salud y analítica, no branding ni comunicaciones familiares', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento' });
+
+  assert.equal(formation.features.includes(FEATURES.ADVANCED_ANALYTICS), false);
+  assert.equal(competition.features.includes(FEATURES.ADVANCED_ANALYTICS), false);
+  assert.equal(highPerformance.features.includes(FEATURES.ADVANCED_ANALYTICS), true);
+  assert.equal(formation.features.includes(FEATURES.MEDICAL), false);
+  assert.equal(competition.features.includes(FEATURES.MEDICAL), false);
+  assert.equal(highPerformance.features.includes(FEATURES.MEDICAL), true);
+  assert.equal(highPerformance.features.includes(FEATURES.CUSTOM_BRANDING), false);
+  assert.equal(highPerformance.features.includes(FEATURES.ADVANCED_COMMUNICATIONS), false);
+});
