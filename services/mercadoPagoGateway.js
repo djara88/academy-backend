@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { fetchWithTimeout } = require('./httpClient');
 
 const API_BASE = 'https://api.mercadopago.com';
+const CHECKOUT_VALIDITY_MS = 72 * 60 * 60 * 1000;
 const PLATFORM_ACCESS_TOKEN = () => String(process.env.MERCADO_PAGO_PLATFORM_ACCESS_TOKEN || '').trim();
 const CLIENT_ID = () => String(process.env.MERCADO_PAGO_CLIENT_ID || '').trim();
 const CLIENT_SECRET = () => String(process.env.MERCADO_PAGO_CLIENT_SECRET || '').trim();
@@ -69,6 +70,8 @@ const createPreference = async ({ accessToken, externalReference, title, amountC
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('El monto de checkout debe ser mayor que cero.');
   const webBase = PUBLIC_WEB_URL();
   const apiBase = PUBLIC_API_URL();
+  const validFrom = new Date();
+  const validUntil = new Date(validFrom.getTime() + CHECKOUT_VALIDITY_MS);
   const body = {
     items: [{ id: orderId, title: String(title || 'Pago Lestra').slice(0, 240), quantity: 1, currency_id: 'CLP', unit_price: amount }],
     external_reference: String(externalReference),
@@ -79,6 +82,9 @@ const createPreference = async ({ accessToken, externalReference, title, amountC
     },
     auto_return: 'approved',
     notification_url: `${apiBase}/api/mercadopago/webhook`,
+    expires: true,
+    expiration_date_from: validFrom.toISOString(),
+    expiration_date_to: validUntil.toISOString(),
     metadata: { lestra_order_id: orderId, ...metadata },
   };
   if (payerEmail && /^\S+@\S+\.\S+$/.test(String(payerEmail))) body.payer = { email: String(payerEmail).trim().toLowerCase() };
@@ -226,6 +232,7 @@ const validateWebhookSignature = ({ xSignature, xRequestId, dataId }) => {
 };
 
 module.exports = {
+  CHECKOUT_VALIDITY_MS,
   PLATFORM_ACCESS_TOKEN,
   CLIENT_ID,
   CLIENT_SECRET,
