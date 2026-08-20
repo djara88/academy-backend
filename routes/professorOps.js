@@ -23,7 +23,9 @@ const CASE_STATES = new Set(['abierto', 'en_revision', 'resuelto']);
 
 const cleanText = (value) => String(value || '').trim();
 const cleanLimitedText = (value, maxLength) => cleanText(value).slice(0, maxLength);
-const uniqueIds = (values) => [...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))];
+const uniqueIds = (values) => [...new Set((Array.isArray(values) ? values : [])
+  .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+  .map((value) => String(value).trim()))];
 const todayInChile = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date());
