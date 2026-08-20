@@ -67,24 +67,32 @@ const activateChargePlan = async (charge) => {
   let founderNumber = current.founder_number || null;
   let promotionEndsAt = current.promotion_ends_at || null;
   if (promotionCode === 'founder') {
-    if (founderNumber && promotionEndsAt && promotionEndsAt < today()) {
-      throw new Error('El período de Precio Fundador de esta academia ya finalizó.');
+    const existingFounderActive = founderNumber && current.promotion_code === 'founder' && promotionEndsAt && promotionEndsAt >= today();
+    if (!existingFounderActive) {
+      if (founderNumber && promotionEndsAt && promotionEndsAt < today()) {
+        throw new Error('El período de Precio Fundador de esta academia ya finalizó.');
+      }
+      const { data: slot, error: slotError } = await supabase.rpc('activar_syncademia_founder_slot', {
+        p_academia_id: charge.academia_id,
+        p_charge_id: charge.id,
+      });
+      if (slotError) throw slotError;
+      if (!slot) throw new Error('El cupo de Precio Fundador ya no está reservado para este cobro.');
+      founderNumber = Number(slot);
+      promotionEndsAt = promotionEndsAt || addMonthsDate(new Date(), 12);
     }
-    const { data: slot, error: slotError } = await supabase.rpc('activar_syncademia_founder_slot', {
-      p_academia_id: charge.academia_id,
-      p_charge_id: charge.id,
-    });
-    if (slotError) throw slotError;
-    if (!slot) throw new Error('El cupo de Precio Fundador ya no está reservado para este cobro.');
-    founderNumber = Number(slot);
-    promotionEndsAt = promotionEndsAt || addMonthsDate(new Date(), 12);
+  } else if (charge.change_request_id) {
+    founderNumber = null;
+    promotionEndsAt = null;
   }
 
-  const nextBillingDate = addMonthsDate(new Date(), quote.billingPeriodMonths);
+  const billingAnchor = charge.charge_kind === 'renewal' && charge.periodo_inicio
+    ? new Date(`${String(charge.periodo_inicio).slice(0, 10)}T12:00:00Z`)
+    : new Date(charge.pagado_at || Date.now());
+  const nextBillingDate = addMonthsDate(billingAnchor, quote.billingPeriodMonths);
   const baseMonthlyEquivalentClp = quote.billingCycle === 'annual'
     ? Math.round(quote.baseChargedNetClp / 12)
     : quote.baseChargedNetClp;
-  const guardianWasAlreadyActive = activeGuardianLicense(current);
   const update = {
     plan: quote.plan.name,
     plan_codigo: quote.plan.code,
@@ -101,20 +109,23 @@ const activateChargePlan = async (charge) => {
     blocked_at: null,
     blocked_reason: null,
     next_billing_date: nextBillingDate,
+    licencia_apoderados: targetGuardians,
+    guardian_price_clp: targetGuardians ? GUARDIAN_ADDON_CLP : 0,
+    guardian_license_ends_at: targetGuardians ? nextBillingDate : null,
   };
-
-  if (targetGuardians) {
-    update.licencia_apoderados = true;
-    update.guardian_price_clp = GUARDIAN_ADDON_CLP;
-    update.guardian_license_ends_at = nextBillingDate;
-  } else if (!guardianWasAlreadyActive) {
-    update.licencia_apoderados = false;
-    update.guardian_price_clp = 0;
-    update.guardian_license_ends_at = null;
-  }
 
   const { error } = await supabase.from('academias').update(update).eq('id', charge.academia_id);
   if (error) throw error;
+
+  if (charge.change_request_id) {
+    const { error: requestError } = await supabase.from('subscription_change_requests').update({
+      status: 'applied',
+      applied_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', charge.change_request_id).eq('academia_id', charge.academia_id).eq('status', 'approved');
+    if (requestError) throw requestError;
+  }
+
   return {
     activated: true,
     billingCycle: quote.billingCycle,
@@ -124,8 +135,8 @@ const activateChargePlan = async (charge) => {
     nextBillingDate,
     billingAmountClp: quote.chargedNetClp,
     monthlyEquivalentClp: baseMonthlyEquivalentClp,
-    guardianLicense: targetGuardians || guardianWasAlreadyActive,
-    guardianLicenseEndsAt: targetGuardians ? nextBillingDate : current.guardian_license_ends_at || null,
+    guardianLicense: targetGuardians,
+    guardianLicenseEndsAt: targetGuardians ? nextBillingDate : null,
   };
 };
 
