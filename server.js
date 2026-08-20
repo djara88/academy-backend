@@ -150,6 +150,8 @@ const finanzasRoutes = require('./routes/finanzas');
 const finanzasMultiramaRoutes = require('./routes/finanzasMultirama');
 const collectionAdminRoutes = require('./routes/collectionAdmin');
 const mercadoPagoRoutes = require('./routes/mercadoPago');
+const paymentReceiptsRoutes = require('./routes/paymentReceipts');
+const platformCheckoutRoutes = require('./routes/platformCheckout');
 const entrenamientosRoutes = require('./routes/entrenamientos');
 const entrenamientosMultiramaRoutes = require('./routes/entrenamientosMultirama');
 const attendanceRosterRoutes = require('./routes/attendanceRoster');
@@ -176,6 +178,8 @@ const inscripcionesRoutes = require('./routes/inscripciones');
 
 app.use('/api/public', publicCatalogRoutes);
 app.use('/api/cobranza', collectionsPortalRoutes);
+app.use('/api/cobranza/recibos', paymentReceiptsRoutes);
+app.use('/api/mercadopago/platform-subscription', platformCheckoutRoutes);
 app.use('/api/mercadopago', mercadoPagoRoutes);
 app.use('/api/solicitudes-admision', admissionRequestsRoutes);
 app.use('/api/presence', presenceRoutes);
