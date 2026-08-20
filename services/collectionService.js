@@ -13,7 +13,7 @@ const accountForTutor = async (academyId, tutorId, options = {}) => {
   const { onlyOverdue = false } = options;
   const players = await linkedPlayersForTutor(academyId, tutorId);
   const playerIds = players.map((player) => player.id);
-  if (!playerIds.length) return { players, items: [], total: 0 };
+  if (!playerIds.length) return { players, items: [], total: 0, overdueTotal: 0 };
 
   const { data: charges, error: chargeError } = await supabase.from('cobros')
     .select('id,jugador_id,concepto,monto,monto_pagado,estado,fecha_vencimiento')
@@ -86,6 +86,18 @@ const accountForTutor = async (academyId, tutorId, options = {}) => {
   };
 };
 
+const wasNotificationSent = async (academyId, dedupeKey) => {
+  if (!dedupeKey) return false;
+  const { data, error } = await supabase.from('cobranza_notificaciones')
+    .select('id')
+    .eq('academia_id', academyId)
+    .eq('dedupe_key', dedupeKey)
+    .eq('estado', 'Enviado')
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+};
+
 const claimNotification = async ({ academyId, tutorId, channel, type, tokenId, total, itemCount, dedupeKey }) => {
   if (!dedupeKey) return { claimed: true, rowId: null };
   const { data: existing, error: existingError } = await supabase.from('cobranza_notificaciones')
@@ -151,8 +163,33 @@ const sendStatementToTutor = async ({
   dedupePrefix = null,
 }) => {
   const account = await accountForTutor(academy.id, tutor.id, { onlyOverdue });
+  const name = tutor.nombre_completo || tutor.nombre || 'Apoderado';
   if (!account.items.length || account.total <= 0) {
-    return { tutor_id: tutor.id, nombre: tutor.nombre_completo || tutor.nombre || 'Apoderado', total: 0, canales: [], omitido: 'sin_deuda' };
+    return { tutor_id: tutor.id, nombre: name, total: 0, canales: [], omitido: 'sin_deuda' };
+  }
+
+  const channelSet = new Set(channels);
+  const emailEligible = channelSet.has('email') && tutor.email && /^\S+@\S+\.\S+$/.test(String(tutor.email));
+  const phone = normalizePhone(tutor.telefono);
+  const whatsappEligible = channelSet.has('whatsapp') && Boolean(phone);
+  const emailDedupe = dedupePrefix ? `${dedupePrefix}:${tutor.id}:email` : null;
+  const whatsappDedupe = dedupePrefix ? `${dedupePrefix}:${tutor.id}:whatsapp` : null;
+  const [emailAlreadySent, whatsappAlreadySent] = await Promise.all([
+    emailEligible ? wasNotificationSent(academy.id, emailDedupe) : Promise.resolve(false),
+    whatsappEligible ? wasNotificationSent(academy.id, whatsappDedupe) : Promise.resolve(false),
+  ]);
+  const shouldEmail = Boolean(emailEligible && !emailAlreadySent);
+  const shouldWhatsapp = Boolean(whatsappEligible && !whatsappAlreadySent);
+
+  if (!shouldEmail && !shouldWhatsapp) {
+    return {
+      tutor_id: tutor.id,
+      nombre: name,
+      total: account.total,
+      vencido: account.overdueTotal,
+      canales: [],
+      omitido: emailAlreadySent || whatsappAlreadySent ? 'ya_notificado' : 'sin_contacto',
+    };
   }
 
   const portal = await createPortalToken({
@@ -163,16 +200,13 @@ const sendStatementToTutor = async ({
     ttlMinutes: 14 * 24 * 60,
   });
   const portalUrl = `${publicAppUrl()}/pagar/${portal.token}`;
-  const name = tutor.nombre_completo || tutor.nombre || 'Apoderado';
-  const channelSet = new Set(channels);
   const sentChannels = [];
   const errors = [];
 
-  if (channelSet.has('email') && tutor.email && /^\S+@\S+\.\S+$/.test(String(tutor.email))) {
-    const dedupeKey = dedupePrefix ? `${dedupePrefix}:${tutor.id}:email` : null;
+  if (shouldEmail) {
     const claim = await claimNotification({
       academyId: academy.id, tutorId: tutor.id, channel: 'email', type: notificationType,
-      tokenId: portal.tokenId, total: account.total, itemCount: account.items.length, dedupeKey,
+      tokenId: portal.tokenId, total: account.total, itemCount: account.items.length, dedupeKey: emailDedupe,
     });
     if (claim.claimed) {
       try {
@@ -193,12 +227,10 @@ const sendStatementToTutor = async ({
     }
   }
 
-  const phone = normalizePhone(tutor.telefono);
-  if (channelSet.has('whatsapp') && phone) {
-    const dedupeKey = dedupePrefix ? `${dedupePrefix}:${tutor.id}:whatsapp` : null;
+  if (shouldWhatsapp) {
     const claim = await claimNotification({
       academyId: academy.id, tutorId: tutor.id, channel: 'whatsapp', type: notificationType,
-      tokenId: portal.tokenId, total: account.total, itemCount: account.items.length, dedupeKey,
+      tokenId: portal.tokenId, total: account.total, itemCount: account.items.length, dedupeKey: whatsappDedupe,
     });
     if (claim.claimed) {
       try {
