@@ -1,0 +1,1 @@
+create index if not exists idx_lestra_memberships_source_product on public.lestra_memberships(source_product);
