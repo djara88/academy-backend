@@ -49,7 +49,7 @@ const runCollectionAutomation = async () => {
       if (!channels.length) continue;
 
       let trigger = null;
-      if (cfg.cobranza_recordar_antes !== false && untilDue === warningDays) {
+      if (cfg.cobranza_recordar_antes !== false && untilDue >= 0 && untilDue <= warningDays) {
         trigger = {
           onlyOverdue: false,
           type: 'proximo_vencimiento',
@@ -57,12 +57,17 @@ const runCollectionAutomation = async () => {
         };
       } else if (cfg.cobranza_recordar_vencido !== false && untilDue < 0) {
         const lateDays = Math.abs(untilDue);
-        const configuredLateDays = Array.isArray(cfg.cobranza_dias_mora) ? cfg.cobranza_dias_mora.map(Number) : [1, 5, 10, 15];
-        if (configuredLateDays.includes(lateDays)) {
+        const configuredLateDays = (Array.isArray(cfg.cobranza_dias_mora) ? cfg.cobranza_dias_mora : [1, 5, 10, 15])
+          .map(Number)
+          .filter((value) => Number.isInteger(value) && value >= 1 && value <= 60)
+          .sort((a, b) => a - b);
+        const reachedThresholds = configuredLateDays.filter((value) => value <= lateDays);
+        const threshold = reachedThresholds.length ? reachedThresholds[reachedThresholds.length - 1] : null;
+        if (threshold) {
           trigger = {
             onlyOverdue: true,
-            type: `mora_d${lateDays}`,
-            prefix: `auto:${period}:late:${lateDays}`,
+            type: `mora_d${threshold}`,
+            prefix: `auto:${period}:late:${threshold}`,
           };
         }
       }
