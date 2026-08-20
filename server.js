@@ -12,6 +12,7 @@ const { startSystemMetricsSampler } = require('./services/systemMetrics');
 const { startPresenceSampler } = require('./services/userPresence');
 const { startAcademyRegistrationNotifier } = require('./services/academyRegistrationNotifier');
 const { startCollectionAutomation } = require('./services/collectionAutomation');
+const { startSubscriptionRenewalAutomation } = require('./services/subscriptionContract');
 
 const app = express();
 app.disable('x-powered-by');
@@ -253,6 +254,7 @@ const systemMetricsSampler = startSystemMetricsSampler();
 const presenceSampler = startPresenceSampler();
 const academyRegistrationNotifier = startAcademyRegistrationNotifier();
 const collectionAutomation = startCollectionAutomation();
+const subscriptionRenewalAutomation = startSubscriptionRenewalAutomation();
 
 server.requestTimeout = Math.max(15000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000));
 server.headersTimeout = Math.min(server.requestTimeout, Math.max(5000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 15000)));
@@ -266,6 +268,7 @@ const gracefulShutdown = (signal) => {
   presenceSampler?.stop?.();
   academyRegistrationNotifier?.stop?.();
   collectionAutomation?.stop?.();
+  subscriptionRenewalAutomation?.stop?.();
   console.log(`${signal} recibido. Cerrando conexiones de forma ordenada...`);
   const forceTimer = setTimeout(() => {
     console.error('Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
