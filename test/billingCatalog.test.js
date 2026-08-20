@@ -16,7 +16,7 @@ test('catálogo comercial coincide con precios y cupos aprobados', () => {
       getBillingPlan(code).professorLimit,
       getBillingPlan(code).playerLimit,
     ]),
-    [[59000, 49000, 3, 100], [99000, 79000, 10, 300], [149000, 119000, 30, null]],
+    [[59000, 49000, 5, 100], [99000, 79000, 10, 300], [149000, 119000, 30, null]],
   );
 });
 
