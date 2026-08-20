@@ -6,6 +6,7 @@ const { loadPortalToken, authorizedPlayersForToken } = require('../services/coll
 const { recalculateFinancialStatus } = require('../services/monthlyBilling');
 const { activateChargePlan } = require('../services/subscriptionBilling');
 const {
+  CHECKOUT_VALIDITY_MS,
   PLATFORM_ACCESS_TOKEN,
   OAUTH_REDIRECT_URI,
   PUBLIC_WEB_URL,
@@ -23,8 +24,59 @@ const {
 const router = express.Router();
 const safe = (value, max = 500) => String(value ?? '').trim().slice(0, max);
 const money = (value) => Math.round(Number(value || 0));
+const cryptoRandom = () => require('crypto').randomUUID();
+
+const checkoutFingerprint = ({ scope, academyId, platformChargeId = null, amountClp, items = [] }) => {
+  const normalizedItems = [...items]
+    .map((item) => ({
+      cobro_id: String(item.cobro_id || ''),
+      cuota_id: String(item.cuota_id || ''),
+      amount_clp: money(item.amount_clp),
+    }))
+    .sort((a, b) => `${a.cobro_id}:${a.cuota_id}`.localeCompare(`${b.cobro_id}:${b.cuota_id}`));
+  return require('crypto').createHash('sha256').update(JSON.stringify({
+    scope,
+    academyId: String(academyId || ''),
+    platformChargeId: String(platformChargeId || ''),
+    amountClp: money(amountClp),
+    items: normalizedItems,
+  })).digest('hex');
+};
+
+const cleanupStaleOrders = async () => {
+  const cutoff = new Date(Date.now() - CHECKOUT_VALIDITY_MS).toISOString();
+  const { error } = await supabase.from('payment_gateway_orders').update({
+    status: 'cancelled',
+    updated_at: new Date().toISOString(),
+  }).eq('status', 'created').is('payment_id', null).lt('created_at', cutoff);
+  if (error) throw error;
+};
+
+const cleanupPaymentOrders = () => {
+  const run = () => void cleanupStaleOrders().catch((error) => console.error('Limpieza de órdenes Mercado Pago falló:', error?.message || error));
+  const warmup = setTimeout(run, 20_000);
+  warmup.unref?.();
+  const timer = setInterval(run, 60 * 60 * 1000);
+  timer.unref?.();
+};
+cleanupPaymentOrders();
 
 const createOrder = async ({ scope, academyId, platformChargeId = null, amountClp, title, createdBy = null, items = [], payerEmail = null, accessToken }) => {
+  await cleanupStaleOrders();
+  const fingerprint = checkoutFingerprint({ scope, academyId, platformChargeId, amountClp, items });
+  const cutoff = new Date(Date.now() - CHECKOUT_VALIDITY_MS).toISOString();
+  const { data: activeOrders, error: activeError } = await supabase.from('payment_gateway_orders')
+    .select('*')
+    .eq('scope', scope)
+    .eq('academia_id', academyId)
+    .in('status', ['created', 'pending'])
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (activeError) throw activeError;
+  const reusable = (activeOrders || []).find((row) => row.checkout_url && row.metadata?.checkout_fingerprint === fingerprint);
+  if (reusable) return reusable;
+
   const externalReference = `lestra:${scope}:${cryptoRandom()}`;
   const { data: order, error } = await supabase.from('payment_gateway_orders').insert({
     scope,
@@ -34,7 +86,7 @@ const createOrder = async ({ scope, academyId, platformChargeId = null, amountCl
     amount_expected: amountClp,
     status: 'created',
     created_by: createdBy,
-    metadata: { title },
+    metadata: { title, checkout_fingerprint: fingerprint },
   }).select('*').single();
   if (error) throw error;
 
@@ -72,12 +124,14 @@ const createOrder = async ({ scope, academyId, platformChargeId = null, amountCl
     if (updateError) throw updateError;
     return updated;
   } catch (checkoutError) {
-    await supabase.from('payment_gateway_orders').update({ status: 'error', metadata: { title, error: String(checkoutError.message || checkoutError).slice(0, 500) }, updated_at: new Date().toISOString() }).eq('id', order.id);
+    await supabase.from('payment_gateway_orders').update({
+      status: 'error',
+      metadata: { title, checkout_fingerprint: fingerprint, error: String(checkoutError.message || checkoutError).slice(0, 500) },
+      updated_at: new Date().toISOString(),
+    }).eq('id', order.id);
     throw checkoutError;
   }
 };
-
-const cryptoRandom = () => require('crypto').randomUUID();
 
 const loadAcademyCheckoutItems = async ({ tokenRow, selections }) => {
   const players = await authorizedPlayersForToken(tokenRow);
@@ -226,6 +280,7 @@ router.post('/platform/checkout', authMiddleware, requireDirector, async (req, r
 
 router.get('/order/:id', async (req, res) => {
   try {
+    await cleanupStaleOrders();
     const { data, error } = await supabase.from('payment_gateway_orders').select('id,scope,amount_expected,amount_approved,status,payment_id,approved_at,created_at').eq('id', req.params.id).maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Orden no encontrada.' });
@@ -237,23 +292,34 @@ router.get('/order/:id', async (req, res) => {
 
 router.post('/webhook', async (req, res) => {
   const dataId = req.query?.['data.id'] || req.body?.data?.id;
+  const action = safe(req.body?.action, 120).toLowerCase();
+  const type = safe(req.body?.type, 80).toLowerCase();
+  const isPaymentEnvelope = Boolean(dataId) && (type === 'payment' || action.startsWith('payment.') || (!type && !action));
   const xSignature = req.headers['x-signature'];
   const xRequestId = req.headers['x-request-id'];
   const signatureValid = validateWebhookSignature({ xSignature, xRequestId, dataId });
-  const eventKey = String(req.body?.id || `${req.body?.type || 'payment'}:${dataId || cryptoRandom()}:${req.body?.action || ''}`).slice(0, 240);
+  const eventKey = String(req.body?.id || `${type || 'payment'}:${dataId || cryptoRandom()}:${action}`).slice(0, 240);
+
   if (!signatureValid) {
-    await supabase.from('payment_gateway_events').upsert({ provider: 'mercadopago', event_key: eventKey, event_type: req.body?.action || req.body?.type || null, payment_id: dataId ? String(dataId) : null, signature_valid: false, payload: req.body || {} }, { onConflict: 'provider,event_key', ignoreDuplicates: true });
+    if (isPaymentEnvelope) {
+      await supabase.from('payment_gateway_events').upsert({
+        provider: 'mercadopago',
+        event_key: eventKey,
+        event_type: req.body?.action || req.body?.type || null,
+        payment_id: dataId ? String(dataId) : null,
+        signature_valid: false,
+        payload: req.body || {},
+      }, { onConflict: 'provider,event_key', ignoreDuplicates: true });
+    }
     return res.sendStatus(401);
   }
+
+  if (!isPaymentEnvelope) return res.sendStatus(200);
 
   try {
     const inserted = await supabase.from('payment_gateway_events').upsert({ provider: 'mercadopago', event_key: eventKey, event_type: req.body?.action || req.body?.type || null, payment_id: dataId ? String(dataId) : null, signature_valid: true, payload: req.body || {} }, { onConflict: 'provider,event_key', ignoreDuplicates: true }).select('id,processed_at').maybeSingle();
     if (inserted.error) throw inserted.error;
     if (inserted.data?.processed_at) return res.sendStatus(200);
-    if (!dataId || (req.body?.type && req.body.type !== 'payment')) {
-      if (inserted.data?.id) await supabase.from('payment_gateway_events').update({ processed_at: new Date().toISOString() }).eq('id', inserted.data.id);
-      return res.sendStatus(200);
-    }
 
     let accessToken = null;
     const merchantUserId = Number(req.body?.user_id || 0) || null;
@@ -267,6 +333,15 @@ router.post('/webhook', async (req, res) => {
 
     const payment = await getPayment({ accessToken, paymentId: dataId });
     const externalReference = safe(payment?.external_reference, 300);
+    if (!externalReference.startsWith('lestra:')) {
+      if (inserted.data?.id) await supabase.from('payment_gateway_events').update({
+        processed_at: new Date().toISOString(),
+        external_reference: externalReference || null,
+        processing_error: null,
+      }).eq('id', inserted.data.id);
+      return res.sendStatus(200);
+    }
+
     const { data: order, error: orderError } = await supabase.from('payment_gateway_orders').select('*').eq('external_reference', externalReference).maybeSingle();
     if (orderError) throw orderError;
     if (!order) {
