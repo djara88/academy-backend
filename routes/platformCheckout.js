@@ -96,11 +96,18 @@ const invalidatePreviousInitialCheckouts = async (academyId) => {
   const ids = (charges || []).map((row) => row.id);
   if (!ids.length) return;
   const now = new Date().toISOString();
-  const { error: chargeError } = await supabase.from('plataforma_cobros').update({ estado: 'anulado', updated_at: now }).in('id', ids);
-  if (chargeError) throw chargeError;
   const { error: orderError } = await supabase.from('payment_gateway_orders').update({ status: 'cancelled', updated_at: now })
     .eq('scope', 'plataforma').in('plataforma_cobro_id', ids).in('status', ['created', 'pending']);
   if (orderError) throw orderError;
+  const { error: founderError } = await supabase.from('syncademia_founder_slots').update({
+    academia_id: null,
+    charge_id: null,
+    reserved_until: null,
+    updated_at: now,
+  }).in('charge_id', ids).is('activated_at', null);
+  if (founderError) throw founderError;
+  const { error: chargeError } = await supabase.from('plataforma_cobros').update({ estado: 'anulado', updated_at: now }).in('id', ids);
+  if (chargeError) throw chargeError;
 };
 
 router.get('/contract', async (req, res) => {
