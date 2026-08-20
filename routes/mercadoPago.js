@@ -5,6 +5,7 @@ const { requireDirector } = require('../middleware/professorAccess');
 const { loadPortalToken, authorizedPlayersForToken } = require('../services/collectionPortal');
 const { recalculateFinancialStatus } = require('../services/monthlyBilling');
 const { activateChargePlan } = require('../services/subscriptionBilling');
+const { lockContractFromCharge, ensureSubscriptionExpense } = require('../services/subscriptionContract');
 const {
   CHECKOUT_VALIDITY_MS,
   PLATFORM_ACCESS_TOKEN,
@@ -265,7 +266,12 @@ router.post('/platform/checkout', authMiddleware, requireDirector, async (req, r
     const chargeId = safe(req.body?.charge_id, 80);
     const { data: charge, error } = await supabase.from('plataforma_cobros').select('*').eq('id', chargeId).eq('academia_id', req.user.academia_id).maybeSingle();
     if (error) throw error;
-    if (!charge || charge.estado === 'pagado') return res.status(409).json({ error: 'El cobro de Lestra no está disponible.' });
+    if (!charge || !['pendiente', 'vencido'].includes(charge.estado)) return res.status(409).json({ error: 'El cobro de Lestra no está disponible.' });
+    const { data: academy, error: academyError } = await supabase.from('academias').select('contract_locked_at,contract_source_charge_id').eq('id', req.user.academia_id).single();
+    if (academyError) throw academyError;
+    if (academy.contract_locked_at && ['manual', 'initial'].includes(String(charge.charge_kind || 'manual')) && charge.target_plan_code) {
+      return res.status(409).json({ error: 'Ese checkout ya no pertenece al contrato vigente. Utiliza la renovación o solicita un cambio a Lestra.', code: 'STALE_CONTRACT_CHECKOUT' });
+    }
     const token = PLATFORM_ACCESS_TOKEN();
     if (!token) return res.status(503).json({ error: 'Lestra todavía no tiene Checkout Pro configurado.' });
     const amount = money(charge.total_clp);
@@ -381,15 +387,34 @@ router.post('/webhook', async (req, res) => {
     } else if (order.scope === 'plataforma') {
       const { data: charge, error: chargeError } = await supabase.from('plataforma_cobros').select('*').eq('id', order.plataforma_cobro_id).maybeSingle();
       if (chargeError || !charge) throw chargeError || new Error('Cobro de plataforma no encontrado.');
+
+      if (charge.estado === 'anulado') {
+        await supabase.from('payment_gateway_orders').update({ ...commonUpdate, status: 'approved', approved_at: payment.date_approved || new Date().toISOString() }).eq('id', order.id);
+        if (inserted.data?.id) await supabase.from('payment_gateway_events').update({
+          processed_at: new Date().toISOString(),
+          external_reference: externalReference,
+          processing_error: 'Pago aprobado para un cobro anulado. No se aplicó al contrato; requiere revisión administrativa.',
+        }).eq('id', inserted.data.id);
+        return res.sendStatus(200);
+      }
+
+      if (!['pendiente', 'vencido', 'pagado'].includes(charge.estado)) throw new Error(`Estado de cobro Lestra no procesable: ${charge.estado}`);
       if (charge.estado !== 'pagado') {
         const paid = await supabase.rpc('marcar_cobro_plataforma_pagado', { p_cobro_id: charge.id, p_created_by: null, p_metodo_pago: 'Mercado Pago', p_referencia: String(payment.id) });
         if (paid.error) throw paid.error;
-        await activateChargePlan(charge);
+        await activateChargePlan({ ...charge, pagado_at: payment.date_approved || new Date().toISOString() });
       }
+      await lockContractFromCharge(charge);
+      await ensureSubscriptionExpense({
+        charge,
+        paymentId: String(payment.id),
+        paidAt: payment.date_approved || new Date().toISOString(),
+        method: 'Mercado Pago',
+      });
     }
 
     await supabase.from('payment_gateway_orders').update({ ...commonUpdate, status: 'approved', approved_at: payment.date_approved || new Date().toISOString() }).eq('id', order.id);
-    if (inserted.data?.id) await supabase.from('payment_gateway_events').update({ processed_at: new Date().toISOString(), external_reference: externalReference }).eq('id', inserted.data.id);
+    if (inserted.data?.id) await supabase.from('payment_gateway_events').update({ processed_at: new Date().toISOString(), external_reference: externalReference, processing_error: null }).eq('id', inserted.data.id);
     return res.sendStatus(200);
   } catch (error) {
     console.error('Webhook Mercado Pago no procesado:', error?.message || error);
