@@ -58,6 +58,12 @@ const registrationLimiter = createRateLimiter({
   max: Math.max(3, Number(process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
   message: 'Se alcanzó temporalmente el límite de registros desde esta conexión.',
 });
+const collectionLimiter = createRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: Math.max(6, Number(process.env.COLLECTION_RATE_LIMIT_MAX || 15)),
+  keyGenerator: (req) => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.params?.slug || '').toLowerCase()}`,
+  message: 'Demasiados intentos de consulta de pagos. Espera unos minutos antes de reintentar.',
+});
 
 app.use('/api', apiLimiter);
 app.use('/api/cambiar-password', sensitiveLimiter);
@@ -67,6 +73,7 @@ app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
 app.use('/api/prematriculas/public', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
 app.use('/api/solicitudes-admision/public', registrationLimiter);
+app.use('/api/cobranza/public', collectionLimiter);
 
 const bodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: bodyLimit }));
@@ -157,11 +164,13 @@ const systemMetricsRoutes = require('./routes/systemMetrics');
 const estructuraRoutes = require('./routes/estructura');
 const sportProfileRoutes = require('./routes/sportProfiles');
 const publicCatalogRoutes = require('./routes/publicCatalog');
+const collectionsPortalRoutes = require('./routes/collectionsPortal');
 const presenceRoutes = require('./routes/presence');
 const presenceAdminRoutes = require('./routes/presenceAdmin');
 const inscripcionesRoutes = require('./routes/inscripciones');
 
 app.use('/api/public', publicCatalogRoutes);
+app.use('/api/cobranza', collectionsPortalRoutes);
 app.use('/api/solicitudes-admision', admissionRequestsRoutes);
 app.use('/api/presence', presenceRoutes);
 app.use('/api/saas-admin/presence', presenceAdminRoutes);
