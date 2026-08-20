@@ -6,6 +6,12 @@ const { requireSuperadminMfa } = require('../middleware/requireMfa');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 const { activateChargePlan } = require('../services/subscriptionBilling');
 const { getSystemMonitorSnapshot } = require('../services/systemMonitor');
+const {
+  getAcademyContract,
+  ensureRenewalChargeForAcademy,
+  lockContractFromCharge,
+  ensureSubscriptionExpense,
+} = require('../services/subscriptionContract');
 
 const router = express.Router();
 router.use(authMiddleware, requireSuperadmin, requireSuperadminMfa);
@@ -17,11 +23,19 @@ const monthBounds = () => {
   return { start, end };
 };
 const number = (value) => Number(value || 0);
+const clean = (value, max = 1000) => String(value ?? '').trim().replace(/[\r\n|]+/g, ' ').slice(0, max);
 const mercadoPagoLink = () => String(process.env.MERCADO_PAGO_PAYMENT_LINK || 'https://link.mercadopago.cl/smproweb').trim();
 const mercadoPagoConfigured = () => /^https:\/\/link\.mercadopago\.cl\/[A-Za-z0-9._-]+$/i.test(mercadoPagoLink());
 
 const ensureFounderReservationBeforePayment = async (charge) => {
   if (charge?.promotion_code !== 'founder') return charge;
+
+  const { data: academy, error: academyError } = await supabase.from('academias')
+    .select('founder_number,promotion_code,promotion_ends_at').eq('id', charge.academia_id).single();
+  if (academyError) throw academyError;
+  const existingFounderActive = academy?.founder_number && academy?.promotion_code === 'founder'
+    && academy?.promotion_ends_at && academy.promotion_ends_at >= new Date().toISOString().slice(0, 10);
+  if (charge.charge_kind === 'renewal' && existingFounderActive) return charge;
 
   const { data: slot, error: slotError } = await supabase.rpc('reservar_syncademia_founder_slot', {
     p_academia_id: charge.academia_id,
@@ -48,6 +62,21 @@ const ensureFounderReservationBeforePayment = async (charge) => {
   }
 
   return charge;
+};
+
+const cancelRenewalForEffectiveDate = async (academyId, effectiveFrom) => {
+  if (!effectiveFrom) return;
+  const { data: charges, error } = await supabase.from('plataforma_cobros').select('id')
+    .eq('academia_id', academyId).eq('charge_kind', 'renewal').eq('periodo_inicio', effectiveFrom).in('estado', ['pendiente', 'vencido']);
+  if (error) throw error;
+  const ids = (charges || []).map((row) => row.id);
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const { error: chargeError } = await supabase.from('plataforma_cobros').update({ estado: 'anulado', updated_at: now }).in('id', ids);
+  if (chargeError) throw chargeError;
+  const { error: orderError } = await supabase.from('payment_gateway_orders').update({ status: 'cancelled', updated_at: now })
+    .eq('scope', 'plataforma').in('plataforma_cobro_id', ids).in('status', ['created', 'pending']);
+  if (orderError) throw orderError;
 };
 
 router.get('/monitor', async (_req, res) => {
@@ -78,14 +107,16 @@ router.get('/resumen', async (_req, res) => {
   try {
     await supabase.rpc('refrescar_pruebas_vencidas');
     const { start, end } = monthBounds();
-    const [academiesResult, chargesResult, movementsResult] = await Promise.all([
-      supabase.from('academias').select('id,nombre,plan,plan_codigo,estado,created_at,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_clp,guardian_price_clp,licencia_apoderados,jugadores_count,max_profesores'),
+    const [academiesResult, chargesResult, movementsResult, changesResult] = await Promise.all([
+      supabase.from('academias').select('id,nombre,plan,plan_codigo,estado,created_at,subscription_status,trial_started_at,trial_ends_at,blocked_at,blocked_reason,next_billing_date,plan_price_clp,guardian_price_clp,licencia_apoderados,jugadores_count,max_profesores,contract_locked_at'),
       supabase.from('plataforma_cobros').select('id,academia_id,total_clp,estado,fecha_vencimiento,pagado_at'),
       supabase.from('plataforma_movimientos').select('id,tipo,monto_clp,fecha').gte('fecha', start).lt('fecha', end),
+      supabase.from('subscription_change_requests').select('id,status').eq('status', 'pending'),
     ]);
     if (academiesResult.error) throw academiesResult.error;
     if (chargesResult.error) throw chargesResult.error;
     if (movementsResult.error) throw movementsResult.error;
+    if (changesResult.error) throw changesResult.error;
     const today = new Date().toISOString().slice(0, 10);
     const academies = (academiesResult.data || []).map((academy) => ({ ...academy, subscription: getSubscriptionState(academy) }));
     const charges = chargesResult.data || [];
@@ -117,6 +148,7 @@ router.get('/resumen', async (_req, res) => {
         blocked: academies.filter((academy) => academy.subscription.blocked).length,
         mrrClpNet, mrrClpGross: Math.round(mrrClpNet * 1.19),
         income, expenses, net: income - expenses, receivable,
+        pendingPlanChanges: (changesResult.data || []).length,
         conversionRate: academies.length ? Math.round((active.length / academies.length) * 100) : 0,
       },
       academies, alerts: alerts.slice(0, 30),
@@ -124,6 +156,64 @@ router.get('/resumen', async (_req, res) => {
     } });
   } catch (error) {
     res.status(500).json({ error: error.message || 'No fue posible cargar el centro ejecutivo.' });
+  }
+});
+
+router.get('/subscription-change-requests', async (req, res) => {
+  try {
+    const requested = clean(req.query.status, 120);
+    const allowed = ['pending', 'approved', 'rejected', 'applied', 'cancelled'];
+    const statuses = requested ? requested.split(',').map((value) => value.trim()).filter((value) => allowed.includes(value)) : ['pending', 'approved'];
+    const query = supabase.from('subscription_change_requests').select('*,academias(id,nombre,plan,plan_codigo,billing_cycle,next_billing_date,licencia_apoderados)')
+      .order('requested_at', { ascending: false }).limit(200);
+    const { data, error } = statuses.length ? await query.in('status', statuses) : await query;
+    if (error) throw error;
+    return res.json({ success: true, data: data || [] });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'No fue posible cargar las solicitudes de cambio.' });
+  }
+});
+
+router.patch('/subscription-change-requests/:id', async (req, res) => {
+  try {
+    const action = String(req.body?.action || '').toLowerCase();
+    if (!['approve', 'reject'].includes(action)) return res.status(400).json({ error: 'Acción no válida.' });
+    const { data: request, error: requestError } = await supabase.from('subscription_change_requests').select('*').eq('id', req.params.id).maybeSingle();
+    if (requestError || !request) return res.status(404).json({ error: 'Solicitud no encontrada.' });
+    if (request.status !== 'pending') return res.status(409).json({ error: 'La solicitud ya fue revisada.', code: 'REQUEST_ALREADY_REVIEWED' });
+
+    const academy = await getAcademyContract(request.academia_id);
+    const now = new Date().toISOString();
+    if (action === 'reject') {
+      const { data, error } = await supabase.from('subscription_change_requests').update({
+        status: 'rejected',
+        reviewed_by: req.user.id,
+        review_notes: clean(req.body?.notes, 1000) || null,
+        reviewed_at: now,
+        updated_at: now,
+      }).eq('id', request.id).eq('status', 'pending').select('*').single();
+      if (error) throw error;
+      return res.json({ success: true, data });
+    }
+
+    const effectiveFrom = academy.next_billing_date || request.effective_from;
+    const { data: approved, error: approveError } = await supabase.from('subscription_change_requests').update({
+      status: 'approved',
+      effective_from: effectiveFrom,
+      reviewed_by: req.user.id,
+      review_notes: clean(req.body?.notes, 1000) || null,
+      reviewed_at: now,
+      updated_at: now,
+    }).eq('id', request.id).eq('status', 'pending').select('*').single();
+    if (approveError) throw approveError;
+
+    await cancelRenewalForEffectiveDate(academy.id, effectiveFrom);
+    const refreshedAcademy = await getAcademyContract(academy.id);
+    const renewal = await ensureRenewalChargeForAcademy(refreshedAcademy);
+    return res.json({ success: true, data: approved, renewal: renewal || null });
+  } catch (error) {
+    console.error('Error revisando cambio de contrato:', error?.message || error);
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible revisar la solicitud.', code: error?.code });
   }
 });
 
@@ -158,20 +248,29 @@ router.patch('/cobros/:id/pagado', async (req, res) => {
     const { data: charge, error: chargeError } = await supabase.from('plataforma_cobros')
       .select('*').eq('id', req.params.id).maybeSingle();
     if (chargeError || !charge) return res.status(404).json({ error: 'Cobro no encontrado.' });
-    if (charge.estado === 'pagado') return res.json({ success: true, alreadyPaid: true });
+    if (charge.estado === 'pagado') {
+      await lockContractFromCharge(charge);
+      await ensureSubscriptionExpense({ charge, method: charge.metodo_pago || 'Mercado Pago', reference: charge.referencia || null, paidAt: charge.pagado_at || new Date().toISOString() });
+      return res.json({ success: true, alreadyPaid: true });
+    }
+    if (charge.estado === 'anulado') return res.status(409).json({ error: 'El cobro fue anulado y no puede marcarse como pagado.' });
 
     await ensureFounderReservationBeforePayment(charge);
-
+    const method = String(req.body.metodo_pago || 'Mercado Pago').slice(0, 80);
+    const reference = String(req.body.referencia || '').slice(0, 120) || null;
+    const paidAt = new Date().toISOString();
     const { data, error } = await supabase.rpc('marcar_cobro_plataforma_pagado', {
       p_cobro_id: charge.id,
       p_created_by: req.user.id,
-      p_metodo_pago: String(req.body.metodo_pago || 'Mercado Pago').slice(0, 80),
-      p_referencia: String(req.body.referencia || '').slice(0, 120) || null,
+      p_metodo_pago: method,
+      p_referencia: reference,
     });
     if (error) throw error;
 
-    const licenseActivated = await activateChargePlan(charge);
-    res.json({ success: true, movementId: data, licenseActivated });
+    const licenseActivated = await activateChargePlan({ ...charge, pagado_at: paidAt });
+    await lockContractFromCharge(charge);
+    const expenseId = await ensureSubscriptionExpense({ charge, method, reference, paidAt });
+    res.json({ success: true, movementId: data, licenseActivated, expenseId });
   } catch (error) {
     res.status(error?.status || 500).json({
       error: error.message || 'No fue posible validar el pago.',
