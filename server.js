@@ -21,6 +21,7 @@ const allowedOrigins = new Set([
   'https://academy-frontend-wheat.vercel.app',
   'https://lestra.app',
   'https://www.lestra.app',
+  'https://deportivo.lestra.app',
   'http://localhost:5173',
   ...(process.env.CORS_ORIGINS || '').split(',').map(origin => origin.trim()).filter(Boolean)
 ]);
@@ -47,6 +48,7 @@ const apiLimiter = createRateLimiter({
   max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
   skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/')
     || req.originalUrl?.startsWith('/api/whatsapp-bridge/webhook/')
+    || req.originalUrl?.startsWith('/api/mercadopago/webhook')
     || req.originalUrl?.startsWith('/api/presence/heartbeat'),
 });
 const sensitiveLimiter = createRateLimiter({
@@ -90,7 +92,7 @@ app.get('/', (_req, res) => res.send('API de Lestra funcionando 🚀'));
 app.get('/health', (_req, res) => {
   const memory = process.memoryUsage();
   res.json({
-    status: 'ok', service: 'syncademia-backend', features: { profesores: true, multirama_core: true, eventos_rendimiento: true },
+    status: 'ok', service: 'syncademia-backend', features: { profesores: true, multirama_core: true, eventos_rendimiento: true, mercadopago_checkout: true },
     commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
     uptime_seconds: Math.round(process.uptime()),
     memory_rss_mb: Math.round(memory.rss / 1024 / 1024),
@@ -147,6 +149,7 @@ const whatsappGroupRoutes = require('./routes/whatsappGroups');
 const finanzasRoutes = require('./routes/finanzas');
 const finanzasMultiramaRoutes = require('./routes/finanzasMultirama');
 const collectionAdminRoutes = require('./routes/collectionAdmin');
+const mercadoPagoRoutes = require('./routes/mercadoPago');
 const entrenamientosRoutes = require('./routes/entrenamientos');
 const entrenamientosMultiramaRoutes = require('./routes/entrenamientosMultirama');
 const attendanceRosterRoutes = require('./routes/attendanceRoster');
@@ -173,6 +176,7 @@ const inscripcionesRoutes = require('./routes/inscripciones');
 
 app.use('/api/public', publicCatalogRoutes);
 app.use('/api/cobranza', collectionsPortalRoutes);
+app.use('/api/mercadopago', mercadoPagoRoutes);
 app.use('/api/solicitudes-admision', admissionRequestsRoutes);
 app.use('/api/presence', presenceRoutes);
 app.use('/api/saas-admin/presence', presenceAdminRoutes);
