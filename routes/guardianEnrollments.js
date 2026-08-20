@@ -6,6 +6,7 @@ const { requireGuardian } = require('../middleware/professorAccess');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
 const { updateTournamentParticipation, updateCitation } = require('../services/sportsResponseService');
+const { accountForTutor } = require('../services/collectionService');
 
 const guardianFeature = requireFeature(FEATURES.GUARDIANS);
 router.use(authMiddleware, requireGuardian, ...guardianFeature);
@@ -65,6 +66,31 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error cargando disciplinas del apoderado:', error?.message || error);
     return res.status(error?.statusCode || 500).json({ error: error?.statusCode ? error.message : 'No fue posible cargar las disciplinas de tus alumnos.' });
+  }
+});
+
+router.get('/finanzas', async (req, res) => {
+  try {
+    const { academiaId, tutor } = await loadGuardianContext(req.user);
+    const [account, configResult] = await Promise.all([
+      accountForTutor(academiaId, tutor.id, { onlyOverdue: false }),
+      supabase.from('configuracion_financiera')
+        .select('acepta_efectivo,acepta_transferencia,acepta_pago_online,transferencia_banco,transferencia_tipo_cuenta,transferencia_numero,transferencia_rut,transferencia_correo,link_pago_online')
+        .eq('academia_id', academiaId).maybeSingle(),
+    ]);
+    if (configResult.error) throw configResult.error;
+    return res.json({
+      success: true,
+      data: {
+        saldo_total: account.total,
+        saldo_vencido: account.overdueTotal,
+        conceptos: account.items,
+        metodos_pago: configResult.data || null,
+      },
+    });
+  } catch (error) {
+    console.error('Error cargando finanzas del apoderado:', error?.message || error);
+    return res.status(error?.statusCode || 500).json({ error: error?.statusCode ? error.message : 'No fue posible cargar tu estado de cuenta detallado.' });
   }
 });
 
