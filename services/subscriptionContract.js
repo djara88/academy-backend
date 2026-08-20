@@ -210,6 +210,31 @@ const getContractState = async (academyId) => {
   };
 };
 
+const cancelCompetingInitialCheckouts = async (charge) => {
+  const { data: rows, error } = await supabase.from('plataforma_cobros').select('id,founder_slot')
+    .eq('academia_id', charge.academia_id)
+    .eq('estado', 'pendiente')
+    .in('charge_kind', ['manual', 'initial'])
+    .not('target_plan_code', 'is', null)
+    .neq('id', charge.id);
+  if (error) throw error;
+  const ids = (rows || []).map((row) => row.id);
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const { error: cancelError } = await supabase.from('plataforma_cobros').update({ estado: 'anulado', updated_at: now }).in('id', ids);
+  if (cancelError) throw cancelError;
+  const { error: orderError } = await supabase.from('payment_gateway_orders').update({ status: 'cancelled', updated_at: now })
+    .eq('scope', 'plataforma').in('plataforma_cobro_id', ids).in('status', ['created', 'pending']);
+  if (orderError) throw orderError;
+  const { error: founderError } = await supabase.from('syncademia_founder_slots').update({
+    academia_id: null,
+    charge_id: null,
+    reserved_until: null,
+    updated_at: now,
+  }).in('charge_id', ids).is('activated_at', null);
+  if (founderError) throw founderError;
+};
+
 const lockContractFromCharge = async (charge) => {
   if (!charge?.academia_id || !charge?.target_plan_code) return;
   const { error } = await supabase.from('academias').update({
@@ -217,22 +242,27 @@ const lockContractFromCharge = async (charge) => {
     contract_source_charge_id: charge.id,
   }).eq('id', charge.academia_id).is('contract_locked_at', null);
   if (error) throw error;
+  if (charge.charge_kind === 'initial' || charge.charge_kind === 'manual' || !charge.charge_kind) {
+    await cancelCompetingInitialCheckouts(charge);
+  }
 };
 
-const ensureSubscriptionExpense = async ({ charge, paymentId, paidAt }) => {
+const ensureSubscriptionExpense = async ({ charge, paymentId = null, paidAt = null, method = 'Mercado Pago', reference = null }) => {
   if (!charge?.id || !charge?.academia_id) return null;
   const { data: existing, error: existingError } = await supabase.from('egresos').select('id').eq('plataforma_cobro_id', charge.id).maybeSingle();
   if (existingError) throw existingError;
   if (existing) return existing.id;
+  const paymentMethod = clean(method, 80) || 'Mercado Pago';
+  const receiptReference = clean(reference, 120) || (paymentId ? `${paymentMethod} ${paymentId}` : null);
   const { data, error } = await supabase.from('egresos').insert({
     academia_id: charge.academia_id,
     concepto: charge.concepto,
     categoria_gasto: 'Software / Suscripción Lestra',
     centro_costo: 'Administración',
     monto: Number(charge.total_clp || 0),
-    metodo_pago: 'Mercado Pago',
+    metodo_pago: paymentMethod,
     fecha_gasto: String(paidAt || new Date().toISOString()).slice(0, 10),
-    comprobante_ref: paymentId ? `Mercado Pago ${paymentId}` : null,
+    comprobante_ref: receiptReference,
     observaciones: `Egreso generado automáticamente por el pago de Lestra${charge.billing_document_type ? ` · ${charge.billing_document_type}` : ''}.`,
     plataforma_cobro_id: charge.id,
   }).select('id').single();
