@@ -1,4 +1,5 @@
 const supabase = require('../config/supabase');
+const { syncTournamentBilling } = require('./collectionBilling');
 
 const cleanChannel = (value) => String(value || 'aplicacion').trim().slice(0, 40);
 const cleanReason = (value) => String(value || '').trim().slice(0, 500) || null;
@@ -15,18 +16,19 @@ const updateTournamentParticipation = async ({ academyId, tournamentId, playerId
   if (!decision) throw Object.assign(new Error('Selecciona Confirmar o No participa.'), { status: 400 });
 
   const { data: tournament, error: tournamentError } = await supabase.from('torneos')
-    .select('id,nombre,academia_id,costo_inscripcion,permite_cuotas,max_cuotas')
+    .select('id,nombre,academia_id,costo_inscripcion,permite_cuotas,max_cuotas,fecha_inicio,sede_id,rama_id,ramas(id,nombre,disciplina)')
     .eq('id', tournamentId).eq('academia_id', academyId).maybeSingle();
   if (tournamentError) throw tournamentError;
   if (!tournament) throw Object.assign(new Error('Competencia no encontrada.'), { status: 404 });
 
   const { data: rows, error: rowsError } = await supabase.from('torneo_participantes')
-    .select('id,categoria_id,respuesta_participacion,pago_en_cuotas,numero_cuotas,paso_bot')
+    .select('id,categoria_id,inscripcion_id,respuesta_participacion,pago_en_cuotas,numero_cuotas,paso_bot')
     .eq('academia_id', academyId).eq('torneo_id', tournamentId).eq('jugador_id', playerId)
     .order('created_at', { ascending: true });
   if (rowsError) throw rowsError;
   if (!rows?.length) throw Object.assign(new Error('El alumno no está convocado a esta competencia.'), { status: 404 });
 
+  const enrollmentId = rows.find((row) => row.inscripcion_id)?.inscripcion_id || null;
   const now = new Date().toISOString();
   const responseAudit = {
     canal_respuesta: cleanChannel(channel),
@@ -43,7 +45,8 @@ const updateTournamentParticipation = async ({ academyId, tournamentId, playerId
       ...responseAudit,
     }).eq('academia_id', academyId).eq('torneo_id', tournamentId).eq('jugador_id', playerId);
     if (error) throw error;
-    return { tournament, response: 'No', installments: 1, pending_installments: false };
+    const financial = await syncTournamentBilling({ academyId, tournament, playerId, enrollmentId, response: 'No' });
+    return { tournament, response: 'No', installments: 1, pending_installments: false, financial };
   }
 
   const price = Math.max(0, Number(tournament.costo_inscripcion) || 0);
@@ -66,7 +69,10 @@ const updateTournamentParticipation = async ({ academyId, tournamentId, playerId
       cuotas_actualizadas_por: actorUserId || null,
     }).eq('academia_id', academyId).eq('torneo_id', tournamentId).eq('jugador_id', playerId);
     if (error) throw error;
-    return { tournament, response: 'Si', installments: requestedInstallments, pending_installments: false };
+    const financial = await syncTournamentBilling({
+      academyId, tournament, playerId, enrollmentId, response: 'Si', installments: requestedInstallments, pendingInstallments: false,
+    });
+    return { tournament, response: 'Si', installments: requestedInstallments, pending_installments: false, financial };
   }
 
   if (allowsInstallments) {
@@ -78,7 +84,10 @@ const updateTournamentParticipation = async ({ academyId, tournamentId, playerId
     if (groupError) throw groupError;
     const { error: primaryError } = await supabase.from('torneo_participantes').update({ paso_bot: 'ESPERANDO_CUOTAS' }).eq('id', rows[0].id);
     if (primaryError) throw primaryError;
-    return { tournament, response: 'Si', installments: null, pending_installments: true, max_installments: maxInstallments };
+    const financial = await syncTournamentBilling({
+      academyId, tournament, playerId, enrollmentId, response: 'Si', installments: null, pendingInstallments: true,
+    });
+    return { tournament, response: 'Si', installments: null, pending_installments: true, max_installments: maxInstallments, financial };
   }
 
   const { error } = await supabase.from('torneo_participantes').update({
@@ -89,7 +98,10 @@ const updateTournamentParticipation = async ({ academyId, tournamentId, playerId
     ...responseAudit,
   }).eq('academia_id', academyId).eq('torneo_id', tournamentId).eq('jugador_id', playerId);
   if (error) throw error;
-  return { tournament, response: 'Si', installments: 1, pending_installments: false };
+  const financial = await syncTournamentBilling({
+    academyId, tournament, playerId, enrollmentId, response: 'Si', installments: 1, pendingInstallments: false,
+  });
+  return { tournament, response: 'Si', installments: 1, pending_installments: false, financial };
 };
 
 const updateCitation = async ({ academyId, matchId, playerId, response, reason, channel, actorUserId }) => {
