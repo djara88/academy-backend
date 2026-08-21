@@ -6,6 +6,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { loadPortalToken, authorizedPlayersForToken } = require('../services/collectionPortal');
+const { assertUploadedFile } = require('../services/fileValidation');
 
 const router = express.Router();
 const allowedTypes = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
@@ -26,6 +27,7 @@ router.post('/public/transferencia/:token', upload.single('comprobante'), async 
     const tokenRow = await loadPortalToken(req.params.token);
     if (!tokenRow) return res.status(401).json({ error: 'El enlace de pago venció o ya no es válido.' });
     if (!req.file) return res.status(400).json({ error: 'Adjunta el comprobante de transferencia.' });
+    await assertUploadedFile(req.file);
 
     const { data: config, error: configError } = await supabase.from('configuracion_financiera')
       .select('acepta_transferencia').eq('academia_id', tokenRow.academia_id).maybeSingle();
@@ -89,6 +91,7 @@ router.post('/public/transferencia/:token', upload.single('comprobante'), async 
     if (storedPath) await supabase.storage.from('comprobantes-pago').remove([storedPath]).catch(() => null);
     console.error('Error informando transferencia con comprobante:', error?.message || error);
     if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'El comprobante supera 5 MB.' : 'No fue posible procesar el archivo.' });
+    if (error?.code === 'INVALID_FILE_SIGNATURE') return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: error?.message || 'No fue posible informar la transferencia.' });
   }
 });
@@ -113,6 +116,7 @@ router.use((error, _req, res, next) => {
   if (!error) return next();
   if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'El comprobante supera 5 MB.' : 'No fue posible procesar el archivo.' });
   if (error.message === 'Formato de comprobante no permitido.') return res.status(400).json({ error: error.message });
+  if (error?.code === 'INVALID_FILE_SIGNATURE') return res.status(400).json({ error: error.message });
   return next(error);
 });
 
