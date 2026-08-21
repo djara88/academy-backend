@@ -44,5 +44,5 @@ jobs:
           LESTRA_FRONTEND_REPO: djara88/academy-frontend
           LESTRA_GITHUB_READ_TOKEN: ${{ secrets.LESTRA_SENTINEL_GITHUB_READ_TOKEN }}
           LESTRA_SENTINEL_AI_GATEWAY_KEY: ${{ secrets.LESTRA_SENTINEL_AI_GATEWAY_KEY }}
-          LESTRA_SENTINEL_AI_MODEL: ${{ vars.LESTRA_SENTINEL_AI_MODEL }}
+          LESTRA_SENTINEL_AI_MODEL: ${{ vars.LESTRA_SENTINEL_AI_MODEL || 'poolside/laguna-s-2.1-free' }}
         run: node sentinel/monitor.mjs
