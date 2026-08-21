@@ -35,6 +35,28 @@ Agente operativo de Lestra en modo **Observer**.
 - Informe semanal: lunes, 13:00 UTC (GitHub Actions usa UTC).
 - Ambos workflows permiten ejecución manual desde Actions.
 
+## Comandos por comentario
+
+En el issue **#81 Lestra Sentinel — Estado operativo**, únicamente el usuario GitHub `djara88` puede activar comandos que comiencen por `/sentinel`.
+
+### Revisar ahora
+
+```text
+/sentinel revisar
+```
+
+Ejecuta inmediatamente el mismo chequeo seguro del monitor y actualiza el estado del issue #81.
+
+### Generar informe ahora
+
+```text
+/sentinel informe
+```
+
+Ejecuta el chequeo y agrega un informe al issue #81.
+
+Los comentarios del propio bot no vuelven a disparar el workflow, por lo que no existe un bucle automático.
+
 ## Costos
 
 La monitorización base no requiere servicios nuevos ni infraestructura adicional: usa GitHub Actions y endpoints existentes.
