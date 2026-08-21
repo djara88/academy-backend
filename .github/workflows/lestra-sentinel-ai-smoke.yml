@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Probar AI Gateway sin exponer credenciales
+      - name: Probar AI Gateway Free sin exponer credenciales
         env:
           AI_KEY: ${{ secrets.LESTRA_SENTINEL_AI_GATEWAY_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -27,6 +27,7 @@ jobs:
           const key = process.env.AI_KEY || '';
           const repo = process.env.REPO;
           const ghToken = process.env.GH_TOKEN;
+          const model = 'inclusionai/ling-3.0-flash-free';
           let message = '';
           if (!key) {
             message = '⚪ **Sentinel AI smoke:** el secret `LESTRA_SENTINEL_AI_GATEWAY_KEY` no está disponible para el workflow.';
@@ -35,7 +36,7 @@ jobs:
               const r = await fetch('https://ai-gateway.vercel.sh/v1/responses', {
                 method: 'POST',
                 headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-                body: JSON.stringify({ model: 'google/gemini-3.5-flash-lite', input: 'Responde exactamente: OK', max_output_tokens: 16 }),
+                body: JSON.stringify({ model, input: 'Responde exactamente: OK', max_output_tokens: 16 }),
               });
               let reason = '';
               if (!r.ok) {
@@ -45,7 +46,7 @@ jobs:
                 } catch {}
               }
               message = r.ok
-                ? `🟢 **Sentinel AI smoke:** Vercel AI Gateway respondió HTTP ${r.status}. La credencial y el modelo funcionan.`
+                ? `🟢 **Sentinel AI smoke:** Vercel AI Gateway respondió HTTP ${r.status} usando \`${model}\`. La credencial y el modelo Free funcionan.`
                 : `🟠 **Sentinel AI smoke:** Vercel AI Gateway respondió HTTP ${r.status}${reason ? ` — ${reason}` : ''}. Sentinel sigue en fallback local y no se modificó producción.`;
             } catch (e) {
               message = `🟠 **Sentinel AI smoke:** error de red (${e?.name || 'unknown'}). Sentinel sigue en fallback local.`;
