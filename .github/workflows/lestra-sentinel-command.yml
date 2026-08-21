@@ -53,8 +53,8 @@ jobs:
           LESTRA_BACKEND_HEALTH_URL: https://academy-backend-kqsv.onrender.com/health
           LESTRA_FRONTEND_REPO: djara88/academy-frontend
           LESTRA_GITHUB_READ_TOKEN: ${{ secrets.LESTRA_SENTINEL_GITHUB_READ_TOKEN }}
-          LESTRA_SENTINEL_OPENAI_API_KEY: ${{ secrets.LESTRA_SENTINEL_OPENAI_API_KEY }}
-          LESTRA_SENTINEL_OPENAI_MODEL: ${{ vars.LESTRA_SENTINEL_OPENAI_MODEL }}
+          LESTRA_SENTINEL_AI_GATEWAY_KEY: ${{ secrets.LESTRA_SENTINEL_AI_GATEWAY_KEY }}
+          LESTRA_SENTINEL_AI_MODEL: ${{ vars.LESTRA_SENTINEL_AI_MODEL }}
         run: node sentinel/monitor.mjs
 
       - name: Confirmar ejecución
