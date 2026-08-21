@@ -8,6 +8,13 @@ test('resuelve los tres planes comerciales canónicos', () => {
   assert.equal(resolvePlanCode({ plan: 'Alto Rendimiento' }), 'alto_rendimiento');
 });
 
+test('la página pública propia está incluida en los tres planes', () => {
+  for (const plan_codigo of ['formacion', 'competencia', 'alto_rendimiento']) {
+    const entitlements = getAcademyEntitlements({ plan_codigo });
+    assert.equal(entitlements.features.includes(FEATURES.PUBLIC_PAGE), true);
+  }
+});
+
 test('Apoderados PRO es un complemento pagado en planes activos', () => {
   for (const plan_codigo of ['formacion', 'competencia', 'alto_rendimiento']) {
     const withoutAddon = getAcademyEntitlements({ plan_codigo, licencia_apoderados: false });

@@ -13,6 +13,7 @@ const FEATURES = Object.freeze({
   PROFESSORS: 'profesores',
   EVALUATIONS: 'evaluaciones',
   FRIENDLIES: 'amistosos',
+  PUBLIC_PAGE: 'pagina_publica',
   BASIC_EXPORTS: 'exportaciones_basicas',
   OPERATIONAL_NOTIFICATIONS: 'notificaciones_operativas',
   MATCHES: 'partidos',
@@ -32,7 +33,8 @@ const FEATURES = Object.freeze({
 
 // Formación cubre la operación diaria completa de la academia. Los amistosos
 // permiten probar la agenda competitiva sin entregar el motor premium de
-// torneos, rendimiento, PB/SB y analítica.
+// torneos, rendimiento, PB/SB y analítica. La página pública propia es un
+// beneficio base de Lestra y está incluida en los tres planes.
 const BASE_FEATURES = [
   FEATURES.CORE,
   FEATURES.FINANCE,
@@ -40,6 +42,7 @@ const BASE_FEATURES = [
   FEATURES.PROFESSORS,
   FEATURES.EVALUATIONS,
   FEATURES.FRIENDLIES,
+  FEATURES.PUBLIC_PAGE,
   FEATURES.BASIC_EXPORTS,
   FEATURES.OPERATIONAL_NOTIFICATIONS,
 ];
@@ -65,7 +68,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     playerLimit: 100,
     siteLimit: 1,
     branchLimit: 1,
-    priceClp: 59000,
+    priceClp: 44990,
     features: BASE_FEATURES,
   },
   [PLAN_CODES.COMPETENCIA]: {
@@ -76,7 +79,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     playerLimit: 300,
     siteLimit: 2,
     branchLimit: 2,
-    priceClp: 99000,
+    priceClp: 99990,
     features: COMPETITION_FEATURES,
   },
   [PLAN_CODES.ALTO_RENDIMIENTO]: {
@@ -87,7 +90,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     playerLimit: null,
     siteLimit: null,
     branchLimit: null,
-    priceClp: 149000,
+    priceClp: 149990,
     features: [
       ...COMPETITION_FEATURES,
       FEATURES.MEDICAL,
