@@ -1,5 +1,5 @@
 const supabase = require('../config/supabase');
-const { isMasterAdminEmail } = require('./masterAdmin');
+const { isMasterAdminUser } = require('./masterAdmin');
 const { isProfessor, isGuardian, isAllowedProfessorRequest, isAllowedGuardianRequest } = require('./professorAccess');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 
@@ -31,7 +31,7 @@ const authMiddleware = async (req, res, next) => {
       return res.status(500).json({ error: 'Error al validar el usuario' });
     }
 
-    if (isMasterAdminEmail(user.email)) {
+    if (isMasterAdminUser(user)) {
       req.user = { id: user.id, email: user.email, academia_id: null, rol: 'superadmin', nombre_completo: 'Control Maestro SaaS' };
       return next();
     }
