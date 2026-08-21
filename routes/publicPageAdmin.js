@@ -4,6 +4,7 @@ const { randomUUID } = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
+const { assertImageBuffer } = require('../services/fileValidation');
 
 const router = express.Router();
 router.use(authMiddleware, requireDirector);
@@ -115,6 +116,8 @@ router.post('/photos', photoUpload, async (req, res) => {
   let storagePath = null;
   try {
     if (!req.file) return res.status(400).json({ error: 'Selecciona una foto.' });
+    await assertImageBuffer(req.file.buffer, req.file.mimetype);
+
     const { count, error: countError } = await supabase.from('academia_pagina_fotos')
       .select('id', { count: 'exact', head: true }).eq('academia_id', academyId);
     if (countError) throw countError;
@@ -138,7 +141,9 @@ router.post('/photos', photoUpload, async (req, res) => {
   } catch (error) {
     if (storagePath) await supabase.storage.from('academia-publica').remove([storagePath]);
     console.error('Error subiendo foto pública:', error?.message || error);
-    return res.status(500).json({ error: 'No fue posible subir la foto.' });
+    return res.status(error?.status || 500).json({
+      error: error?.code === 'INVALID_FILE_SIGNATURE' ? error.message : 'No fue posible subir la foto.',
+    });
   }
 });
 
