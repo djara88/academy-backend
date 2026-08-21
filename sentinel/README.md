@@ -14,8 +14,8 @@ Agente operativo de Lestra en modo **Observer**.
 - Mantiene un estado consolidado en el issue #81.
 - Registra transiciones e incidentes en el issue #82.
 - Genera un informe semanal en el issue #81.
-- Puede usar OpenAI para recomendaciones técnicas **solo** ante transiciones/incidentes o en el informe semanal.
-- Si la API de IA no está configurada o falla, usa reglas determinísticas y continúa funcionando.
+- Puede usar **Vercel AI Gateway** para recomendaciones técnicas solo ante transiciones/incidentes o en el informe semanal.
+- Si AI Gateway no está configurado, no tiene crédito, está limitado o falla, Sentinel usa reglas determinísticas y continúa funcionando.
 
 ## Qué NO hace
 
@@ -28,6 +28,8 @@ Agente operativo de Lestra en modo **Observer**.
 - No fusiona PRs.
 - No ejecuta SQL.
 - No almacena PII ni secretos.
+- No usa una API de OpenAI directa como fallback.
+- No compra créditos ni habilita recargas automáticas.
 
 ## Programación
 
@@ -53,29 +55,31 @@ Ejecuta inmediatamente el mismo chequeo seguro del monitor y actualiza el estado
 /sentinel informe
 ```
 
-Ejecuta el chequeo y agrega un informe al issue #81.
+Ejecuta el chequeo y agrega un informe al issue #81. Si AI Gateway está conectado, este modo puede utilizar IA.
 
 Los comentarios del propio bot no vuelven a disparar el workflow, por lo que no existe un bucle automático.
 
-## Costos
+## Costos y política cero gasto
 
 La monitorización base no requiere servicios nuevos ni infraestructura adicional: usa GitHub Actions y endpoints existentes.
 
-La IA es opcional y solo consume API cuando:
+Vercel AI Gateway ofrece crédito gratuito mensual al equipo. Sentinel está diseñado para aprovecharlo sin transformar el monitor en un consumidor permanente de tokens:
 
-1. cambia el estado observado;
-2. existe un incidente/degradación;
-3. se genera el informe semanal.
+1. un chequeo sano normal no llama a ningún modelo;
+2. IA solo se intenta cuando cambia el estado, existe una degradación o se genera el informe semanal;
+3. si Gateway responde `402` por presupuesto/crédito agotado, Sentinel vuelve inmediatamente a reglas locales;
+4. no existe fallback a una API de pago directa;
+5. la recarga automática debe permanecer desactivada en Vercel.
 
-Esto reduce el consumo frente a invocar un modelo en cada chequeo sano.
+El objetivo durante la etapa pre-comercial es mantener **costo incremental de IA = $0**.
 
 ## Secrets opcionales
 
-### `LESTRA_SENTINEL_OPENAI_API_KEY`
+### `LESTRA_SENTINEL_AI_GATEWAY_KEY`
 
-API key dedicada exclusivamente a Sentinel. Permite recomendaciones generadas por modelo.
+API key dedicada de **Vercel AI Gateway** para Sentinel.
 
-**No reutilizar** claves de Supabase, Render, Vercel, Mercado Pago ni JWT.
+Debe crearse con presupuesto limitado y sin auto top-up. No reutilizar claves de Supabase, Render, Mercado Pago, JWT ni otros servicios.
 
 ### `LESTRA_SENTINEL_GITHUB_READ_TOKEN`
 
@@ -88,9 +92,17 @@ Sirve únicamente para que Sentinel pueda consultar CI del frontend privado. Sin
 
 ## Variable opcional
 
-### `LESTRA_SENTINEL_OPENAI_MODEL`
+### `LESTRA_SENTINEL_AI_MODEL`
 
-Modelo usado por Sentinel. Si no se define, el script usa `gpt-5-mini` como valor por defecto y vuelve a reglas determinísticas si la llamada no está disponible.
+Modelo usado por Sentinel a través de Vercel AI Gateway.
+
+Si no se define, el script usa:
+
+```text
+google/gemini-3.5-flash-lite
+```
+
+Es un modelo ligero apropiado para clasificación, resumen y diagnóstico operacional. La variable permite cambiarlo sin modificar código si Vercel cambia el catálogo.
 
 ## Memoria durable
 
