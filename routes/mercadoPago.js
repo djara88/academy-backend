@@ -287,9 +287,13 @@ router.post('/platform/checkout', authMiddleware, requireDirector, async (req, r
 router.get('/order/:id', async (req, res) => {
   try {
     await cleanupStaleOrders();
-    const { data, error } = await supabase.from('payment_gateway_orders').select('id,scope,amount_expected,amount_approved,status,payment_id,approved_at,created_at').eq('id', req.params.id).maybeSingle();
+    const { data, error } = await supabase.from('payment_gateway_orders')
+      .select('amount_expected,amount_approved,status,approved_at,created_at')
+      .eq('id', req.params.id)
+      .maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Orden no encontrada.' });
+    res.setHeader('Cache-Control', 'no-store');
     return res.json({ success: true, data });
   } catch (error) {
     return res.status(500).json({ error: 'No fue posible consultar el pago.' });
