@@ -1,0 +1,43 @@
+name: Lestra Sentinel Weekly Report
+
+on:
+  schedule:
+    - cron: '0 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: lestra-sentinel-weekly
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Generar informe semanal
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTINEL_STATUS_ISSUE: '81'
+          SENTINEL_MEMORY_ISSUE: '82'
+          SENTINEL_MODE: weekly
+          LESTRA_FRONTEND_URL: https://www.lestra.app
+          LESTRA_DEPORTIVO_URL: https://deportivo.lestra.app
+          LESTRA_BACKEND_HEALTH_URL: https://academy-backend-kqsv.onrender.com/health
+          LESTRA_FRONTEND_REPO: djara88/academy-frontend
+          LESTRA_GITHUB_READ_TOKEN: ${{ secrets.LESTRA_SENTINEL_GITHUB_READ_TOKEN }}
+          LESTRA_SENTINEL_OPENAI_API_KEY: ${{ secrets.LESTRA_SENTINEL_OPENAI_API_KEY }}
+          LESTRA_SENTINEL_OPENAI_MODEL: ${{ vars.LESTRA_SENTINEL_OPENAI_MODEL }}
+        run: node sentinel/monitor.mjs
