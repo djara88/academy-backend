@@ -112,18 +112,19 @@ begin
   end if;
 
   v_academia := public.lestra_realtime_resolve_academia(tg_table_name, v_row);
-  if v_academia is null then
-    return case when tg_op = 'DELETE' then old else new end;
+  if v_academia is not null then
+    insert into public.lestra_realtime_state (academia_id, scope, revision, changed_at)
+    values (v_academia, tg_table_name, 1, now())
+    on conflict (academia_id, scope)
+    do update set
+      revision = public.lestra_realtime_state.revision + 1,
+      changed_at = excluded.changed_at;
   end if;
 
-  insert into public.lestra_realtime_state (academia_id, scope, revision, changed_at)
-  values (v_academia, tg_table_name, 1, now())
-  on conflict (academia_id, scope)
-  do update set
-    revision = public.lestra_realtime_state.revision + 1,
-    changed_at = excluded.changed_at;
-
-  return case when tg_op = 'DELETE' then old else new end;
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
 end;
 $$;
 
