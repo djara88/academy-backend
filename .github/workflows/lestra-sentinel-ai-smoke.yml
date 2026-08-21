@@ -1,0 +1,60 @@
+name: Lestra Sentinel AI Smoke
+
+on:
+  push:
+    branches:
+      - sentinel/ai-fallback-observability-2026-08-21
+    paths:
+      - '.github/workflows/lestra-sentinel-ai-smoke.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Probar AI Gateway sin exponer credenciales
+        env:
+          AI_KEY: ${{ secrets.LESTRA_SENTINEL_AI_GATEWAY_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const key = process.env.AI_KEY || '';
+          const repo = process.env.REPO;
+          const ghToken = process.env.GH_TOKEN;
+          let message = '';
+          if (!key) {
+            message = '⚪ **Sentinel AI smoke:** el secret `LESTRA_SENTINEL_AI_GATEWAY_KEY` no está disponible para el workflow.';
+          } else {
+            try {
+              const r = await fetch('https://ai-gateway.vercel.sh/v1/responses', {
+                method: 'POST',
+                headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+                body: JSON.stringify({ model: 'google/gemini-3.5-flash-lite', input: 'Responde exactamente: OK', max_output_tokens: 16 }),
+              });
+              let reason = '';
+              if (!r.ok) {
+                try {
+                  const data = await r.json();
+                  reason = String(data?.error?.message || data?.message || '').replace(/sk-[A-Za-z0-9_-]+/g, '[redacted]').slice(0, 240);
+                } catch {}
+              }
+              message = r.ok
+                ? `🟢 **Sentinel AI smoke:** Vercel AI Gateway respondió HTTP ${r.status}. La credencial y el modelo funcionan.`
+                : `🟠 **Sentinel AI smoke:** Vercel AI Gateway respondió HTTP ${r.status}${reason ? ` — ${reason}` : ''}. Sentinel sigue en fallback local y no se modificó producción.`;
+            } catch (e) {
+              message = `🟠 **Sentinel AI smoke:** error de red (${e?.name || 'unknown'}). Sentinel sigue en fallback local.`;
+            }
+          }
+          const response = await fetch(`https://api.github.com/repos/${repo}/issues/81/comments`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${ghToken}`, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'x-github-api-version': '2022-11-28' },
+            body: JSON.stringify({ body: message }),
+          });
+          if (!response.ok) throw new Error(`No se pudo publicar resultado (${response.status})`);
+          NODE
