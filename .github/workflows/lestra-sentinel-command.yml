@@ -1,0 +1,73 @@
+name: Lestra Sentinel Command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: lestra-sentinel-command
+  cancel-in-progress: false
+
+jobs:
+  command:
+    if: >-
+      github.event.issue.number == 81 &&
+      github.event.comment.user.login == 'djara88' &&
+      startsWith(github.event.comment.body, '/sentinel')
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Interpretar comando
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          if [[ "$COMMENT_BODY" == *"informe"* ]]; then
+            echo "SENTINEL_MODE=weekly" >> "$GITHUB_ENV"
+          else
+            echo "SENTINEL_MODE=monitor" >> "$GITHUB_ENV"
+          fi
+
+      - name: Ejecutar Sentinel
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTINEL_STATUS_ISSUE: '81'
+          SENTINEL_MEMORY_ISSUE: '82'
+          LESTRA_FRONTEND_URL: https://www.lestra.app
+          LESTRA_DEPORTIVO_URL: https://deportivo.lestra.app
+          LESTRA_BACKEND_HEALTH_URL: https://academy-backend-kqsv.onrender.com/health
+          LESTRA_FRONTEND_REPO: djara88/academy-frontend
+          LESTRA_GITHUB_READ_TOKEN: ${{ secrets.LESTRA_SENTINEL_GITHUB_READ_TOKEN }}
+          LESTRA_SENTINEL_OPENAI_API_KEY: ${{ secrets.LESTRA_SENTINEL_OPENAI_API_KEY }}
+          LESTRA_SENTINEL_OPENAI_MODEL: ${{ vars.LESTRA_SENTINEL_OPENAI_MODEL }}
+        run: node sentinel/monitor.mjs
+
+      - name: Confirmar ejecución
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPO/issues/$ISSUE/comments" \
+            -d '{"body":"✅ Sentinel ejecutó el comando autorizado. El estado del issue fue actualizado sin cambios en producción."}' >/dev/null
