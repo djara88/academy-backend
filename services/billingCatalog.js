@@ -6,16 +6,16 @@ const FOUNDER_SLOTS = 10;
 
 const BILLING_PLANS = Object.freeze({
   [PLAN_CODES.FORMACION]: {
-    code: PLAN_CODES.FORMACION, name: 'Formación', priceClp: 59000,
-    founderPriceClp: 49000, professorLimit: 5, playerLimit: 100,
+    code: PLAN_CODES.FORMACION, name: 'Formación', priceClp: 44990,
+    founderPriceClp: 39990, professorLimit: 5, playerLimit: 100,
   },
   [PLAN_CODES.COMPETENCIA]: {
-    code: PLAN_CODES.COMPETENCIA, name: 'Competencia', priceClp: 99000,
-    founderPriceClp: 79000, professorLimit: 10, playerLimit: 300,
+    code: PLAN_CODES.COMPETENCIA, name: 'Competencia', priceClp: 99990,
+    founderPriceClp: 79990, professorLimit: 10, playerLimit: 300,
   },
   [PLAN_CODES.ALTO_RENDIMIENTO]: {
-    code: PLAN_CODES.ALTO_RENDIMIENTO, name: 'Alto Rendimiento', priceClp: 149000,
-    founderPriceClp: 119000, professorLimit: 30, playerLimit: null,
+    code: PLAN_CODES.ALTO_RENDIMIENTO, name: 'Alto Rendimiento', priceClp: 149990,
+    founderPriceClp: 119990, professorLimit: 30, playerLimit: null,
   },
 });
 
