@@ -95,10 +95,15 @@ async function gh(path, { method = 'GET', body, token = GITHUB_TOKEN } = {}) {
   return data;
 }
 
+function repoPath(repo) {
+  const [owner, name] = String(repo || '').split('/');
+  if (!owner || !name) throw new Error('Repositorio inválido');
+  return `${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+}
+
 async function latestWorkflow(repo, workflowName, token) {
   try {
-    const encoded = encodeURIComponent(repo);
-    const data = await gh(`/repos/${encoded}/actions/runs?branch=main&per_page=30`, { token });
+    const data = await gh(`/repos/${repoPath(repo)}/actions/runs?branch=main&per_page=30`, { token });
     const run = (data?.workflow_runs || []).find((item) => item.name === workflowName && item.status === 'completed');
     if (!run) return { available: true, state: 'unknown', conclusion: null };
     return {
@@ -225,7 +230,8 @@ function extractResponseText(data) {
 
 async function recentMemoryComments(limit = 12) {
   try {
-    const data = await gh(`/repos/${currentRepo}/issues/${MEMORY_ISSUE}/comments?per_page=${Math.min(limit, 50)}`);
+    const since = encodeURIComponent(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    const data = await gh(`/repos/${currentRepo}/issues/${MEMORY_ISSUE}/comments?per_page=${Math.min(limit, 50)}&since=${since}`);
     return (data || []).slice(-limit).map((item) => ({
       createdAt: item.created_at,
       body: String(item.body || '').slice(0, 1200),
