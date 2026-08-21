@@ -27,7 +27,7 @@ jobs:
           const key = process.env.AI_KEY || '';
           const repo = process.env.REPO;
           const ghToken = process.env.GH_TOKEN;
-          const model = 'inclusionai/ling-3.0-flash-free';
+          const model = 'inclusionai/ling-3.0-tiny-free';
           let message = '';
           if (!key) {
             message = '⚪ **Sentinel AI smoke:** el secret `LESTRA_SENTINEL_AI_GATEWAY_KEY` no está disponible para el workflow.';
