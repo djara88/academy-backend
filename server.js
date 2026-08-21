@@ -90,16 +90,7 @@ app.use('/api/academias/registro-publico', (req, res, next) => {
 });
 
 app.get('/', (_req, res) => res.send('API de Lestra funcionando 🚀'));
-app.get('/health', (_req, res) => {
-  const memory = process.memoryUsage();
-  res.json({
-    status: 'ok', service: 'syncademia-backend', features: { profesores: true, multirama_core: true, eventos_rendimiento: true, mercadopago_checkout: true },
-    commit: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null,
-    uptime_seconds: Math.round(process.uptime()),
-    memory_rss_mb: Math.round(memory.rss / 1024 / 1024),
-    checked_at: new Date().toISOString(),
-  });
-});
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.post('/api/cambiar-password', authMiddleware, async (req, res) => {
   try {
