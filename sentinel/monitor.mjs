@@ -10,8 +10,9 @@ const MODE = process.env.SENTINEL_MODE || 'monitor';
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const CROSS_REPO_TOKEN = process.env.LESTRA_GITHUB_READ_TOKEN || GITHUB_TOKEN;
-const OPENAI_API_KEY = process.env.LESTRA_SENTINEL_OPENAI_API_KEY || '';
-const OPENAI_MODEL = process.env.LESTRA_SENTINEL_OPENAI_MODEL || 'gpt-5-mini';
+const AI_GATEWAY_API_KEY = process.env.LESTRA_SENTINEL_AI_GATEWAY_KEY || '';
+const AI_GATEWAY_MODEL = process.env.LESTRA_SENTINEL_AI_MODEL || 'google/gemini-3.5-flash-lite';
+const AI_GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/responses';
 
 const currentRepo = process.env.GITHUB_REPOSITORY || 'djara88/academy-backend';
 const githubApi = 'https://api.github.com';
@@ -50,7 +51,7 @@ async function checkHttp(name, url, timeoutMs = 20_000) {
     const response = await fetchWithTimeout(url, {
       method: 'GET',
       redirect: 'follow',
-      headers: { 'user-agent': 'lestra-sentinel/1.0' },
+      headers: { 'user-agent': 'lestra-sentinel/1.1' },
     }, timeoutMs);
     return {
       name,
@@ -80,7 +81,7 @@ async function gh(path, { method = 'GET', body, token = GITHUB_TOKEN } = {}) {
       accept: 'application/vnd.github+json',
       'x-github-api-version': '2022-11-28',
       'content-type': 'application/json',
-      'user-agent': 'lestra-sentinel/1.0',
+      'user-agent': 'lestra-sentinel/1.1',
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   }, 20_000);
@@ -242,7 +243,7 @@ async function recentMemoryComments(limit = 12) {
 }
 
 async function aiRecommendation(snapshot, assessment, transitions) {
-  if (!OPENAI_API_KEY) return null;
+  if (!AI_GATEWAY_API_KEY) return null;
   const instructions = await readInstructions();
   const memory = await recentMemoryComments();
   const safePayload = {
@@ -253,23 +254,35 @@ async function aiRecommendation(snapshot, assessment, transitions) {
   };
 
   try {
-    const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
+    const response = await fetchWithTimeout(AI_GATEWAY_URL, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${OPENAI_API_KEY}`,
+        authorization: `Bearer ${AI_GATEWAY_API_KEY}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
-        instructions,
-        input: `Analiza este snapshot técnico sin PII ni secretos. Devuelve Markdown breve con: severidad, evidencia, diagnóstico probable, recomendación, riesgo y verificación. No propongas ejecutar cambios automáticamente.\n\n${JSON.stringify(safePayload)}`,
-        max_output_tokens: 900,
+        model: AI_GATEWAY_MODEL,
+        input: `${instructions}\n\nAnaliza este snapshot técnico sin PII ni secretos. Devuelve Markdown breve con: severidad, evidencia, diagnóstico probable, recomendación, riesgo y verificación. No propongas ejecutar cambios automáticamente.\n\n${JSON.stringify(safePayload)}`,
+        max_output_tokens: 700,
       }),
     }, 45_000);
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.log(JSON.stringify({
+        event: 'sentinel_ai_fallback',
+        provider: 'vercel-ai-gateway',
+        status: response.status,
+        reason: response.status === 402 ? 'free_budget_exhausted' : response.status === 429 ? 'rate_limited' : 'gateway_error',
+      }));
+      return null;
+    }
     return extractResponseText(await response.json()) || null;
-  } catch {
+  } catch (error) {
+    console.log(JSON.stringify({
+      event: 'sentinel_ai_fallback',
+      provider: 'vercel-ai-gateway',
+      reason: error?.name === 'AbortError' ? 'timeout' : 'network_error',
+    }));
     return null;
   }
 }
@@ -288,7 +301,9 @@ function ciRow(label, ci) {
 }
 
 function statusBody(snapshot, assessment, aiText, state) {
-  const aiMode = OPENAI_API_KEY ? (aiText ? 'IA activa' : 'IA disponible; fallback determinístico en esta ejecución') : 'Reglas seguras; IA aún no conectada';
+  const aiMode = AI_GATEWAY_API_KEY
+    ? (aiText ? `Vercel AI Gateway activo · ${AI_GATEWAY_MODEL}` : 'Vercel AI Gateway disponible · fallback local en esta ejecución')
+    : 'Reglas seguras · AI Gateway aún no conectado';
   return `# Lestra Sentinel — Estado operativo\n\n` +
     `> **Modo:** Observer / solo lectura sobre producción. Sentinel solo escribe en estos issues de control.\n\n` +
     `**Última revisión:** ${nowChile()}  \n` +
@@ -307,6 +322,7 @@ function statusBody(snapshot, assessment, aiText, state) {
     (aiText ? `## Análisis de IA\n\n${aiText}\n\n` : '') +
     `## Límites actuales\n\n` +
     `- No usa \`SUPABASE_SERVICE_ROLE_KEY\`.\n` +
+    `- Si AI Gateway no tiene clave, crédito o disponibilidad, Sentinel continúa con reglas locales sin generar compras automáticas.\n` +
     `- Métricas profundas de Vercel/Render y lectura cruzada del frontend se activan solo con tokens dedicados de solo lectura.\n` +
     `- No modifica base de datos, variables, deploys, roles, pagos ni ramas.\n\n` +
     `${formatStateMarker(state)}`;
@@ -387,7 +403,7 @@ export async function run() {
   const previousState = parseState(existingBody);
   const currentState = stateVector(snapshot, assessment);
   const transitions = detectTransitions(previousState, currentState);
-  const shouldUseAi = Boolean(OPENAI_API_KEY) && (MODE === 'weekly' || transitions.length > 0 || assessment.overall !== 'healthy');
+  const shouldUseAi = Boolean(AI_GATEWAY_API_KEY) && (MODE === 'weekly' || transitions.length > 0 || assessment.overall !== 'healthy');
   const aiText = shouldUseAi ? await aiRecommendation(snapshot, assessment, transitions) : null;
 
   await updateStatusIssue(statusBody(snapshot, assessment, aiText, currentState));
@@ -401,6 +417,8 @@ export async function run() {
     overall: assessment.overall,
     transitions: transitions.length,
     aiUsed: Boolean(aiText),
+    aiProvider: AI_GATEWAY_API_KEY ? 'vercel-ai-gateway' : 'local-rules',
+    aiModel: AI_GATEWAY_API_KEY ? AI_GATEWAY_MODEL : null,
   }));
 }
 
