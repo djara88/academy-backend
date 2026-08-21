@@ -19,21 +19,31 @@ const authMiddleware = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'No autorizado' });
 
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) return res.status(401).json({ error: 'Token inválido' });
+    const { data: claimsData, error } = await supabase.auth.getClaims(token);
+    const claims = claimsData?.claims;
+    if (error || !claims?.sub) return res.status(401).json({ error: 'Token inválido' });
 
-    req.auth = { aal: getAuthenticatorLevelFromToken(token) };
+    const verifiedUser = {
+      id: String(claims.sub),
+      email: String(claims.email || ''),
+    };
+    req.auth = { aal: claims.aal === 'aal2' ? 'aal2' : 'aal1' };
+
+    // El superadmin está ligado a un UUID inmutable. No necesita consultar la
+    // tabla usuarios ni una academia para autorizar sus rutas maestras.
+    if (isMasterAdminUser(verifiedUser)) {
+      req.user = { id: verifiedUser.id, email: verifiedUser.email, academia_id: null, rol: 'superadmin', nombre_completo: 'Control Maestro SaaS' };
+      return next();
+    }
 
     const { data: usuario, error: userError } = await supabase
-      .from('usuarios').select('*').eq('id', user.id).maybeSingle();
+      .from('usuarios')
+      .select('id,academia_id,rol,nombre_completo,activo')
+      .eq('id', verifiedUser.id)
+      .maybeSingle();
     if (userError) {
       console.error('❌ Error al consultar usuario:', userError);
       return res.status(500).json({ error: 'Error al validar el usuario' });
-    }
-
-    if (isMasterAdminUser(user)) {
-      req.user = { id: user.id, email: user.email, academia_id: null, rol: 'superadmin', nombre_completo: 'Control Maestro SaaS' };
-      return next();
     }
 
     if (!usuario) return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
@@ -73,8 +83,8 @@ const authMiddleware = async (req, res, next) => {
     }
 
     req.user = {
-      id: user.id,
-      email: user.email,
+      id: verifiedUser.id,
+      email: verifiedUser.email,
       academia_id: usuario.academia_id,
       rol: usuario.rol,
       nombre_completo: usuario.nombre_completo,
