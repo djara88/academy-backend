@@ -1,0 +1,34 @@
+name: Lestra Sentinel CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sentinel/**'
+      - '.github/workflows/lestra-sentinel*.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sentinel/**'
+      - '.github/workflows/lestra-sentinel*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Validar sintaxis
+        run: node --check sentinel/monitor.mjs
+
+      - name: Ejecutar pruebas unitarias
+        run: node --test sentinel/monitor.test.mjs
