@@ -6,6 +6,19 @@ const OPTIONAL_CONSENTS = ['datos_salud', 'imagen_interna', 'imagen_publica'];
 
 const isText = (value) => Boolean(String(value || '').trim());
 const asBoolDecision = (value) => typeof value === 'boolean';
+const getScheduleBlocks = (site) => Array.isArray(site?.horarios_config)
+  ? site.horarios_config.filter((item) => item && typeof item === 'object')
+  : [];
+const hasScheduleDays = (site) => {
+  const blocks = getScheduleBlocks(site);
+  return blocks.length > 0 ? blocks.every((item) => isText(item.dias)) : isText(site?.dias_entrenamiento);
+};
+const hasScheduleTimes = (site) => {
+  const blocks = getScheduleBlocks(site);
+  return blocks.length > 0
+    ? blocks.every((item) => isText(item.inicio) && isText(item.fin))
+    : isText(site?.horarios_entrenamiento);
+};
 
 const getSetupRecord = async (academyId) => {
   const { data, error } = await supabase
@@ -100,7 +113,7 @@ const buildSetupStatus = async (academyId) => {
       .select('id,nombre,nombre_director,director_email,correo_academia,direccion,telefono,terminos_condiciones,terminos_matricula,rama_principal_id,subdominio,pagina_publica_activa')
       .eq('id', academyId).single(),
     supabase.from('sedes')
-      .select('id,nombre,direccion,ubicacion_entrenamiento,dias_entrenamiento,horarios_entrenamiento,principal,activa')
+      .select('id,nombre,direccion,ubicacion_entrenamiento,dias_entrenamiento,horarios_entrenamiento,horarios_config,principal,activa')
       .eq('academia_id', academyId).order('principal', { ascending: false }).order('created_at'),
     supabase.from('ramas')
       .select('id,nombre,disciplina,sede_id,principal,activa')
@@ -153,7 +166,11 @@ const buildSetupStatus = async (academyId) => {
 
   const structureSites = sites.map((site) => ({
     ...site,
-    operation_complete: Boolean((isText(site.direccion) || isText(site.ubicacion_entrenamiento)) && isText(site.dias_entrenamiento) && isText(site.horarios_entrenamiento)),
+    operation_complete: Boolean(
+      (isText(site.direccion) || isText(site.ubicacion_entrenamiento))
+      && hasScheduleDays(site)
+      && hasScheduleTimes(site)
+    ),
     ramas: branchesBySite.get(String(site.id)) || [],
   }));
 
@@ -176,8 +193,8 @@ const buildSetupStatus = async (academyId) => {
 
   const operationChecks = {
     locations: sites.length > 0 && sites.every((site) => isText(site.direccion) || isText(site.ubicacion_entrenamiento)),
-    days: sites.length > 0 && sites.every((site) => isText(site.dias_entrenamiento)),
-    schedules: sites.length > 0 && sites.every((site) => isText(site.horarios_entrenamiento)),
+    days: sites.length > 0 && sites.every(hasScheduleDays),
+    schedules: sites.length > 0 && sites.every(hasScheduleTimes),
   };
   const operationComplete = Object.values(operationChecks).every(Boolean);
 
