@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireDirector } = require('../middleware/professorAccess');
 const { PRIVACY_VERSION } = require('../services/privacyConsents');
 const {
   getAcademyConsentCatalog,
@@ -11,7 +12,7 @@ const {
 
 const normalizeDecision = (value) => value === true ? 'aceptado' : 'rechazado';
 
-router.get('/setup', authMiddleware, async (req, res) => {
+router.get('/setup', authMiddleware, requireDirector, async (req, res) => {
   try {
     const data = await buildSetupStatus(req.user.academia_id);
     return res.json({ success: true, data });
@@ -21,7 +22,7 @@ router.get('/setup', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/setup/preferencias', authMiddleware, async (req, res) => {
+router.put('/setup/preferencias', authMiddleware, requireDirector, async (req, res) => {
   try {
     await updateSetupPreferences(req.user.academia_id, req.body || {});
     const data = await buildSetupStatus(req.user.academia_id);
