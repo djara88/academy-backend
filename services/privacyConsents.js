@@ -27,10 +27,15 @@ const CONSENT_DEFINITIONS = {
   }
 };
 
-const getConsentCatalog = (academyName = 'la academia') => ({
-  version: PRIVACY_VERSION,
-  academy_name: academyName,
-  items: Object.entries(CONSENT_DEFINITIONS).map(([tipo, value]) => ({ tipo, ...value }))
-});
+const getConsentCatalog = (academyName = 'la academia', options = {}) => {
+  const enabledTypes = Array.isArray(options.enabledTypes) ? new Set(options.enabledTypes) : null;
+  return {
+    version: PRIVACY_VERSION,
+    academy_name: academyName,
+    items: Object.entries(CONSENT_DEFINITIONS)
+      .filter(([tipo, value]) => value.obligatorio === true || !enabledTypes || enabledTypes.has(tipo))
+      .map(([tipo, value]) => ({ tipo, ...value }))
+  };
+};
 
 module.exports = { PRIVACY_VERSION, CONSENT_DEFINITIONS, getConsentCatalog };
