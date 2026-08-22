@@ -2,9 +2,38 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { CONSENT_DEFINITIONS, PRIVACY_VERSION, getConsentCatalog } = require('../services/privacyConsents');
+const { PRIVACY_VERSION } = require('../services/privacyConsents');
+const {
+  getAcademyConsentCatalog,
+  buildSetupStatus,
+  updateSetupPreferences,
+} = require('../services/academySetupService');
 
 const normalizeDecision = (value) => value === true ? 'aceptado' : 'rechazado';
+
+router.get('/setup', authMiddleware, async (req, res) => {
+  try {
+    const data = await buildSetupStatus(req.user.academia_id);
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error cargando Puesta en Marcha:', error?.message || error);
+    return res.status(500).json({ success: false, error: 'No fue posible revisar la Puesta en Marcha de la academia.' });
+  }
+});
+
+router.put('/setup/preferencias', authMiddleware, async (req, res) => {
+  try {
+    await updateSetupPreferences(req.user.academia_id, req.body || {});
+    const data = await buildSetupStatus(req.user.academia_id);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      success: false,
+      error: error?.message || 'No fue posible guardar la configuración inicial.',
+      code: error?.code || undefined,
+    });
+  }
+});
 
 router.get('/textos', authMiddleware, async (req, res) => {
   try {
@@ -12,7 +41,8 @@ router.get('/textos', authMiddleware, async (req, res) => {
       .select('nombre')
       .eq('id', req.user.academia_id)
       .single();
-    res.json({ success: true, data: getConsentCatalog(academia?.nombre || 'la academia') });
+    const catalog = await getAcademyConsentCatalog(req.user.academia_id, academia?.nombre || 'la academia');
+    res.json({ success: true, data: catalog });
   } catch (error) {
     res.status(500).json({ success: false, error: 'No fue posible cargar los textos de privacidad.' });
   }
@@ -27,28 +57,31 @@ router.post('/alumno', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Jugador y apoderado son obligatorios.' });
     }
 
-    const [{ data: jugador }, { data: tutor }] = await Promise.all([
+    const [{ data: jugador }, { data: tutor }, { data: academia }] = await Promise.all([
       supabase.from('jugadores').select('id,nombre').eq('id', jugador_id).eq('academia_id', academia_id).maybeSingle(),
       supabase.from('tutores').select('id,nombre_completo').eq('id', tutor_id).eq('academia_id', academia_id).maybeSingle(),
+      supabase.from('academias').select('nombre').eq('id', academia_id).maybeSingle(),
     ]);
 
     if (!jugador || !tutor) {
       return res.status(404).json({ success: false, error: 'No se encontró el alumno o apoderado en esta academia.' });
     }
 
-    if (decisiones.aviso_privacidad !== true) {
-      return res.status(400).json({ success: false, error: 'El apoderado debe confirmar que recibió el aviso de privacidad.' });
+    const catalog = await getAcademyConsentCatalog(academia_id, academia?.nombre || 'la academia');
+    const catalogItems = Array.isArray(catalog.items) ? catalog.items : [];
+    const mandatoryMissing = catalogItems.some((item) => item.obligatorio === true && decisiones[item.tipo] !== true);
+    if (mandatoryMissing) {
+      return res.status(400).json({ success: false, error: 'El apoderado debe confirmar las autorizaciones obligatorias.' });
     }
 
     const now = new Date().toISOString();
-    const rows = Object.keys(CONSENT_DEFINITIONS).map((tipo) => {
-      const definition = CONSENT_DEFINITIONS[tipo];
-      const estado = normalizeDecision(decisiones[tipo]);
+    const rows = catalogItems.map((definition) => {
+      const estado = normalizeDecision(decisiones[definition.tipo]);
       return {
         academia_id,
         jugador_id,
         tutor_id,
-        tipo,
+        tipo: definition.tipo,
         estado,
         obligatorio: definition.obligatorio,
         version: PRIVACY_VERSION,
@@ -62,14 +95,17 @@ router.post('/alumno', authMiddleware, async (req, res) => {
       };
     });
 
-    const { error } = await supabase.from('consentimientos_alumnos')
-      .upsert(rows, { onConflict: 'jugador_id,tipo,version', ignoreDuplicates: false });
-    if (error) throw error;
+    if (rows.length) {
+      const { error } = await supabase.from('consentimientos_alumnos')
+        .upsert(rows, { onConflict: 'jugador_id,tipo,version', ignoreDuplicates: false });
+      if (error) throw error;
+    }
 
+    const privacyNotice = catalogItems.find((item) => item.tipo === 'aviso_privacidad');
     await supabase.from('jugadores').update({
       terminos_aceptados: true,
       fecha_aceptacion_terminos: now,
-      terminos_condiciones: CONSENT_DEFINITIONS.aviso_privacidad.contenido,
+      terminos_condiciones: privacyNotice?.contenido || null,
     }).eq('id', jugador_id).eq('academia_id', academia_id);
 
     res.status(201).json({ success: true, version: PRIVACY_VERSION, data: rows.map(({ contenido_snapshot, ...row }) => row) });
