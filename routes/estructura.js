@@ -9,6 +9,51 @@ router.use(authMiddleware, requireDirector);
 
 const safeText = (value, max = 180) => String(value ?? '').trim().slice(0, max);
 const ALLOWED_DISCIPLINES = ['Fútbol','Futsal','Básquetbol','Vóleibol','Tenis','Pádel','Hockey','Atletismo','Natación','Gimnasia','Karate','Artes marciales','Rugby','Otro'];
+const TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+const normalizeTrainingSchedules = (value) => {
+  if (!Array.isArray(value)) {
+    const err = new Error('Los horarios de entrenamiento deben enviarse como una lista.');
+    err.status = 400;
+    err.code = 'INVALID_TRAINING_SCHEDULES';
+    throw err;
+  }
+  if (value.length > 21) {
+    const err = new Error('Puedes configurar hasta 21 bloques de entrenamiento por sede.');
+    err.status = 400;
+    err.code = 'TOO_MANY_TRAINING_SCHEDULES';
+    throw err;
+  }
+
+  return value.map((item, index) => {
+    const dias = safeText(item?.dias, 120);
+    const inicio = safeText(item?.inicio, 5);
+    const fin = safeText(item?.fin, 5);
+    if (!dias || !TIME_RE.test(inicio) || !TIME_RE.test(fin)) {
+      const err = new Error(`Completa día, hora de inicio y hora de término del horario ${index + 1}.`);
+      err.status = 400;
+      err.code = 'INVALID_TRAINING_SCHEDULE';
+      throw err;
+    }
+    if (inicio >= fin) {
+      const err = new Error(`La hora de término del horario ${index + 1} debe ser posterior a la hora de inicio.`);
+      err.status = 400;
+      err.code = 'INVALID_TRAINING_TIME_RANGE';
+      throw err;
+    }
+    return { dias, inicio, fin };
+  });
+};
+
+const legacyScheduleProjection = (schedules) => {
+  const days = [...new Set((schedules || []).map((item) => item.dias).filter(Boolean))];
+  return {
+    dias_entrenamiento: days.length ? days.join(' · ') : null,
+    horarios_entrenamiento: schedules?.length
+      ? schedules.map((item) => `${item.dias}: ${item.inicio}–${item.fin}`).join(' | ')
+      : null,
+  };
+};
 
 const assertSite = async (academyId, siteId) => {
   const { data, error } = await supabase.from('sedes').select('*').eq('id', siteId).eq('academia_id', academyId).maybeSingle();
@@ -91,6 +136,11 @@ router.post('/sedes', async (req, res) => {
     if (!nombre) return res.status(400).json({ error: 'El nombre de la sede es obligatorio.' });
     await assertStructureCapacity(req.user.academia_id, 'sites');
 
+    const schedules = req.body?.horarios_config !== undefined
+      ? normalizeTrainingSchedules(req.body.horarios_config)
+      : [];
+    const scheduleProjection = schedules.length ? legacyScheduleProjection(schedules) : null;
+
     const payload = {
       academia_id: req.user.academia_id,
       nombre,
@@ -102,8 +152,9 @@ router.post('/sedes', async (req, res) => {
       pais: safeText(req.body?.pais, 80) || 'Chile',
       telefono: safeText(req.body?.telefono, 50) || null,
       ubicacion_entrenamiento: safeText(req.body?.ubicacion_entrenamiento, 300) || null,
-      dias_entrenamiento: safeText(req.body?.dias_entrenamiento, 500) || null,
-      horarios_entrenamiento: safeText(req.body?.horarios_entrenamiento, 500) || null,
+      dias_entrenamiento: scheduleProjection?.dias_entrenamiento ?? (safeText(req.body?.dias_entrenamiento, 500) || null),
+      horarios_entrenamiento: scheduleProjection?.horarios_entrenamiento ?? (safeText(req.body?.horarios_entrenamiento, 500) || null),
+      horarios_config: schedules,
       principal: Boolean(req.body?.principal),
       activa: req.body?.activa !== false,
     };
@@ -133,6 +184,13 @@ router.patch('/sedes/:id', async (req, res) => {
     ['nombre','codigo','direccion','ciudad','comuna','region','pais','telefono','ubicacion_entrenamiento','dias_entrenamiento','horarios_entrenamiento'].forEach((key) => {
       if (req.body?.[key] !== undefined) changes[key] = safeText(req.body[key], key === 'nombre' ? 180 : 500) || null;
     });
+    if (req.body?.horarios_config !== undefined) {
+      const schedules = normalizeTrainingSchedules(req.body.horarios_config);
+      const projection = legacyScheduleProjection(schedules);
+      changes.horarios_config = schedules;
+      changes.dias_entrenamiento = projection.dias_entrenamiento;
+      changes.horarios_entrenamiento = projection.horarios_entrenamiento;
+    }
     if (req.body?.activa !== undefined) changes.activa = Boolean(req.body.activa);
     if (req.body?.principal === true) {
       await supabase.from('sedes').update({ principal: false }).eq('academia_id', req.user.academia_id);
