@@ -31,20 +31,23 @@ const FEATURES = Object.freeze({
   ADVANCED_COMMUNICATIONS: 'comunicaciones_avanzadas',
 });
 
-// Formación cubre la operación diaria completa de la academia. Los amistosos
-// permiten probar la agenda competitiva sin entregar el motor premium de
-// torneos, rendimiento, PB/SB y analítica. La página pública propia es un
-// beneficio base de Lestra y está incluida en los tres planes.
+// Base compartida por los tres planes. Amistosos queda fuera de esta base porque
+// es una herramienta exclusiva de Formación: Competencia y Alto Rendimiento
+// programan su actividad desde el motor de Eventos/Torneos, evitando duplicidad.
 const BASE_FEATURES = [
   FEATURES.CORE,
   FEATURES.FINANCE,
   FEATURES.UNIFORMS,
   FEATURES.PROFESSORS,
   FEATURES.EVALUATIONS,
-  FEATURES.FRIENDLIES,
   FEATURES.PUBLIC_PAGE,
   FEATURES.BASIC_EXPORTS,
   FEATURES.OPERATIONAL_NOTIFICATIONS,
+];
+
+const FORMATION_FEATURES = [
+  ...BASE_FEATURES,
+  FEATURES.FRIENDLIES,
 ];
 
 const COMPETITION_FEATURES = [
@@ -69,7 +72,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     siteLimit: 1,
     branchLimit: 1,
     priceClp: 44990,
-    features: BASE_FEATURES,
+    features: FORMATION_FEATURES,
   },
   [PLAN_CODES.COMPETENCIA]: {
     code: PLAN_CODES.COMPETENCIA,
