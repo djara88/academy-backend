@@ -223,6 +223,7 @@ app.use('/api/uniformes', uniformesRoutes);
 app.use('/api/profesores', professorOpsRoutes);
 app.use('/api/profesores', profesoresMultiramaRoutes);
 app.use('/api/profesores', profesoresRoutes);
+app.use('/api/apoderados/me/pagos', require('./routes/guardianPaymentPortal'));
 app.use('/api/apoderados/me/inscripciones-deportivas', guardianEnrollmentsRoutes);
 app.use('/api/apoderados', apoderadosRoutes);
 app.use('/api/dashboard', dashboardRoutes);
