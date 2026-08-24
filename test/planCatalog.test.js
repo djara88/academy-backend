@@ -15,6 +15,18 @@ test('la página pública propia está incluida en los tres planes', () => {
   }
 });
 
+test('Amistosos es exclusivo de Formación y no aparece en prueba Full ni planes superiores', () => {
+  const formation = getAcademyEntitlements({ plan_codigo: 'formacion', plan: 'Formación' });
+  const competition = getAcademyEntitlements({ plan_codigo: 'competencia', plan: 'Competencia' });
+  const highPerformance = getAcademyEntitlements({ plan_codigo: 'alto_rendimiento', plan: 'Alto Rendimiento' });
+  const trial = getAcademyEntitlements({ plan_codigo: 'formacion', plan: 'Prueba 15 Días', trial_ends_at: '2099-12-31' });
+
+  assert.equal(formation.features.includes(FEATURES.FRIENDLIES), true);
+  assert.equal(competition.features.includes(FEATURES.FRIENDLIES), false);
+  assert.equal(highPerformance.features.includes(FEATURES.FRIENDLIES), false);
+  assert.equal(trial.features.includes(FEATURES.FRIENDLIES), false);
+});
+
 test('Apoderados PRO es un complemento pagado en planes activos', () => {
   for (const plan_codigo of ['formacion', 'competencia', 'alto_rendimiento']) {
     const withoutAddon = getAcademyEntitlements({ plan_codigo, licencia_apoderados: false });
@@ -59,6 +71,7 @@ test('la prueba Full habilita Apoderados PRO y capacidad premium', () => {
   assert.equal(trial.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
   assert.equal(trial.features.includes(FEATURES.TOURNAMENTS), true);
   assert.equal(trial.features.includes(FEATURES.MATCHES), true);
+  assert.equal(trial.features.includes(FEATURES.FRIENDLIES), false);
   assert.equal(trial.addOns.guardiansIncludedByTrial, true);
   assert.equal(trial.limits.professors, 30);
   assert.equal(trial.limits.players, null);
