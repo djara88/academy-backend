@@ -22,7 +22,8 @@ const getAcademyName = async (academyId) => {
 
 const academyMessage = (academyName, content) => {
   const name = normalizeAcademyName(academyName);
-  return `🏟️ *${name}*\n\n${String(content || '').trim()}\n\n— Equipo de *${name}*`;
+  const body = String(content || '').trim();
+  return `🏟️ *${name}*\n🟢 *LESTRA · DEPORTIVO*\n━━━━━━━━━━━━\n\n${body}\n\n━━━━━━━━━━━━\n_Gestión deportiva en un solo lugar_\n— Equipo de *${name}*`;
 };
 
 module.exports = { academyMessage, getAcademyName, normalizeAcademyName };
