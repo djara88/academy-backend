@@ -23,6 +23,13 @@ const normalizePhone = (value) => {
   return phone;
 };
 const attendanceStatus = (value) => ['Presente', 'Ausente', 'Justificado'].includes(value) ? value : 'Presente';
+const dateRange = (month, year) => {
+  const monthNumber = Math.min(12, Math.max(1, Number(month) || new Date().getMonth() + 1));
+  const yearNumber = Math.min(2100, Math.max(2020, Number(year) || new Date().getFullYear()));
+  const first = `${yearNumber}-${String(monthNumber).padStart(2, '0')}-01`;
+  const lastDay = new Date(Date.UTC(yearNumber, monthNumber, 0)).getUTCDate();
+  return { first, last: `${yearNumber}-${String(monthNumber).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}` };
+};
 
 const duplicateAttendanceMessage = (students, duplicateIds, date) => {
   const duplicates = new Set((duplicateIds || []).map(String));
@@ -278,6 +285,162 @@ router.post('/', async (req, res) => {
         ? 'La asistencia de uno o más alumnos ya fue registrada para esta rama en la fecha seleccionada. No se creó una nueva sesión.'
         : (error?.message || 'No fue posible registrar la sesión.'),
     });
+  }
+});
+
+// Métricas y detalle operativo. Este endpoint se monta antes del router histórico,
+// por lo que corrige los duplicados antiguos sin eliminar trazabilidad de la BD.
+router.get('/metricas', async (req, res) => {
+  try {
+    const academyId = req.user.academia_id;
+    const branchId = safeText(req.query?.rama_id, 80);
+    const { first, last } = dateRange(req.query?.mes, req.query?.anio);
+
+    let trainingQuery = supabase.from('entrenamientos')
+      .select('id,categoria_id,rama_id,fecha,hora,lugar,estado,es_recuperacion,created_at,categorias(id,nombre),ramas(id,nombre,disciplina)')
+      .eq('academia_id', academyId)
+      .gte('fecha', first)
+      .lte('fecha', last);
+    if (branchId) trainingQuery = trainingQuery.eq('rama_id', branchId);
+
+    const { data: trainings, error: trainingError } = await trainingQuery;
+    if (trainingError) throw trainingError;
+    const list = trainings || [];
+    const trainingMap = new Map(list.map((item) => [String(item.id), item]));
+    const ids = list.map((item) => item.id);
+
+    let attendance = [];
+    if (ids.length) {
+      const result = await supabase.from('asistencias')
+        .select('id,estado,jugador_id,entrenamiento_id,created_at,actualizado_at,jugadores(id,nombre)')
+        .in('entrenamiento_id', ids);
+      if (result.error) throw result.error;
+      attendance = result.data || [];
+    }
+
+    // Sesiones repetidas por reenvíos históricos se cuentan una sola vez por
+    // rama + categoría + fecha + tipo de sesión, conservando la más reciente.
+    const uniqueSessionMap = new Map();
+    for (const training of list) {
+      const sessionKey = [
+        training.estado || '',
+        training.rama_id || '',
+        training.categoria_id || '',
+        training.fecha || '',
+        training.es_recuperacion ? 'REC' : 'REG',
+      ].join('|');
+      const previous = uniqueSessionMap.get(sessionKey);
+      const currentTime = Date.parse(training.created_at || `${training.fecha}T00:00:00Z`) || 0;
+      const previousTime = previous ? (Date.parse(previous.created_at || `${previous.fecha}T00:00:00Z`) || 0) : -1;
+      if (!previous || currentTime >= previousTime) uniqueSessionMap.set(sessionKey, training);
+    }
+    const uniqueSessions = [...uniqueSessionMap.values()];
+
+    // La unidad de asistencia es alumno + rama + fecha. Para datos históricos
+    // duplicados se conserva el registro más reciente, sin borrar los originales.
+    const effectiveAttendanceMap = new Map();
+    for (const item of attendance) {
+      const training = trainingMap.get(String(item.entrenamiento_id));
+      if (!training || training.estado !== 'Realizado' || !item.jugador_id) continue;
+      const attendanceKey = `${item.jugador_id}|${training.rama_id || ''}|${training.fecha || ''}`;
+      const currentTimestamp = item.actualizado_at || item.created_at || training.created_at || `${training.fecha}T00:00:00Z`;
+      const previous = effectiveAttendanceMap.get(attendanceKey);
+      const previousTimestamp = previous?.timestamp || '';
+      if (!previous || Date.parse(currentTimestamp) >= Date.parse(previousTimestamp)) {
+        effectiveAttendanceMap.set(attendanceKey, { item, training, timestamp: currentTimestamp });
+      }
+    }
+
+    const catStats = new Map();
+    const studentStats = new Map();
+    let presentes = 0;
+    let ausentes = 0;
+    let justificados = 0;
+    const detail = [];
+
+    for (const { item, training, timestamp } of effectiveAttendanceMap.values()) {
+      const state = attendanceStatus(item.estado);
+      if (state === 'Presente') presentes += 1;
+      else if (state === 'Ausente') ausentes += 1;
+      else if (state === 'Justificado') justificados += 1;
+
+      if (training.categoria_id) {
+        const current = catStats.get(String(training.categoria_id)) || {
+          nombre: training.categorias?.nombre || 'Categoría',
+          presentes: 0,
+          total: 0,
+        };
+        current.total += 1;
+        if (state === 'Presente') current.presentes += 1;
+        catStats.set(String(training.categoria_id), current);
+      }
+
+      if (item.jugador_id && item.jugadores) {
+        const current = studentStats.get(String(item.jugador_id)) || {
+          nombre: item.jugadores.nombre,
+          presentes: 0,
+          total: 0,
+        };
+        current.total += 1;
+        if (state === 'Presente') current.presentes += 1;
+        studentStats.set(String(item.jugador_id), current);
+      }
+
+      detail.push({
+        registro_id: item.id,
+        entrenamiento_id: training.id,
+        fecha: training.fecha,
+        hora: training.hora || '',
+        registrado_at: timestamp || null,
+        alumno: item.jugadores?.nombre || 'Alumno',
+        jugador_id: item.jugador_id,
+        estado: state,
+        categoria: training.categorias?.nombre || 'Categoría',
+        rama: training.ramas?.nombre || '',
+        disciplina: training.ramas?.disciplina || '',
+        lugar: training.lugar || '',
+        es_recuperacion: Boolean(training.es_recuperacion),
+      });
+    }
+
+    detail.sort((a, b) => {
+      const byDate = String(b.fecha || '').localeCompare(String(a.fecha || ''));
+      if (byDate !== 0) return byDate;
+      const byTime = String(b.hora || '').localeCompare(String(a.hora || ''));
+      if (byTime !== 0) return byTime;
+      return String(b.registrado_at || '').localeCompare(String(a.registrado_at || ''));
+    });
+
+    const totalRecords = presentes + ausentes + justificados;
+    const categories = [...catStats.values()]
+      .map((item) => ({ ...item, porcentaje: item.total ? Math.round((item.presentes / item.total) * 100) : 0 }))
+      .sort((a, b) => b.porcentaje - a.porcentaje || b.presentes - a.presentes);
+    const students = [...studentStats.values()]
+      .map((item) => ({ ...item, porcentaje: item.total ? Math.round((item.presentes / item.total) * 100) : 0 }))
+      .sort((a, b) => b.porcentaje - a.porcentaje || b.presentes - a.presentes || a.nombre.localeCompare(b.nombre, 'es'));
+
+    return res.json({
+      success: true,
+      data: {
+        global: {
+          totalClases: uniqueSessions.filter((item) => item.estado === 'Realizado').length,
+          canceladas: uniqueSessions.filter((item) => item.estado === 'Cancelado').length,
+          recuperativas: uniqueSessions.filter((item) => item.es_recuperacion).length,
+          porcentajeGlobal: totalRecords ? Math.round((presentes / totalRecords) * 100) : 0,
+          totalPresentes: presentes,
+          totalAusentes: ausentes,
+          totalJustificados: justificados,
+        },
+        categorias: categories,
+        jugadores: students,
+        registros: detail,
+        rama_id: branchId || null,
+        periodo: { desde: first, hasta: last },
+      },
+    });
+  } catch (error) {
+    console.error('Error cargando métricas operativas de asistencia:', error?.message || error);
+    return res.status(500).json({ success: false, error: error?.message || 'No fue posible cargar métricas.' });
   }
 });
 
