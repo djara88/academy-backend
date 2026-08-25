@@ -24,6 +24,18 @@ const normalizePhone = (value) => {
 };
 const attendanceStatus = (value) => ['Presente', 'Ausente', 'Justificado'].includes(value) ? value : 'Presente';
 
+const duplicateAttendanceMessage = (students, duplicateIds, date) => {
+  const duplicates = new Set((duplicateIds || []).map(String));
+  const names = (students || [])
+    .filter((student) => duplicates.has(String(student.id)))
+    .map((student) => student.nombre)
+    .filter(Boolean);
+  const preview = names.slice(0, 3).join(', ');
+  const remaining = Math.max(0, names.length - 3);
+  const who = preview ? `${preview}${remaining ? ` y ${remaining} más` : ''}` : 'uno o más alumnos';
+  return `La asistencia de ${who} ya fue registrada para esta rama el ${date}. No se creó una nueva sesión.`;
+};
+
 const notifyAbsences = async ({ academyId, category, branch, training, students, attendance }) => {
   const absentIds = new Set(
     attendance
@@ -151,6 +163,38 @@ router.post('/', async (req, res) => {
       if (eligibleStudents.length !== studentIds.length) {
         return res.status(403).json({ success: false, error: 'La asistencia contiene un alumno ajeno a esta rama/categoría.' });
       }
+
+      // Una asistencia operativa equivale a un estado diario por alumno dentro
+      // de una rama. El preflight evita crear entrenamientos huérfanos y entrega
+      // un mensaje claro antes de que actúe la protección transaccional de BD.
+      const { data: sameDayTrainings, error: sameDayTrainingError } = await supabase
+        .from('entrenamientos')
+        .select('id')
+        .eq('academia_id', academyId)
+        .eq('rama_id', category.rama_id)
+        .eq('fecha', date)
+        .eq('estado', 'Realizado');
+      if (sameDayTrainingError) throw sameDayTrainingError;
+
+      const sameDayIds = (sameDayTrainings || []).map((item) => item.id);
+      if (sameDayIds.length && studentIds.length) {
+        const { data: previousAttendance, error: previousAttendanceError } = await supabase
+          .from('asistencias')
+          .select('jugador_id')
+          .in('entrenamiento_id', sameDayIds)
+          .in('jugador_id', studentIds);
+        if (previousAttendanceError) throw previousAttendanceError;
+
+        const duplicateIds = uniqueIds((previousAttendance || []).map((item) => item.jugador_id));
+        if (duplicateIds.length) {
+          return res.status(409).json({
+            success: false,
+            code: 'ATTENDANCE_ALREADY_RECORDED',
+            error: duplicateAttendanceMessage(eligibleStudents, duplicateIds, date),
+            duplicate_player_ids: duplicateIds,
+          });
+        }
+      }
     }
 
     const { data: training, error: trainingError } = await supabase.from('entrenamientos').insert({
@@ -181,7 +225,16 @@ router.post('/', async (req, res) => {
       const { error: attendanceError } = await supabase
         .from('asistencias')
         .upsert(rows, { onConflict: 'entrenamiento_id,jugador_id' });
-      if (attendanceError) throw attendanceError;
+      if (attendanceError) {
+        // Si dos solicitudes compiten, el trigger de BD gana. Retiramos la
+        // sesión recién creada para no dejar registros vacíos/duplicados.
+        try {
+          await supabase.from('entrenamientos').delete().eq('id', training.id).eq('academia_id', academyId);
+        } catch (cleanupError) {
+          console.error('No se pudo limpiar entrenamiento tras rechazo de asistencia:', cleanupError?.message || cleanupError);
+        }
+        throw attendanceError;
+      }
 
       if (req.body?.notificar_ausencias !== false) {
         try {
@@ -217,10 +270,13 @@ router.post('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Error registrando sesión con feedback familiar:', error?.message || error);
-    return res.status(error?.status || 500).json({
+    const duplicateAttendance = error?.code === '23505' && /asistencia/i.test(String(error?.message || ''));
+    return res.status(duplicateAttendance ? 409 : (error?.status || 500)).json({
       success: false,
-      code: error?.code || undefined,
-      error: error?.message || 'No fue posible registrar la sesión.',
+      code: duplicateAttendance ? 'ATTENDANCE_ALREADY_RECORDED' : (error?.code || undefined),
+      error: duplicateAttendance
+        ? 'La asistencia de uno o más alumnos ya fue registrada para esta rama en la fecha seleccionada. No se creó una nueva sesión.'
+        : (error?.message || 'No fue posible registrar la sesión.'),
     });
   }
 });
