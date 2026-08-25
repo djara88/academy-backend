@@ -20,9 +20,15 @@ const getAcademyName = async (academyId) => {
   return normalizeAcademyName(data?.nombre);
 };
 
+const formatLestraContent = (content) => String(content || '')
+  .trim()
+  .replace(/^💙 \*SEGUIMIENTO DE ASISTENCIA\*/u, '🟢 *ASISTENCIA · SEGUIMIENTO*')
+  .replace(/^💳 \*PAGO PENDIENTE\*/u, '🟢 *FINANZAS · PAGO PENDIENTE*')
+  .replace(/^💳 \*ESTADO DE CUENTA\*/u, '🟢 *FINANZAS · ESTADO DE CUENTA*');
+
 const academyMessage = (academyName, content) => {
   const name = normalizeAcademyName(academyName);
-  const body = String(content || '').trim();
+  const body = formatLestraContent(content);
   return `🏟️ *${name}*\n🟢 *LESTRA · DEPORTIVO*\n━━━━━━━━━━━━\n\n${body}\n\n━━━━━━━━━━━━\n_Gestión deportiva en un solo lugar_\n— Equipo de *${name}*`;
 };
 
