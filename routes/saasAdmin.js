@@ -219,7 +219,7 @@ router.patch('/subscription-change-requests/:id', async (req, res) => {
 
 router.get('/cobros', async (_req, res) => {
   const { data, error } = await supabase.from('plataforma_cobros')
-    .select('*,academias(id,nombre,plan)').order('fecha_emision', { ascending: false }).limit(300);
+    .select('*,academias:academias!plataforma_cobros_academia_id_fkey(id,nombre,plan)').order('fecha_emision', { ascending: false }).limit(300);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true, data: data || [] });
 });
