@@ -45,20 +45,22 @@ const listJerseyNumbers = async ({
   const excludedPlayer = safeText(excludePlayerId, 80) || null;
   const { branch, category } = await resolveJerseyScope({ academyId, branchId: cleanBranchId, categoryId: cleanCategoryId });
 
+  // Este roster ya usa jugador_categoria cuando hay categoría, por lo que refleja
+  // la membresía muchos-a-muchos real y no solo categoria_id de referencia.
   const enrollments = await getActiveEnrollments({
     academyId,
     branchId: branch.id,
     categoryId: category?.id || undefined,
   });
-  const scopedEnrollments = excludedPlayer
-    ? enrollments.filter((item) => String(item.jugador_id) !== String(excludedPlayer))
-    : enrollments;
   const players = await getPlayersForEnrollments(
     academyId,
-    scopedEnrollments,
+    enrollments,
     'id,nombre,numero_camiseta',
   );
-  const assigned = players
+  const availabilityPlayers = excludedPlayer
+    ? players.filter((player) => String(player.id) !== String(excludedPlayer))
+    : players;
+  const assigned = availabilityPlayers
     .filter((player) => player.numero_camiseta != null)
     .map((player) => ({ id: player.id, nombre: player.nombre, numero: player.numero_camiseta }));
 
@@ -85,6 +87,11 @@ const listJerseyNumbers = async ({
 
   return {
     ...buildJerseyMap({ assigned, reserved }),
+    players: players.map((player) => ({
+      id: player.id,
+      name: player.nombre,
+      jerseyNumber: player.numero_camiseta == null ? null : Number(player.numero_camiseta),
+    })),
     scope: {
       rama: { id: branch.id, nombre: branch.nombre, disciplina: branch.disciplina },
       categoria: category ? { id: category.id, nombre: category.nombre } : null,
