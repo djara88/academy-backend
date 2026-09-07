@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   normalizeJerseyNumber,
   buildJerseyMap,
-} = require('../services/jerseyNumbers');
+} = require('../services/jerseyNumberRules');
 
 test('normalizeJerseyNumber accepts 1 through 99 and null', () => {
   assert.equal(normalizeJerseyNumber(null), null);
