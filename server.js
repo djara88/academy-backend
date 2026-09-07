@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const supabase = require('./config/supabase');
 const authMiddleware = require('./middleware/auth');
+const jerseyReservationGuard = require('./middleware/jerseyReservationGuard');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { requireFeature } = require('./middleware/planAccess');
 const { FEATURES } = require('./services/planCatalog');
@@ -180,6 +181,8 @@ app.use('/api/presence', presenceRoutes);
 app.use('/api/saas-admin/presence', presenceAdminRoutes);
 app.use('/api/jugadores', documentoJugadorRoutes);
 app.use('/api/consentimientos', consentimientoRoutes);
+app.post('/api/prematriculas', authMiddleware, jerseyReservationGuard);
+app.put('/api/prematriculas/:id', authMiddleware, jerseyReservationGuard);
 app.use('/api/prematriculas', prematriculaRoutes);
 app.use('/api/importaciones', importacionRoutes);
 
