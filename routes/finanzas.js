@@ -16,6 +16,39 @@ const failIfError = (result, context) => {
 
 const rows = (result, context) => failIfError(result, context) || [];
 const asMoney = (value) => Number(value || 0);
+const idempotencyKey = (value) => String(value || '').trim().slice(0, 160) || null;
+const normalizedText = (value) => String(value || '').trim();
+
+const findIdempotentRow = async (table, academyId, key) => {
+  if (!key) return null;
+  const { data, error } = await supabase.from(table).select('*')
+    .eq('academia_id', academyId).eq('idempotency_key', key).maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+const sameChargeWrite = (existing, payload) => Boolean(existing)
+  && String(existing.jugador_id || '') === String(payload.jugador_id || '')
+  && normalizedText(existing.concepto) === normalizedText(payload.concepto)
+  && normalizedText(existing.tipo_concepto) === normalizedText(payload.tipo_concepto)
+  && asMoney(existing.monto) === asMoney(payload.monto)
+  && String(existing.fecha_vencimiento || '') === String(payload.fecha_vencimiento || '')
+  && normalizedText(existing.observaciones) === normalizedText(payload.observaciones);
+
+const sameExpenseWrite = (existing, payload) => Boolean(existing)
+  && normalizedText(existing.concepto) === normalizedText(payload.concepto)
+  && normalizedText(existing.categoria_gasto) === normalizedText(payload.categoria_gasto)
+  && normalizedText(existing.centro_costo) === normalizedText(payload.centro_costo)
+  && asMoney(existing.monto) === asMoney(payload.monto)
+  && normalizedText(existing.metodo_pago) === normalizedText(payload.metodo_pago)
+  && String(existing.fecha_gasto || '') === String(payload.fecha_gasto || '')
+  && normalizedText(existing.observaciones) === normalizedText(payload.observaciones);
+
+const idempotentConflict = (res) => res.status(409).json({
+  success: false,
+  code: 'IDEMPOTENCY_KEY_REUSED',
+  error: 'Esta operación ya fue utilizada con datos diferentes. Genera una nueva operación antes de intentarlo otra vez.',
+});
 
 const BILLING_CACHE_TTL_MS = Math.max(10_000, Number(process.env.FINANCE_BILLING_CACHE_TTL_MS || 60_000));
 const billingCache = new Map();
@@ -200,7 +233,8 @@ router.post('/cobros', authMiddleware, async (req, res) => {
     if (!jugador) return res.status(404).json({ success: false, error: 'Jugador no encontrado en la academia.' });
 
     const dueDate = fecha_vencimiento || todayInChile();
-    const data = failIfError(await supabase.from('cobros').insert([{
+    const key = idempotencyKey(req.body.idempotency_key);
+    const payload = {
       academia_id,
       jugador_id,
       concepto: concepto.trim(),
@@ -209,11 +243,28 @@ router.post('/cobros', authMiddleware, async (req, res) => {
       monto_pagado: 0,
       estado: 'Pendiente',
       fecha_vencimiento: dueDate,
-      observaciones: observaciones || null
-    }]).select().single(), 'No se pudo crear el cobro');
+      observaciones: observaciones || null,
+      idempotency_key: key,
+    };
+
+    const existing = await findIdempotentRow('cobros', academia_id, key);
+    if (existing) {
+      if (!sameChargeWrite(existing, payload)) return idempotentConflict(res);
+      return res.json({ success: true, idempotent: true, data: existing });
+    }
+
+    const insertResult = await supabase.from('cobros').insert([payload]).select().single();
+    if (insertResult.error) {
+      if (insertResult.error.code === '23505' && key) {
+        const raced = await findIdempotentRow('cobros', academia_id, key);
+        if (raced && sameChargeWrite(raced, payload)) return res.json({ success: true, idempotent: true, data: raced });
+        if (raced) return idempotentConflict(res);
+      }
+      throw insertResult.error;
+    }
 
     await recalculateFinancialStatus(academia_id);
-    res.status(201).json({ success: true, data });
+    res.status(201).json({ success: true, idempotent: false, data: insertResult.data });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -240,7 +291,8 @@ router.post('/egresos', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Concepto y monto son obligatorios.' });
     }
 
-    const data = failIfError(await supabase.from('egresos').insert([{
+    const key = idempotencyKey(req.body.idempotency_key);
+    const payload = {
       academia_id,
       concepto: concepto.trim(),
       categoria_gasto: categoria_gasto || 'Otros',
@@ -248,9 +300,26 @@ router.post('/egresos', authMiddleware, async (req, res) => {
       monto,
       metodo_pago: metodo_pago || 'Transferencia',
       fecha_gasto: fecha_gasto || todayInChile(),
-      observaciones: observaciones || null
-    }]).select().single(), 'No se pudo crear el egreso');
-    res.status(201).json({ success: true, data });
+      observaciones: observaciones || null,
+      idempotency_key: key,
+    };
+
+    const existing = await findIdempotentRow('egresos', academia_id, key);
+    if (existing) {
+      if (!sameExpenseWrite(existing, payload)) return idempotentConflict(res);
+      return res.json({ success: true, idempotent: true, data: existing });
+    }
+
+    const insertResult = await supabase.from('egresos').insert([payload]).select().single();
+    if (insertResult.error) {
+      if (insertResult.error.code === '23505' && key) {
+        const raced = await findIdempotentRow('egresos', academia_id, key);
+        if (raced && sameExpenseWrite(raced, payload)) return res.json({ success: true, idempotent: true, data: raced });
+        if (raced) return idempotentConflict(res);
+      }
+      throw insertResult.error;
+    }
+    res.status(201).json({ success: true, idempotent: false, data: insertResult.data });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
