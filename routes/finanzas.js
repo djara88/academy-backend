@@ -327,15 +327,27 @@ router.post('/egresos', authMiddleware, async (req, res) => {
 
 router.delete('/egresos/:id', authMiddleware, async (req, res) => {
   try {
-    const data = failIfError(await supabase.from('egresos').update({
+    const academyId = req.user.academia_id;
+    const cancellation = await supabase.from('egresos').update({
       anulado_at: new Date().toISOString(),
       anulado_por: req.user.id
     })
       .eq('id', req.params.id)
-      .eq('academia_id', req.user.academia_id)
-      .select('id').maybeSingle(), 'No se pudo eliminar el egreso');
-    if (!data) return res.status(404).json({ success: false, error: 'Egreso no encontrado.' });
-    res.json({ success: true, message: 'Egreso anulado correctamente.' });
+      .eq('academia_id', academyId)
+      .is('anulado_at', null)
+      .select('id,anulado_at').maybeSingle();
+    if (cancellation.error) throw cancellation.error;
+    if (cancellation.data) return res.json({ success: true, idempotent: false, message: 'Egreso anulado correctamente.', data: cancellation.data });
+
+    const existing = await supabase.from('egresos').select('id,anulado_at')
+      .eq('id', req.params.id)
+      .eq('academia_id', academyId)
+      .maybeSingle();
+    if (existing.error) throw existing.error;
+    if (!existing.data) return res.status(404).json({ success: false, error: 'Egreso no encontrado.' });
+    if (existing.data.anulado_at) return res.json({ success: true, idempotent: true, message: 'El egreso ya estaba anulado.', data: existing.data });
+
+    return res.status(409).json({ success: false, error: 'El egreso cambió mientras se intentaba anular. Sincroniza y vuelve a intentarlo.' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
