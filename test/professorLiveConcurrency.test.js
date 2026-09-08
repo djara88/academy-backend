@@ -18,7 +18,8 @@ test('marcador y etapa usan compare-and-swap sobre live_updated_at', () => {
   assert.ok(patchBlock.length > 500);
   assert.match(patchBlock, /String\(match\.live_updated_at \|\| ''\) !== expectedVersion/);
   assert.match(patchBlock, /\.eq\('live_updated_at', expectedVersion\)/);
-  assert.match(patchBlock, /LIVE_STATE_CONFLICT/);
+  assert.match(patchBlock, /conflictPayload\(req\.user, match\.id\)/);
+  assert.match(route, /code: 'LIVE_STATE_CONFLICT'/);
 });
 
 test('estadísticas individuales usan la versión del mismo encuentro', () => {
