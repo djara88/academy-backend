@@ -151,6 +151,7 @@ const attendanceRosterRoutes = require('./routes/attendanceRoster');
 const uniformesRoutes = require('./routes/uniformes');
 const uniformesMultiramaRoutes = require('./routes/uniformesMultirama');
 const jerseyNumberRoutes = require('./routes/jerseyNumbers');
+const professorLiveConcurrencyRoutes = require('./routes/professorLiveConcurrency');
 const professorOpsRoutes = require('./routes/professorOps');
 const professorBoardsRoutes = require('./routes/professorBoards');
 const profesoresRoutes = require('./routes/profesores');
@@ -226,6 +227,7 @@ app.use('/api/entrenamientos', entrenamientosRoutes);
 app.use('/api/uniformes/dorsales', jerseyNumberRoutes);
 app.use('/api/uniformes', uniformesMultiramaRoutes);
 app.use('/api/uniformes', uniformesRoutes);
+app.use('/api/profesores', professorLiveConcurrencyRoutes);
 app.use('/api/profesores', professorOpsRoutes);
 app.use('/api/profesores', professorBoardsRoutes);
 app.use('/api/profesores', profesoresMultiramaRoutes);
@@ -258,29 +260,3 @@ const subscriptionRenewalAutomation = startSubscriptionRenewalAutomation();
 server.requestTimeout = Math.max(15000, Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000));
 server.headersTimeout = Math.min(server.requestTimeout, Math.max(5000, Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 15000)));
 server.keepAliveTimeout = Math.max(1000, Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || 5000));
-
-let shuttingDown = false;
-const gracefulShutdown = (signal) => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  systemMetricsSampler?.stop?.();
-  presenceSampler?.stop?.();
-  academyRegistrationNotifier?.stop?.();
-  collectionAutomation?.stop?.();
-  subscriptionRenewalAutomation?.stop?.();
-  console.log(`${signal} recibido. Cerrando conexiones de forma ordenada...`);
-  const forceTimer = setTimeout(() => {
-    console.error('Cierre ordenado excedió 25 segundos; cerrando conexiones restantes.');
-    server.closeAllConnections?.();
-    process.exit(1);
-  }, 25000);
-  forceTimer.unref?.();
-  server.close(() => {
-    clearTimeout(forceTimer);
-    console.log('Servidor HTTP cerrado correctamente.');
-    process.exit(0);
-  });
-};
-
-process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.once('SIGINT', () => gracefulShutdown('SIGINT'));
