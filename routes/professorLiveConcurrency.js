@@ -2,7 +2,15 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireProfessor } = require('../middleware/professorAccess');
-const { publicProfile, resolveCompetitiveProfile } = require('../services/competitiveStatsCatalog');
+const { getStudentsForScope } = require('../services/branchContext');
+const {
+  COMPETITIVE_STATS_VERSION,
+  publicProfile,
+  resolveCompetitiveProfile,
+  sanitizeCompetitiveMetrics,
+  metricsFromRow,
+  legacyStatColumns,
+} = require('../services/competitiveStatsCatalog');
 
 const router = express.Router();
 
@@ -35,12 +43,24 @@ const requireAssignedMatch = async (user, matchId) => {
   return match;
 };
 
-const logLiveEvent = async ({ user, matchId, action, detail = {} }) => {
+const requireAssignedPlayer = async (user, match, playerId) => {
+  const students = await getStudentsForScope({
+    academyId: user.academia_id,
+    branchId: match.rama_id,
+    categoryId: match.categoria_id,
+    playerSelect: 'id,nombre',
+  });
+  const player = (students || []).find((item) => String(item.id) === String(playerId));
+  if (!player) throw Object.assign(new Error('El alumno no pertenece a tu categoría asignada.'), { status: 403 });
+  return player;
+};
+
+const logLiveEvent = async ({ user, matchId, action, playerId = null, detail = {} }) => {
   const { error } = await supabase.from('partido_live_eventos').insert({
     academia_id: user.academia_id,
     partido_id: matchId,
     profesor_id: user.id,
-    jugador_id: null,
+    jugador_id: playerId,
     accion: action,
     detalle: detail,
   });
@@ -61,6 +81,65 @@ const conflictPayload = async (user, matchId, message = 'El encuentro cambió en
   error: message,
   data: await readCurrentMatch(user.academia_id, matchId),
 });
+
+const rpcFailureStatus = (code) => {
+  if (code === 'LIVE_VERSION_REQUIRED') return 428;
+  if (code === 'LIVE_MATCH_NOT_FOUND') return 404;
+  return 409;
+};
+
+const writePlayerStats = async ({ user, match, playerId, expectedVersion, body }) => {
+  const profile = resolveCompetitiveProfile({ discipline: match.ramas?.disciplina, code: match.disciplina_codigo });
+  const existingResult = await supabase.from('partido_estadisticas')
+    .select('*').eq('partido_id', match.id).eq('jugador_id', playerId).maybeSingle();
+  if (existingResult.error) throw existingResult.error;
+
+  const currentMetrics = existingResult.data ? metricsFromRow(existingResult.data, profile) : {};
+  const inputMetrics = body?.metricas && typeof body.metricas === 'object' && !Array.isArray(body.metricas) ? body.metricas : {};
+  const metrics = sanitizeCompetitiveMetrics({ ...currentMetrics, ...inputMetrics }, profile);
+  const legacy = legacyStatColumns(profile, metrics);
+  const wantsMvp = body?.es_mvp === true;
+
+  const { data: result, error } = await supabase.rpc('registrar_estadistica_live_v2', {
+    p_academia_id: user.academia_id,
+    p_partido_id: match.id,
+    p_jugador_id: playerId,
+    p_expected_live_updated_at: expectedVersion,
+    p_asistio: body?.asistio === false ? false : true,
+    p_disciplina_codigo: profile.code,
+    p_metricas_competitivas: metrics,
+    p_metricas_version: COMPETITIVE_STATS_VERSION,
+    p_es_mvp: wantsMvp,
+    p_goles: legacy.goles,
+    p_asistencias: legacy.asistencias,
+    p_tarjetas_amarillas: legacy.tarjetas_amarillas,
+    p_tarjetas_rojas: legacy.tarjetas_rojas,
+    p_usuario_id: user.id,
+  });
+  if (error) throw error;
+  if (!result?.success) {
+    const failure = Object.assign(new Error(result?.error || 'No fue posible actualizar las estadísticas.'), {
+      status: rpcFailureStatus(result?.code),
+      code: result?.code,
+      data: result?.partido || null,
+    });
+    throw failure;
+  }
+
+  await logLiveEvent({
+    user,
+    matchId: match.id,
+    playerId,
+    action: 'estadistica',
+    detail: { metricas: metrics, es_mvp: wantsMvp },
+  });
+
+  return {
+    data: { ...(result.estadistica || {}), metricas: metrics },
+    live_updated_at: result.live_updated_at,
+    sport_profile: publicProfile(profile),
+  };
+};
 
 // API V2: compatible con clientes nuevos sin alterar el contrato histórico.
 // El inicio es idempotente y evita registrar dos inicios por doble click/dispositivo.
@@ -96,7 +175,7 @@ router.post('/me/partidos/:partidoId/en-vivo-v2/iniciar', authMiddleware, requir
     await logLiveEvent({ user: req.user, matchId: match.id, action: 'inicio', detail: { etapa: stage, score: [Number(match.goles_favor) || 0, Number(match.goles_contra) || 0] } });
     return res.json({ success: true, idempotent: false, message: 'Encuentro iniciado en vivo.', data });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible iniciar el encuentro.' });
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible iniciar el encuentro.', code: error?.code, data: error?.data });
   }
 });
 
@@ -135,8 +214,42 @@ router.patch('/me/partidos/:partidoId/en-vivo-v2', authMiddleware, requireProfes
     if (stageProvided && stage !== match.live_etapa) await logLiveEvent({ user: req.user, matchId: match.id, action: 'etapa', detail: { etapa: stage } });
     return res.json({ success: true, data, sport_profile: publicProfile(profile) });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible actualizar el encuentro en vivo.' });
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible actualizar el encuentro en vivo.', code: error?.code, data: error?.data });
   }
+});
+
+// Las estadísticas individuales comparten la misma versión del encuentro. El
+// RPC hace lock de la fila del partido, valida la versión y escribe MVP + métricas
+// en una sola transacción, avanzando live_updated_at al confirmar.
+router.put('/me/partidos/:partidoId/en-vivo-v2/estadisticas/:jugadorId', authMiddleware, requireProfessor, async (req, res) => {
+  try {
+    const expectedVersion = cleanText(req.body?.expected_live_updated_at);
+    if (!expectedVersion) return res.status(428).json({ error: 'Sincroniza el encuentro antes de modificar estadísticas.', code: 'LIVE_VERSION_REQUIRED' });
+
+    const match = await requireAssignedMatch(req.user, req.params.partidoId);
+    if (!match.en_vivo || match.estado === 'Jugado') return res.status(409).json({ error: 'El encuentro no está activo en modo en vivo.' });
+    const player = await requireAssignedPlayer(req.user, match, req.params.jugadorId);
+    const result = await writePlayerStats({
+      user: req.user,
+      match,
+      playerId: player.id,
+      expectedVersion,
+      body: req.body,
+    });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible actualizar las estadísticas.', code: error?.code, data: error?.data });
+  }
+});
+
+// Un bundle antiguo no debe poder hacer una escritura sin versión y pisar datos
+// de una sesión actual. Se fuerza actualización del cliente en vez de aceptar un
+// last-write-wins silencioso.
+router.put('/me/partidos/:partidoId/en-vivo/estadisticas/:jugadorId', authMiddleware, requireProfessor, (_req, res) => {
+  return res.status(428).json({
+    error: 'La vista del partido necesita actualizarse antes de guardar estadísticas. Recarga la aplicación y vuelve a intentarlo.',
+    code: 'LIVE_CLIENT_UPGRADE_REQUIRED',
+  });
 });
 
 // Finalizar también exige la versión que el profesor confirmó. Si la respuesta
@@ -174,7 +287,7 @@ router.post('/me/partidos/:partidoId/en-vivo-v2/finalizar', authMiddleware, requ
     await logLiveEvent({ user: req.user, matchId: match.id, action: 'fin', detail: { favor: Number(data.goles_favor) || 0, contra: Number(data.goles_contra) || 0, etiqueta: profile.scoreLabel } });
     return res.json({ success: true, idempotent: false, message: 'Encuentro finalizado. El resultado queda disponible para revisión de dirección.', data });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible finalizar el encuentro.' });
+    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible finalizar el encuentro.', code: error?.code, data: error?.data });
   }
 });
 
