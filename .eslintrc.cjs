@@ -17,6 +17,7 @@ module.exports = {
     'no-unused-vars': 'off',
     'no-constant-condition': ['error', { checkLoops: false }],
     'no-debugger': 'error',
+    'no-empty': ['error', { allowEmptyCatch: true }],
   },
   overrides: [
     {
