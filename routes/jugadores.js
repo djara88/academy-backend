@@ -401,13 +401,30 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
 router.get('/categorias/:categoria_id/promedio', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const { categoria_id } = req.params;
-    
-    const { data: rels } = await supabase.from('jugador_categoria').select('jugador_id').eq('categoria_id', categoria_id);
-    const jugadorIds = rels.map(r => r.jugador_id);
+    const academyId = req.tenant.academyId;
+
+    const { data: category, error: categoryError } = await supabase.from('categorias')
+      .select('id')
+      .eq('id', categoria_id)
+      .eq('academia_id', academyId)
+      .maybeSingle();
+    if (categoryError) throw categoryError;
+    if (!category) return res.status(404).json({ success: false, error: 'Categoría no encontrada.' });
+
+    const { data: rels, error: relError } = await supabase.from('jugador_categoria')
+      .select('jugador_id')
+      .eq('categoria_id', category.id);
+    if (relError) throw relError;
+    const jugadorIds = (rels || []).map(r => r.jugador_id);
 
     if (jugadorIds.length === 0) return res.json({ success: true, data: {} });
 
-    const { data: evals } = await supabase.from('evaluaciones').select('jugador_id, datos_radar').eq('academia_id', academia_id).in('jugador_id', jugadorIds).order('created_at', { ascending: false });
+    const { data: evals, error: evalError } = await supabase.from('evaluaciones')
+      .select('jugador_id, datos_radar')
+      .eq('academia_id', academyId)
+      .in('jugador_id', jugadorIds)
+      .order('created_at', { ascending: false });
+    if (evalError) throw evalError;
 
     const latestEvals = {};
     evals.forEach(ev => { if (!latestEvals[ev.jugador_id]) latestEvals[ev.jugador_id] = ev.datos_radar; });
