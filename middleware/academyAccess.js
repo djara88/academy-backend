@@ -1,13 +1,17 @@
-const isSuperadmin = (user) => (
-  String(user?.rol || '').toLowerCase().replace(/[_-]/g, '') === 'superadmin'
-);
+const { isAuthorizedSuperadmin } = require('./authorization');
 
 const requireAcademyParamAccess = (paramName = 'academiaId') => (req, res, next) => {
-  const requestedAcademyId = req.params?.[paramName];
-  if (isSuperadmin(req.user) || String(req.user?.academia_id) === String(requestedAcademyId)) {
+  const requestedAcademyId = String(req.params?.[paramName] || '').trim();
+  const userAcademyId = String(req.user?.academia_id || '').trim();
+
+  if (isAuthorizedSuperadmin(req.user) || (userAcademyId && userAcademyId === requestedAcademyId)) {
     return next();
   }
-  return res.status(403).json({ error: 'No puedes operar recursos de otra academia' });
+
+  return res.status(403).json({
+    error: 'No puedes operar recursos de otra academia',
+    code: 'CROSS_TENANT_ACCESS_DENIED',
+  });
 };
 
-module.exports = { isSuperadmin, requireAcademyParamAccess };
+module.exports = { requireAcademyParamAccess };
