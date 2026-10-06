@@ -132,7 +132,7 @@ router.patch('/:id', authMiddleware, requireDirector, requireTenantContext, ...g
   } catch (error) {
     if (previousAuth) {
       try {
-        const { data: currentTutor } = await supabase.from('tutores').select('usuario_id').eq('id', req.params.id).maybeSingle();
+        const { data: currentTutor } = await supabase.from('tutores').select('usuario_id').eq('id', req.params.id).eq('academia_id', req.tenant.academyId).maybeSingle();
         if (currentTutor?.usuario_id) {
           const rollback = { user_metadata: { full_name: previousAuth.name } };
           if (previousAuth.email) { rollback.email = previousAuth.email; rollback.email_confirm = true; }
@@ -189,8 +189,8 @@ router.post('/:id/acceso', authMiddleware, requireDirector, requireTenantContext
     });
   } catch (error) {
     if (authUserId) {
-      await supabase.from('tutores').update({ usuario_id: null, acceso_activo: false }).eq('usuario_id', authUserId);
-      await supabase.from('usuarios').delete().eq('id', authUserId);
+      await supabase.from('tutores').update({ usuario_id: null, acceso_activo: false }).eq('usuario_id', authUserId).eq('academia_id', req.tenant.academyId);
+      await supabase.from('usuarios').delete().eq('id', authUserId).eq('academia_id', req.tenant.academyId);
       await supabase.auth.admin.deleteUser(authUserId);
     }
     res.status(500).json({ error: error.message || 'No fue posible crear el acceso.' });
@@ -226,7 +226,7 @@ router.post('/:id/reset-password', authMiddleware, requireDirector, requireTenan
     const password = temporaryPassword();
     const { error: authError } = await supabase.auth.admin.updateUserById(tutor.usuario_id, { password });
     if (authError) throw authError;
-    await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', tutor.usuario_id);
+    await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', tutor.usuario_id).eq('academia_id', req.tenant.academyId);
     let emailSent = false;
     try {
       emailSent = await sendGuardianAccessEmail({
