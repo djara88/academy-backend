@@ -1,10 +1,11 @@
 const supabase = require('../config/supabase');
 const { fetchWithTimeout } = require('./httpClient');
-const { getMasterAdminEmail } = require('../middleware/masterAdmin');
 
 const MAX_ATTEMPTS = 5;
 const DEFAULT_POLL_MS = 30000;
 const STALE_PROCESSING_MS = 10 * 60 * 1000;
+
+const getNotificationRecipient = () => String(process.env.SUPERADMIN_NOTIFICATION_EMAIL || '').trim().toLowerCase();
 
 const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;')
@@ -108,11 +109,11 @@ const startAcademyRegistrationNotifier = () => {
     if (running || stopped) return;
     running = true;
     try {
-      const recipient = getMasterAdminEmail();
+      const recipient = getNotificationRecipient();
       const brevoReady = Boolean(String(process.env.BREVO_API_KEY || '').trim() && String(process.env.BREVO_SENDER_EMAIL || '').trim());
       if (!recipient || !brevoReady) {
         if (!warnedMissingConfig) {
-          console.warn('⚠️ Alertas de nuevas academias inactivas: falta SUPERADMIN_EMAIL o configuración de Brevo.');
+          console.warn('⚠️ Alertas de nuevas academias inactivas: falta SUPERADMIN_NOTIFICATION_EMAIL o configuración de Brevo.');
           warnedMissingConfig = true;
         }
         return;
@@ -202,4 +203,4 @@ const startAcademyRegistrationNotifier = () => {
   };
 };
 
-module.exports = { startAcademyRegistrationNotifier, buildAcademyEmail };
+module.exports = { startAcademyRegistrationNotifier, buildAcademyEmail, getNotificationRecipient };
