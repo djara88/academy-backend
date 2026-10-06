@@ -1,0 +1,35 @@
+name: Generate Phase 1 Lockfile
+
+on:
+  push:
+    branches:
+      - chore/phase1-release-governance
+    paths:
+      - package.json
+      - .github/workflows/phase1-lockfile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.x'
+          cache: npm
+      - name: Regenerate lockfile only
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase1-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 1
