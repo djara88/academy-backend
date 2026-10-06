@@ -83,7 +83,7 @@ const refreshAttendanceAlerts = async ({ academyId, categoryId, playerIds }) => 
   const trainingIds = (trainings || []).map((item) => item.id);
   if (!trainingIds.length || !playerIds.length) return 0;
   const [{ data: attendance, error: attendanceError }, { data: existing, error: existingError }] = await Promise.all([
-    supabase.from('asistencias').select('entrenamiento_id,jugador_id,estado').in('entrenamiento_id', trainingIds).in('jugador_id', playerIds),
+    supabase.from('asistencias').select('entrenamiento_id,jugador_id,estado').eq('academia_id', academyId).in('entrenamiento_id', trainingIds).in('jugador_id', playerIds),
     supabase.from('alertas_asistencia').select('jugador_id,racha,activa,detectada_at,revisada_at,revisada_por')
       .eq('academia_id', academyId).eq('categoria_id', categoryId).in('jugador_id', playerIds),
   ]);
@@ -201,7 +201,7 @@ router.get('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProf
     if (trainingError) throw trainingError;
     let attendance = [];
     if (training) {
-      const result = await supabase.from('asistencias').select('jugador_id,estado').eq('entrenamiento_id', training.id);
+      const result = await supabase.from('asistencias').select('jugador_id,estado').eq('academia_id', req.tenant.academyId).eq('entrenamiento_id', training.id);
       if (result.error) throw result.error;
       attendance = result.data || [];
     }
@@ -246,7 +246,7 @@ router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requirePro
       if (result.error) throw result.error;
       training = result.data;
     }
-    const rows = items.map((item) => ({ entrenamiento_id: training.id, jugador_id: item.jugador_id, estado: item.estado, registrado_por: req.user.id, actualizado_at: new Date().toISOString() }));
+    const rows = items.map((item) => ({ academia_id: req.tenant.academyId, entrenamiento_id: training.id, jugador_id: item.jugador_id, estado: item.estado, registrado_por: req.user.id, actualizado_at: new Date().toISOString() }));
     const { error: attendanceError } = await supabase.from('asistencias').upsert(rows, { onConflict: 'entrenamiento_id,jugador_id' });
     if (attendanceError) throw attendanceError;
     let activatedAlerts = 0;
@@ -255,7 +255,7 @@ router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requirePro
     } catch (alertError) {
       console.error('No se pudieron actualizar las alertas de asistencia:', alertError?.message || alertError);
     }
-    await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id);
+    await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id).eq('academia_id', req.tenant.academyId);
     return res.json({ success: true, message: `Asistencia guardada: ${items.length} alumnos.`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible guardar la asistencia.' });
