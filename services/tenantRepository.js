@@ -1,5 +1,3 @@
-const supabase = require('../config/supabase');
-
 const normalizeAcademyId = (value) => {
   const academyId = String(value || '').trim();
   if (!academyId) {
@@ -36,8 +34,9 @@ const sanitizeUpdate = (academyId, values) => {
   return sanitized;
 };
 
-const createTenantRepository = ({ academyId, client = supabase } = {}) => {
+const createTenantRepository = ({ academyId, client } = {}) => {
   const tenantId = normalizeAcademyId(academyId);
+  const database = client || require('../config/supabase');
 
   const table = (tableName) => {
     const name = String(tableName || '').trim();
@@ -45,19 +44,19 @@ const createTenantRepository = ({ academyId, client = supabase } = {}) => {
 
     return {
       select(columns = '*', options) {
-        return client.from(name).select(columns, options).eq('academia_id', tenantId);
+        return database.from(name).select(columns, options).eq('academia_id', tenantId);
       },
       update(values) {
-        return client.from(name).update(sanitizeUpdate(tenantId, values)).eq('academia_id', tenantId);
+        return database.from(name).update(sanitizeUpdate(tenantId, values)).eq('academia_id', tenantId);
       },
       delete() {
-        return client.from(name).delete().eq('academia_id', tenantId);
+        return database.from(name).delete().eq('academia_id', tenantId);
       },
       insert(values, options) {
-        return client.from(name).insert(scopeRows(tenantId, values), options);
+        return database.from(name).insert(scopeRows(tenantId, values), options);
       },
       upsert(values, options) {
-        return client.from(name).upsert(scopeRows(tenantId, values), options);
+        return database.from(name).upsert(scopeRows(tenantId, values), options);
       },
     };
   };
@@ -65,7 +64,7 @@ const createTenantRepository = ({ academyId, client = supabase } = {}) => {
   return Object.freeze({ academyId: tenantId, table });
 };
 
-const tenantRepositoryFromRequest = (req, client = supabase) => {
+const tenantRepositoryFromRequest = (req, client) => {
   if (req?.tenant?.isSuperadmin || !req?.tenant?.academyId) {
     const error = new Error('A tenant-scoped repository cannot be created without a concrete academy context.');
     error.code = 'TENANT_CONTEXT_REQUIRED';
