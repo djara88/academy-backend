@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireTenantContext } = require('../middleware/tenantContext');
 const {
   ensureMonthlyChargesForAcademy,
   recalculateFinancialStatus,
@@ -73,9 +74,9 @@ const getBillingSnapshot = async (academyId) => {
   return promise;
 };
 
-router.get('/resumen', authMiddleware, async (req, res) => {
+router.get('/resumen', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const billing = await getBillingSnapshot(academia_id);
     const [resCobros, resPagos, resEgresos, resJugadores] = await Promise.all([
       supabase.from('cobros').select('jugador_id,monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academia_id),
@@ -124,9 +125,9 @@ router.get('/resumen', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
+router.get('/cuentas-corrientes', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const billing = await getBillingSnapshot(academia_id);
     const [resJugadores, resCobros] = await Promise.all([
       supabase
@@ -177,7 +178,7 @@ router.get('/cuentas-corrientes', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/cobros/:id/pagar', authMiddleware, async (req, res) => {
+router.put('/cobros/:id/pagar', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const monto = asMoney(req.body.monto_abono);
     if (!Number.isFinite(monto) || monto <= 0) {
@@ -185,7 +186,7 @@ router.put('/cobros/:id/pagar', authMiddleware, async (req, res) => {
     }
 
     const data = failIfError(await supabase.rpc('registrar_pago_cobro', {
-      p_academia_id: req.user.academia_id,
+      p_academia_id: req.tenant.academyId,
       p_cobro_id: req.params.id,
       p_monto: monto,
       p_metodo_pago: req.body.metodo_pago || 'Transferencia',
@@ -194,7 +195,7 @@ router.put('/cobros/:id/pagar', authMiddleware, async (req, res) => {
       p_usuario_id: req.user.id
     }), 'No se pudo registrar el pago');
 
-    await recalculateFinancialStatus(req.user.academia_id);
+    await recalculateFinancialStatus(req.tenant.academyId);
     res.json({ success: true, data });
   } catch (error) {
     console.error('Error en PUT /api/finanzas/cobros/:id/pagar:', error);
@@ -202,12 +203,12 @@ router.put('/cobros/:id/pagar', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/pagos', authMiddleware, async (req, res) => {
+router.get('/pagos', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const data = rows(await supabase
       .from('pagos')
       .select('id,cobro_id,jugador_id,monto,metodo_pago,fecha_pago,observaciones,comprobante_ref,cobro:cobros!pagos_cobro_id_fkey(concepto,tipo_concepto),jugador:jugadores!pagos_jugador_id_fkey(nombre)')
-      .eq('academia_id', req.user.academia_id)
+      .eq('academia_id', req.tenant.academyId)
       .order('fecha_pago', { ascending: false }), 'No se pudieron leer los pagos');
     res.json({ success: true, data });
   } catch (error) {
@@ -215,9 +216,9 @@ router.get('/pagos', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/cobros', authMiddleware, async (req, res) => {
+router.post('/cobros', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { jugador_id, concepto, tipo_concepto, fecha_vencimiento, observaciones } = req.body;
     const monto = asMoney(req.body.monto);
     if (!jugador_id || !concepto?.trim() || monto <= 0) {
@@ -270,10 +271,10 @@ router.post('/cobros', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/egresos', authMiddleware, async (req, res) => {
+router.get('/egresos', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const data = rows(await supabase.from('egresos').select('*')
-      .eq('academia_id', req.user.academia_id)
+      .eq('academia_id', req.tenant.academyId)
       .is('anulado_at', null)
       .order('fecha_gasto', { ascending: false }), 'No se pudieron leer los egresos');
     res.json({ success: true, data });
@@ -282,9 +283,9 @@ router.get('/egresos', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/egresos', authMiddleware, async (req, res) => {
+router.post('/egresos', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { concepto, categoria_gasto, centro_costo, metodo_pago, fecha_gasto, observaciones } = req.body;
     const monto = asMoney(req.body.monto);
     if (!concepto?.trim() || monto <= 0) {
@@ -325,9 +326,9 @@ router.post('/egresos', authMiddleware, async (req, res) => {
   }
 });
 
-router.delete('/egresos/:id', authMiddleware, async (req, res) => {
+router.delete('/egresos/:id', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const cancellation = await supabase.from('egresos').update({
       anulado_at: new Date().toISOString(),
       anulado_por: req.user.id
@@ -353,9 +354,9 @@ router.delete('/egresos/:id', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/flujo-caja', authMiddleware, async (req, res) => {
+router.get('/flujo-caja', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const [resPagos, resEgresos] = await Promise.all([
       supabase.from('pagos')
         .select('id,monto,fecha_pago,metodo_pago,observaciones,cobro:cobros!pagos_cobro_id_fkey(concepto),jugador:jugadores!pagos_jugador_id_fkey(nombre)')
@@ -393,24 +394,24 @@ router.get('/flujo-caja', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/configuracion', authMiddleware, async (req, res) => {
+router.get('/configuracion', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const data = failIfError(await supabase.from('configuracion_financiera').select('*')
-      .eq('academia_id', req.user.academia_id).maybeSingle(), 'No se pudo leer la configuración');
+      .eq('academia_id', req.tenant.academyId).maybeSingle(), 'No se pudo leer la configuración');
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.put('/configuracion', authMiddleware, async (req, res) => {
+router.put('/configuracion', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const permitidos = [
       'acepta_efectivo', 'acepta_transferencia', 'acepta_pago_online',
       'transferencia_banco', 'transferencia_tipo_cuenta', 'transferencia_numero',
       'transferencia_rut', 'transferencia_correo', 'link_pago_online'
     ];
-    const cambios = { academia_id: req.user.academia_id, updated_at: new Date().toISOString() };
+    const cambios = { academia_id: req.tenant.academyId, updated_at: new Date().toISOString() };
     for (const campo of permitidos) {
       if (Object.prototype.hasOwnProperty.call(req.body, campo)) cambios[campo] = req.body[campo];
     }
