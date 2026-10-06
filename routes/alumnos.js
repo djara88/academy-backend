@@ -255,6 +255,7 @@ const loadAttendance = async (academyId, playerId, branchId) => {
 
   const { data: rows, error } = await supabase.from('asistencias')
     .select('estado')
+    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .in('entrenamiento_id', trainingIds);
   if (error) throw error;
