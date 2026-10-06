@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { createTenantRepository } = require('../services/tenantRepository');
 const { requireTenantContext } = require('../middleware/tenantContext');
 const { recalculateFinancialStatus, summarizeCharges, todayInChile } = require('../services/monthlyBilling');
 const { getBranch, getStudentEnrollment, getStudentsForScope, safeText } = require('../services/branchContext');
@@ -184,7 +185,7 @@ router.post('/cobros', async (req, res, next) => {
       return res.json({ success: true, idempotent: true, data: existing });
     }
 
-    const insertResult = await supabase.from('cobros').insert(payload).select('*').single();
+    const insertResult = await createTenantRepository({ academyId: academyId }).table('cobros').insert(payload).select('*').single();
     if (insertResult.error) {
       if (insertResult.error.code === '23505' && key) {
         const raced = await findIdempotentRow('cobros', academyId, key);
@@ -243,7 +244,7 @@ router.post('/egresos', async (req, res, next) => {
       return res.json({ success: true, idempotent: true, data: existing });
     }
 
-    const insertResult = await supabase.from('egresos').insert(payload).select('*,ramas(id,nombre,disciplina),sedes(id,nombre)').single();
+    const insertResult = await createTenantRepository({ academyId: academyId }).table('egresos').insert(payload).select('*,ramas(id,nombre,disciplina),sedes(id,nombre)').single();
     if (insertResult.error) {
       if (insertResult.error.code === '23505' && key) {
         const raced = await findIdempotentRow('egresos', academyId, key, '*,ramas(id,nombre,disciplina),sedes(id,nombre)');
