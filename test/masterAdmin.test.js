@@ -1,11 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  getMasterAdminEmail,
   getMasterAdminUserId,
-  isMasterAdminEmail,
+  isMasterAdminConfigured,
   isMasterAdminUser,
 } = require('../middleware/masterAdmin');
+
+const AUTHORIZED_ID = '41927ee7-9dfc-4810-8a6d-7751346a155b';
+const OTHER_ID = '11111111-1111-4111-8111-111111111111';
 
 const withEnv = async (values, fn) => {
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
@@ -23,29 +25,26 @@ const withEnv = async (values, fn) => {
   }
 };
 
-test('reconoce el correo maestro configurado sin depender de mayúsculas o espacios', async () => {
-  await withEnv({ SUPERADMIN_EMAIL: ' d.jarazerene@gmail.com ', SUPERADMIN_USER_ID: null }, async () => {
-    assert.equal(getMasterAdminEmail(), 'd.jarazerene@gmail.com');
+test('sin SUPERADMIN_USER_ID válido no existe identidad maestra', async () => {
+  await withEnv({ SUPERADMIN_USER_ID: null, SUPERADMIN_EMAIL: 'legacy@example.com' }, async () => {
     assert.equal(getMasterAdminUserId(), '');
-    assert.equal(isMasterAdminEmail('  D.JARAZERENE@GMAIL.COM '), true);
-    assert.equal(isMasterAdminEmail('director@example.com'), false);
-    assert.equal(isMasterAdminUser({ id: 'otro-id', email: 'D.JARAZERENE@GMAIL.COM' }), true);
+    assert.equal(isMasterAdminConfigured(), false);
+    assert.equal(isMasterAdminUser({ id: AUTHORIZED_ID, email: 'legacy@example.com' }), false);
   });
 });
 
-test('sin SUPERADMIN_EMAIL configurado no existe fallback maestro', async () => {
-  await withEnv({ SUPERADMIN_EMAIL: null, SUPERADMIN_USER_ID: null }, async () => {
-    assert.equal(getMasterAdminEmail(), '');
-    assert.equal(getMasterAdminUserId(), '');
-    assert.equal(isMasterAdminEmail('d.jarazerene@gmail.com'), false);
-    assert.equal(isMasterAdminEmail(undefined), false);
-    assert.equal(isMasterAdminUser({ id: 'cualquiera', email: 'd.jarazerene@gmail.com' }), false);
+test('SUPERADMIN_USER_ID debe tener formato UUID válido', async () => {
+  await withEnv({ SUPERADMIN_USER_ID: 'uuid-maestro' }, async () => {
+    assert.equal(isMasterAdminConfigured(), false);
+    assert.equal(isMasterAdminUser({ id: 'uuid-maestro' }), false);
   });
 });
 
-test('cuando SUPERADMIN_USER_ID está configurado el UUID prevalece sobre el correo', async () => {
-  await withEnv({ SUPERADMIN_EMAIL: 'd.jarazerene@gmail.com', SUPERADMIN_USER_ID: 'uuid-maestro' }, async () => {
-    assert.equal(isMasterAdminUser({ id: 'uuid-maestro', email: 'otro@lestra.app' }), true);
-    assert.equal(isMasterAdminUser({ id: 'uuid-ajeno', email: 'd.jarazerene@gmail.com' }), false);
+test('solo el UUID configurado es reconocido como master admin', async () => {
+  await withEnv({ SUPERADMIN_USER_ID: AUTHORIZED_ID, SUPERADMIN_EMAIL: 'legacy@example.com' }, async () => {
+    assert.equal(isMasterAdminConfigured(), true);
+    assert.equal(isMasterAdminUser({ id: AUTHORIZED_ID, email: 'otro@lestra.app' }), true);
+    assert.equal(isMasterAdminUser({ id: OTHER_ID, email: 'legacy@example.com' }), false);
   });
 });
+
