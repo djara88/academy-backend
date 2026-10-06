@@ -14,23 +14,20 @@ concurrency:
 
 jobs:
   audit:
+    name: Security Audit
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Node.js 24
-        uses: actions/setup-node@v4
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 24
+          node-version: '22.x'
           cache: npm
-
-      - name: Instalar dependencias bloqueadas
+      - name: Install locked dependencies
         run: npm ci
-
-      - name: Ejecutar pruebas
+      - name: Run regression suite
         run: npm test
-
-      - name: Auditar dependencias de producción
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit production dependencies
+        run: npm run security:audit
