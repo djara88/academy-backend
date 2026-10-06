@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { requireTenantContext } = require('../middleware/tenantContext');
+const { createTenantRepository } = require('../services/tenantRepository');
 const { loadAcademyEntitlements } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
 const {
@@ -45,10 +46,10 @@ const publicEnrollment = (row) => ({
 });
 
 const loadPlayer = async (academyId, playerId) => {
-  const { data, error } = await supabase.from('jugadores')
+  const tenant = createTenantRepository({ academyId });
+  const { data, error } = await tenant.table('jugadores')
     .select('*')
     .eq('id', playerId)
-    .eq('academia_id', academyId)
     .maybeSingle();
   if (error) throw error;
   if (!data) throw Object.assign(new Error('Alumno no encontrado.'), { statusCode: 404 });
@@ -56,9 +57,9 @@ const loadPlayer = async (academyId, playerId) => {
 };
 
 const loadEnrollments = async (academyId, playerId) => {
-  const { data, error } = await supabase.from('inscripciones_deportivas')
+  const tenant = createTenantRepository({ academyId });
+  const { data, error } = await tenant.table('inscripciones_deportivas')
     .select('id,jugador_id,sede_id,rama_id,categoria_id,estado,fecha_inicio,fecha_fin,monto_matricula,monto_mensualidad,es_principal,rol_especialidad,created_at,sedes(id,nombre),ramas(id,nombre,disciplina,config_evaluacion,config_reconocimientos),categorias(id,nombre)')
-    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .order('es_principal', { ascending: false })
     .order('created_at', { ascending: true });
@@ -96,9 +97,9 @@ const buildEvaluationProfile = (req, player, enrollment) => {
 };
 
 const loadBranchEvaluations = async (academyId, playerId, branchId) => {
-  const { data, error } = await supabase.from('evaluaciones')
+  const tenant = createTenantRepository({ academyId });
+  const { data, error } = await tenant.table('evaluaciones')
     .select('id,jugador_id,sede_id,rama_id,datos_radar,comentarios_profesor,fecha_evaluacion,created_at,disciplina_codigo,perfil_evaluacion,metricas_version')
-    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .eq('rama_id', branchId)
     .order('created_at', { ascending: false })
