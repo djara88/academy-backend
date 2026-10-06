@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { createTenantRepository } = require('../services/tenantRepository');
 const { requireTenantContext } = require('../middleware/tenantContext');
 const {
   ensureMonthlyChargesForAcademy,
@@ -254,7 +255,7 @@ router.post('/cobros', authMiddleware, requireTenantContext, async (req, res) =>
       return res.json({ success: true, idempotent: true, data: existing });
     }
 
-    const insertResult = await supabase.from('cobros').insert([payload]).select().single();
+    const insertResult = await createTenantRepository({ academyId: academia_id }).table('cobros').insert([payload]).select().single();
     if (insertResult.error) {
       if (insertResult.error.code === '23505' && key) {
         const raced = await findIdempotentRow('cobros', academia_id, key);
@@ -311,7 +312,7 @@ router.post('/egresos', authMiddleware, requireTenantContext, async (req, res) =
       return res.json({ success: true, idempotent: true, data: existing });
     }
 
-    const insertResult = await supabase.from('egresos').insert([payload]).select().single();
+    const insertResult = await createTenantRepository({ academyId: academia_id }).table('egresos').insert([payload]).select().single();
     if (insertResult.error) {
       if (insertResult.error.code === '23505' && key) {
         const raced = await findIdempotentRow('egresos', academia_id, key);
