@@ -3,6 +3,8 @@ const { isMasterAdminUser } = require('./masterAdmin');
 const { isProfessor, isGuardian, isAllowedProfessorRequest, isAllowedGuardianRequest } = require('./professorAccess');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 
+const normalizeRole = (value) => String(value || '').toLowerCase().replace(/[_-]/g, '');
+
 const getAuthenticatorLevelFromToken = (token) => {
   try {
     const parts = String(token || '').split('.');
@@ -48,6 +50,12 @@ const authMiddleware = async (req, res, next) => {
 
     if (!usuario) return res.status(403).json({ error: 'Usuario no registrado en el sistema' });
     if (usuario.activo === false) return res.status(403).json({ error: 'Tu acceso está desactivado. Contacta a la dirección de tu academia.' });
+    if (normalizeRole(usuario.rol) === 'superadmin') {
+      return res.status(403).json({
+        error: 'Identidad de superadministrador no autorizada.',
+        code: 'SUPERADMIN_IDENTITY_REQUIRED',
+      });
+    }
 
     let academy = null;
     if (usuario.academia_id) {

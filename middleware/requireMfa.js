@@ -1,11 +1,6 @@
 const normalizeRole = (value) => String(value || '').toLowerCase().replace(/[_-]/g, '');
 
-const isSuperadminMfaEnforced = () => (
-  ['1', 'true', 'yes', 'on'].includes(String(process.env.SUPERADMIN_MFA_ENFORCE || '').trim().toLowerCase())
-);
-
 const requireSuperadminMfa = (req, res, next) => {
-  if (!isSuperadminMfaEnforced()) return next();
   if (normalizeRole(req.user?.rol) !== 'superadmin') return next();
   if (req.auth?.aal === 'aal2') return next();
 
@@ -16,4 +11,4 @@ const requireSuperadminMfa = (req, res, next) => {
   });
 };
 
-module.exports = { isSuperadminMfaEnforced, requireSuperadminMfa };
+module.exports = { requireSuperadminMfa };
