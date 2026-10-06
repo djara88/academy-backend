@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireTenantContext } = require('../middleware/tenantContext');
 const { requireDirector, requireProfessor } = require('../middleware/professorAccess');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
@@ -82,7 +83,7 @@ const refreshAttendanceAlerts = async ({ academyId, categoryId, playerIds }) => 
   const trainingIds = (trainings || []).map((item) => item.id);
   if (!trainingIds.length || !playerIds.length) return 0;
   const [{ data: attendance, error: attendanceError }, { data: existing, error: existingError }] = await Promise.all([
-    supabase.from('asistencias').select('entrenamiento_id,jugador_id,estado').in('entrenamiento_id', trainingIds).in('jugador_id', playerIds),
+    supabase.from('asistencias').select('entrenamiento_id,jugador_id,estado').eq('academia_id', academyId).in('entrenamiento_id', trainingIds).in('jugador_id', playerIds),
     supabase.from('alertas_asistencia').select('jugador_id,racha,activa,detectada_at,revisada_at,revisada_por')
       .eq('academia_id', academyId).eq('categoria_id', categoryId).in('jugador_id', playerIds),
   ]);
@@ -98,9 +99,9 @@ const refreshAttendanceAlerts = async ({ academyId, categoryId, playerIds }) => 
   return calculated.filter((row) => row.newly_activated).length;
 };
 
-router.get('/', authMiddleware, requireDirector, async (req, res) => {
+router.get('/', authMiddleware, requireDirector, requireTenantContext, async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const currentUsage = await usage(academyId);
     const [{ data: professors, error: professorError }, { data: categories, error: categoryError }, { data: assignments, error: assignmentError }] = await Promise.all([
       supabase.from('usuarios').select('id,nombre_completo,email,telefono,activo,ultimo_acceso,created_at')
@@ -126,13 +127,13 @@ router.get('/', authMiddleware, requireDirector, async (req, res) => {
   }
 });
 
-router.get('/me', authMiddleware, requireProfessor, async (req, res) => {
+router.get('/me', authMiddleware, requireProfessor, requireTenantContext, async (req, res) => {
   try {
     const [{ data: academy, error: academyError }, { data: assignments, error: assignmentError }] = await Promise.all([
-      supabase.from('academias').select('id,nombre,logo,logo_url,rama_principal_id').eq('id', req.user.academia_id).single(),
+      supabase.from('academias').select('id,nombre,logo,logo_url,rama_principal_id').eq('id', req.tenant.academyId).single(),
       supabase.from('profesor_categorias')
         .select('categoria_id,categorias(id,nombre,descripcion,sede_id,rama_id,ramas(id,nombre,disciplina),sedes(id,nombre))')
-        .eq('academia_id', req.user.academia_id).eq('profesor_id', req.user.id).eq('activo', true),
+        .eq('academia_id', req.tenant.academyId).eq('profesor_id', req.user.id).eq('activo', true),
     ]);
     if (academyError) throw academyError;
     if (assignmentError) throw assignmentError;
@@ -146,7 +147,7 @@ router.get('/me', authMiddleware, requireProfessor, async (req, res) => {
   }
 });
 
-router.get('/me/agenda', authMiddleware, requireProfessor, async (req, res) => {
+router.get('/me/agenda', authMiddleware, requireProfessor, requireTenantContext, async (req, res) => {
   try {
     const from = String(req.query?.desde || todayInChile());
     const to = String(req.query?.hasta || addDays(from, 60));
@@ -154,25 +155,25 @@ router.get('/me/agenda', authMiddleware, requireProfessor, async (req, res) => {
       return res.status(400).json({ error: 'El rango de agenda es inválido o supera 120 días.' });
     }
     const { data: assignments, error: assignmentError } = await supabase.from('profesor_categorias').select('categoria_id')
-      .eq('academia_id', req.user.academia_id).eq('profesor_id', req.user.id).eq('activo', true);
+      .eq('academia_id', req.tenant.academyId).eq('profesor_id', req.user.id).eq('activo', true);
     if (assignmentError) throw assignmentError;
     const categoryIds = uniqueIds((assignments || []).map((item) => item.categoria_id));
     if (!categoryIds.length) return res.json({ success: true, data: [] });
     const [{ data: trainings, error: trainingError }, { data: matches, error: matchError }] = await Promise.all([
       supabase.from('entrenamientos')
         .select('id,categoria_id,sede_id,rama_id,fecha,hora,lugar,estado,es_recuperacion,categorias(id,nombre),ramas(id,nombre,disciplina),sedes(id,nombre)')
-        .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds).gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
+        .eq('academia_id', req.tenant.academyId).in('categoria_id', categoryIds).gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
       supabase.from('partidos')
         .select('id,categoria_id,sede_id,rama_id,rival,fecha,hora,hora_citacion,ubicacion,link_maps,color_uniforme,estado,es_amistoso,condicion,categorias(id,nombre),ramas(id,nombre,disciplina),sedes(id,nombre)')
-        .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds).gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
+        .eq('academia_id', req.tenant.academyId).in('categoria_id', categoryIds).gte('fecha', from).lte('fecha', to).order('fecha').order('hora'),
     ]);
     if (trainingError) throw trainingError;
     if (matchError) throw matchError;
     const trainingIds = (trainings || []).map((item) => item.id);
     const matchIds = (matches || []).map((item) => item.id);
     const [logs, preparations] = await Promise.all([
-      trainingIds.length ? supabase.from('entrenamiento_bitacoras').select('entrenamiento_id').eq('academia_id', req.user.academia_id).in('entrenamiento_id', trainingIds) : Promise.resolve({ data: [], error: null }),
-      matchIds.length ? supabase.from('partido_preparaciones').select('partido_id,estado').eq('academia_id', req.user.academia_id).in('partido_id', matchIds) : Promise.resolve({ data: [], error: null }),
+      trainingIds.length ? supabase.from('entrenamiento_bitacoras').select('entrenamiento_id').eq('academia_id', req.tenant.academyId).in('entrenamiento_id', trainingIds) : Promise.resolve({ data: [], error: null }),
+      matchIds.length ? supabase.from('partido_preparaciones').select('partido_id,estado').eq('academia_id', req.tenant.academyId).in('partido_id', matchIds) : Promise.resolve({ data: [], error: null }),
     ]);
     if (logs.error) throw logs.error;
     if (preparations.error) throw preparations.error;
@@ -188,19 +189,19 @@ router.get('/me/agenda', authMiddleware, requireProfessor, async (req, res) => {
   }
 });
 
-router.get('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProfessor, async (req, res) => {
+router.get('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProfessor, requireTenantContext, async (req, res) => {
   try {
     const date = cleanText(req.query?.fecha) || todayInChile();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Fecha inválida.' });
     const { category, students } = await getCategoryStudents(req.user, req.params.categoriaId);
     const { data: training, error: trainingError } = await supabase.from('entrenamientos')
       .select('id,hora,lugar,created_at,sede_id,rama_id')
-      .eq('academia_id', req.user.academia_id).eq('categoria_id', category.id).eq('rama_id', category.rama_id)
+      .eq('academia_id', req.tenant.academyId).eq('categoria_id', category.id).eq('rama_id', category.rama_id)
       .eq('fecha', date).eq('estado', 'Realizado').order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (trainingError) throw trainingError;
     let attendance = [];
     if (training) {
-      const result = await supabase.from('asistencias').select('jugador_id,estado').eq('entrenamiento_id', training.id);
+      const result = await supabase.from('asistencias').select('jugador_id,estado').eq('academia_id', req.tenant.academyId).eq('entrenamiento_id', training.id);
       if (result.error) throw result.error;
       attendance = result.data || [];
     }
@@ -216,7 +217,7 @@ router.get('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProf
   }
 });
 
-router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProfessor, async (req, res) => {
+router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requireProfessor, requireTenantContext, async (req, res) => {
   try {
     const date = cleanText(req.body?.fecha);
     const items = Array.isArray(req.body?.asistencias) ? req.body.asistencias : [];
@@ -227,12 +228,12 @@ router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requirePro
     if (items.some((item) => !allowed.has(String(item.jugador_id)))) return res.status(403).json({ error: 'La lista contiene un alumno ajeno a la inscripción activa de esta rama/categoría.' });
 
     let { data: training, error: trainingError } = await supabase.from('entrenamientos').select('id')
-      .eq('academia_id', req.user.academia_id).eq('categoria_id', category.id).eq('rama_id', category.rama_id)
+      .eq('academia_id', req.tenant.academyId).eq('categoria_id', category.id).eq('rama_id', category.rama_id)
       .eq('fecha', date).eq('estado', 'Realizado').order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (trainingError) throw trainingError;
     if (!training) {
       const result = await supabase.from('entrenamientos').insert({
-        academia_id: req.user.academia_id,
+        academia_id: req.tenant.academyId,
         categoria_id: category.id,
         sede_id: category.sede_id,
         rama_id: category.rama_id,
@@ -245,29 +246,29 @@ router.post('/me/categorias/:categoriaId/asistencia', authMiddleware, requirePro
       if (result.error) throw result.error;
       training = result.data;
     }
-    const rows = items.map((item) => ({ entrenamiento_id: training.id, jugador_id: item.jugador_id, estado: item.estado, registrado_por: req.user.id, actualizado_at: new Date().toISOString() }));
+    const rows = items.map((item) => ({ academia_id: req.tenant.academyId, entrenamiento_id: training.id, jugador_id: item.jugador_id, estado: item.estado, registrado_por: req.user.id, actualizado_at: new Date().toISOString() }));
     const { error: attendanceError } = await supabase.from('asistencias').upsert(rows, { onConflict: 'entrenamiento_id,jugador_id' });
     if (attendanceError) throw attendanceError;
     let activatedAlerts = 0;
     try {
-      activatedAlerts = await refreshAttendanceAlerts({ academyId: req.user.academia_id, categoryId: category.id, playerIds: items.map((item) => String(item.jugador_id)) });
+      activatedAlerts = await refreshAttendanceAlerts({ academyId: req.tenant.academyId, categoryId: category.id, playerIds: items.map((item) => String(item.jugador_id)) });
     } catch (alertError) {
       console.error('No se pudieron actualizar las alertas de asistencia:', alertError?.message || alertError);
     }
-    await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id);
+    await supabase.from('usuarios').update({ ultimo_acceso: new Date().toISOString() }).eq('id', req.user.id).eq('academia_id', req.tenant.academyId);
     return res.json({ success: true, message: `Asistencia guardada: ${items.length} alumnos.`, entrenamiento_id: training.id, alertas_generadas: activatedAlerts });
   } catch (error) {
     return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible guardar la asistencia.' });
   }
 });
 
-router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, ...requireFeature(FEATURES.MATCH_PREPARATION), async (req, res) => {
+router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, requireTenantContext, ...requireFeature(FEATURES.MATCH_PREPARATION), async (req, res) => {
   try {
     const match = await requireAssignedMatch(req.user, req.params.partidoId);
     const { students } = await getCategoryStudents(req.user, match.categoria_id);
     const { data: preparation, error: preparationError } = await supabase.from('partido_preparaciones')
       .select('id,sistema_juego,objetivo,indicaciones,estado,updated_at')
-      .eq('academia_id', req.user.academia_id).eq('partido_id', match.id).maybeSingle();
+      .eq('academia_id', req.tenant.academyId).eq('partido_id', match.id).maybeSingle();
     if (preparationError) throw preparationError;
     let plan = [];
     if (preparation) {
@@ -298,7 +299,7 @@ router.get('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfess
   }
 });
 
-router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, ...requireFeature(FEATURES.MATCH_PREPARATION), async (req, res) => {
+router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfessor, requireTenantContext, ...requireFeature(FEATURES.MATCH_PREPARATION), async (req, res) => {
   try {
     const match = await requireAssignedMatch(req.user, req.params.partidoId);
     if (match.fecha < todayInChile() || match.estado === 'Jugado') return res.status(409).json({ error: 'Solo puedes preparar encuentros próximos que aún no se han realizado.' });
@@ -318,7 +319,7 @@ router.put('/me/partidos/:partidoId/preparacion', authMiddleware, requireProfess
       orden: Math.min(Math.max(Number.isInteger(item.orden) ? item.orden : index, 0), 99),
     }));
     const { data, error } = await supabase.rpc('save_partido_preparacion', {
-      p_academia_id: req.user.academia_id,
+      p_academia_id: req.tenant.academyId,
       p_partido_id: match.id,
       p_categoria_id: match.categoria_id,
       p_profesor_id: req.user.id,

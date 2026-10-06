@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireTenantContext } = require('../middleware/tenantContext');
 const { generateMatriculaPdf } = require('../services/premiumPdf');
 const { fetchWithTimeout } = require('../services/httpClient');
 
@@ -46,10 +47,10 @@ const sendMatriculaEmail = async ({ academia, tutor, jugador, folio, pdfBuffer }
   }
 };
 
-router.post('/generar-documento', authMiddleware, async (req, res) => {
+router.post('/generar-documento', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const startedAt = Date.now();
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { jugador_id, tutor_id } = req.body || {};
 
     if (!academia_id || !jugador_id || !tutor_id) {

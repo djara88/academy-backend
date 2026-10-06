@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireTenantContext } = require('../middleware/tenantContext');
 const { requireDirector, requireGuardian } = require('../middleware/professorAccess');
 const { requireFeature } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
@@ -28,13 +29,13 @@ const getTutorPlayers = async (academyId, tutorId) => {
     || [player.tutor_id, player.apoderado_id, player.tutor_principal_id].some((id) => String(id || '') === String(tutorId)));
 };
 
-router.get('/', authMiddleware, requireDirector, ...guardianFeature, async (req, res) => {
+router.get('/', authMiddleware, requireDirector, requireTenantContext, ...guardianFeature, async (req, res) => {
   try {
     const [{ data: tutors, error: tutorError }, { data: players, error: playerError }] = await Promise.all([
       supabase.from('tutores').select('id,nombre,nombre_completo,rut,email,telefono,parentesco,direccion,usuario_id,acceso_activo,invitado_at,created_at')
-        .eq('academia_id', req.user.academia_id).order('nombre_completo'),
+        .eq('academia_id', req.tenant.academyId).order('nombre_completo'),
       supabase.from('jugadores').select('id,nombre,tutor_id,apoderado_id,tutor_principal_id')
-        .eq('academia_id', req.user.academia_id),
+        .eq('academia_id', req.tenant.academyId),
     ]);
     if (tutorError) throw tutorError;
     if (playerError) throw playerError;
@@ -61,7 +62,7 @@ router.get('/', authMiddleware, requireDirector, ...guardianFeature, async (req,
   }
 });
 
-router.patch('/:id', authMiddleware, requireDirector, ...guardianFeature, async (req, res) => {
+router.patch('/:id', authMiddleware, requireDirector, requireTenantContext, ...guardianFeature, async (req, res) => {
   const clean = (value, max = 240) => String(value ?? '').trim().slice(0, max);
   let previousAuth = null;
   try {
@@ -76,14 +77,14 @@ router.patch('/:id', authMiddleware, requireDirector, ...guardianFeature, async 
 
     const { data: tutor, error: tutorError } = await supabase.from('tutores')
       .select('id,nombre,nombre_completo,rut,email,telefono,parentesco,direccion,usuario_id')
-      .eq('id', req.params.id).eq('academia_id', req.user.academia_id).maybeSingle();
+      .eq('id', req.params.id).eq('academia_id', req.tenant.academyId).maybeSingle();
     if (tutorError) throw tutorError;
     if (!tutor) return res.status(404).json({ error: 'Apoderado no encontrado.' });
 
     if (rut) {
       const normalized = rut.replace(/[^0-9kK]/g, '').toUpperCase();
       const { data: peers, error: peerError } = await supabase.from('tutores').select('id,rut,nombre_completo')
-        .eq('academia_id', req.user.academia_id).neq('id', tutor.id);
+        .eq('academia_id', req.tenant.academyId).neq('id', tutor.id);
       if (peerError) throw peerError;
       const duplicate = (peers || []).find((item) => String(item.rut || '').replace(/[^0-9kK]/g, '').toUpperCase() === normalized);
       if (duplicate) return res.status(409).json({ error: `Ya existe otro apoderado con ese RUT: ${duplicate.nombre_completo || 'Apoderado'}.` });
@@ -113,7 +114,7 @@ router.patch('/:id', authMiddleware, requireDirector, ...guardianFeature, async 
       email,
       parentesco,
       direccion,
-    }).eq('id', tutor.id).eq('academia_id', req.user.academia_id)
+    }).eq('id', tutor.id).eq('academia_id', req.tenant.academyId)
       .select('id,nombre_completo,rut,email,telefono,parentesco,direccion,usuario_id,acceso_activo').single();
     if (updateError) throw updateError;
 
@@ -123,7 +124,7 @@ router.patch('/:id', authMiddleware, requireDirector, ...guardianFeature, async 
         nombre_completo: nombreCompleto,
         email,
         correo: email,
-      }).eq('id', tutor.usuario_id).eq('academia_id', req.user.academia_id);
+      }).eq('id', tutor.usuario_id).eq('academia_id', req.tenant.academyId);
       if (userError) throw userError;
     }
 
@@ -131,7 +132,7 @@ router.patch('/:id', authMiddleware, requireDirector, ...guardianFeature, async 
   } catch (error) {
     if (previousAuth) {
       try {
-        const { data: currentTutor } = await supabase.from('tutores').select('usuario_id').eq('id', req.params.id).maybeSingle();
+        const { data: currentTutor } = await supabase.from('tutores').select('usuario_id').eq('id', req.params.id).eq('academia_id', req.tenant.academyId).maybeSingle();
         if (currentTutor?.usuario_id) {
           const rollback = { user_metadata: { full_name: previousAuth.name } };
           if (previousAuth.email) { rollback.email = previousAuth.email; rollback.email_confirm = true; }
@@ -144,12 +145,12 @@ router.patch('/:id', authMiddleware, requireDirector, ...guardianFeature, async 
   }
 });
 
-router.post('/:id/acceso', authMiddleware, requireDirector, ...guardianFeature, async (req, res) => {
+router.post('/:id/acceso', authMiddleware, requireDirector, requireTenantContext, ...guardianFeature, async (req, res) => {
   let authUserId = null;
   try {
     const { data: tutor, error: tutorError } = await supabase.from('tutores')
       .select('id,nombre,nombre_completo,email,usuario_id,academias(nombre)')
-      .eq('id', req.params.id).eq('academia_id', req.user.academia_id).single();
+      .eq('id', req.params.id).eq('academia_id', req.tenant.academyId).single();
     if (tutorError || !tutor) return res.status(404).json({ error: 'Apoderado no encontrado.' });
     if (tutor.usuario_id) return res.status(409).json({ error: 'Este apoderado ya tiene una cuenta vinculada.' });
     const email = String(req.body.email || tutor.email || '').trim().toLowerCase();
@@ -159,7 +160,7 @@ router.post('/:id/acceso', authMiddleware, requireDirector, ...guardianFeature, 
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email, password, email_confirm: true,
       user_metadata: { full_name: name },
-      app_metadata: { role: 'apoderado', academia_id: req.user.academia_id },
+      app_metadata: { role: 'apoderado', academia_id: req.tenant.academyId },
     });
     if (authError) {
       if (authError.code === 'user_already_exists' || authError.status === 422) return res.status(409).json({ error: 'Ese correo ya tiene una cuenta en Syncademia.' });
@@ -167,14 +168,14 @@ router.post('/:id/acceso', authMiddleware, requireDirector, ...guardianFeature, 
     }
     authUserId = authData.user.id;
     const { error: userError } = await supabase.from('usuarios').insert({
-      id: authUserId, academia_id: req.user.academia_id,
+      id: authUserId, academia_id: req.tenant.academyId,
       nombre: name, nombre_completo: name, email, correo: email,
       cargo: 'Apoderado', rol: 'apoderado', activo: true, requiere_cambio_password: true,
     });
     if (userError) throw userError;
     const { error: updateError } = await supabase.from('tutores').update({
       usuario_id: authUserId, email, acceso_activo: true, invitado_at: new Date().toISOString(),
-    }).eq('id', tutor.id).eq('academia_id', req.user.academia_id);
+    }).eq('id', tutor.id).eq('academia_id', req.tenant.academyId);
     if (updateError) throw updateError;
     let emailSent = false;
     try {
@@ -188,24 +189,24 @@ router.post('/:id/acceso', authMiddleware, requireDirector, ...guardianFeature, 
     });
   } catch (error) {
     if (authUserId) {
-      await supabase.from('tutores').update({ usuario_id: null, acceso_activo: false }).eq('usuario_id', authUserId);
-      await supabase.from('usuarios').delete().eq('id', authUserId);
+      await supabase.from('tutores').update({ usuario_id: null, acceso_activo: false }).eq('usuario_id', authUserId).eq('academia_id', req.tenant.academyId);
+      await supabase.from('usuarios').delete().eq('id', authUserId).eq('academia_id', req.tenant.academyId);
       await supabase.auth.admin.deleteUser(authUserId);
     }
     res.status(500).json({ error: error.message || 'No fue posible crear el acceso.' });
   }
 });
 
-router.patch('/:id/estado', authMiddleware, requireDirector, ...guardianFeature, async (req, res) => {
+router.patch('/:id/estado', authMiddleware, requireDirector, requireTenantContext, ...guardianFeature, async (req, res) => {
   try {
     const active = req.body.activo === true;
     const { data: tutor, error } = await supabase.from('tutores').select('id,usuario_id')
-      .eq('id', req.params.id).eq('academia_id', req.user.academia_id).single();
+      .eq('id', req.params.id).eq('academia_id', req.tenant.academyId).single();
     if (error || !tutor) return res.status(404).json({ error: 'Apoderado no encontrado.' });
     if (!tutor.usuario_id) return res.status(409).json({ error: 'Este apoderado todavía no tiene una cuenta.' });
     const [{ error: tutorUpdateError }, { error: userUpdateError }] = await Promise.all([
       supabase.from('tutores').update({ acceso_activo: active }).eq('id', tutor.id),
-      supabase.from('usuarios').update({ activo: active }).eq('id', tutor.usuario_id).eq('academia_id', req.user.academia_id),
+      supabase.from('usuarios').update({ activo: active }).eq('id', tutor.usuario_id).eq('academia_id', req.tenant.academyId),
     ]);
     if (tutorUpdateError) throw tutorUpdateError;
     if (userUpdateError) throw userUpdateError;
@@ -215,17 +216,17 @@ router.patch('/:id/estado', authMiddleware, requireDirector, ...guardianFeature,
   }
 });
 
-router.post('/:id/reset-password', authMiddleware, requireDirector, ...guardianFeature, async (req, res) => {
+router.post('/:id/reset-password', authMiddleware, requireDirector, requireTenantContext, ...guardianFeature, async (req, res) => {
   try {
     const { data: tutor, error } = await supabase.from('tutores')
       .select('id,usuario_id,email,nombre,nombre_completo,academias(nombre)')
-      .eq('id', req.params.id).eq('academia_id', req.user.academia_id).single();
+      .eq('id', req.params.id).eq('academia_id', req.tenant.academyId).single();
     if (error || !tutor) return res.status(404).json({ error: 'Apoderado no encontrado.' });
     if (!tutor.usuario_id) return res.status(409).json({ error: 'Este apoderado todavía no tiene una cuenta.' });
     const password = temporaryPassword();
     const { error: authError } = await supabase.auth.admin.updateUserById(tutor.usuario_id, { password });
     if (authError) throw authError;
-    await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', tutor.usuario_id);
+    await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', tutor.usuario_id).eq('academia_id', req.tenant.academyId);
     let emailSent = false;
     try {
       emailSent = await sendGuardianAccessEmail({
@@ -241,13 +242,13 @@ router.post('/:id/reset-password', authMiddleware, requireDirector, ...guardianF
   }
 });
 
-router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (req, res) => {
+router.get('/me', authMiddleware, requireGuardian, requireTenantContext, ...guardianFeature, async (req, res) => {
   try {
     const { data: tutor, error: tutorError } = await supabase.from('tutores')
       .select('id,nombre,nombre_completo,email,telefono,parentesco,acceso_activo,academias(id,nombre,logo,logo_url)')
-      .eq('usuario_id', req.user.id).eq('academia_id', req.user.academia_id).eq('acceso_activo', true).single();
+      .eq('usuario_id', req.user.id).eq('academia_id', req.tenant.academyId).eq('acceso_activo', true).single();
     if (tutorError || !tutor) return res.status(403).json({ error: 'Tu acceso de apoderado no está activo.' });
-    const players = await getTutorPlayers(req.user.academia_id, tutor.id);
+    const players = await getTutorPlayers(req.tenant.academyId, tutor.id);
     const playerIds = uniqueIds(players.map((player) => player.id));
     const playerCategoryResult = playerIds.length
       ? await supabase.from('jugador_categoria').select('categoria_id').in('jugador_id', playerIds)
@@ -261,18 +262,18 @@ router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (re
     const [matchesResult, attendanceResult, chargesResult, paymentConfigResult] = await Promise.all([
       categoryIds.length ? supabase.from('partidos')
         .select('id,rival,fecha,hora,hora_citacion,ubicacion,condicion,color_uniforme,categoria_id,categorias(nombre)')
-        .eq('academia_id', req.user.academia_id).in('categoria_id', categoryIds).gte('fecha', today)
+        .eq('academia_id', req.tenant.academyId).in('categoria_id', categoryIds).gte('fecha', today)
         .neq('estado', 'Jugado').order('fecha').order('hora').limit(20) : Promise.resolve({ data: [], error: null }),
       playerIds.length ? supabase.from('asistencias')
         .select('id,jugador_id,estado,created_at,entrenamientos(fecha,hora,categoria_id)')
         .in('jugador_id', playerIds).order('created_at', { ascending: false }).limit(60) : Promise.resolve({ data: [], error: null }),
       playerIds.length ? supabase.from('cobros')
         .select('id,jugador_id,concepto,monto,monto_pagado,estado,fecha_vencimiento')
-        .eq('academia_id', req.user.academia_id).in('jugador_id', playerIds)
+        .eq('academia_id', req.tenant.academyId).in('jugador_id', playerIds)
         .order('fecha_vencimiento', { ascending: false }).limit(100) : Promise.resolve({ data: [], error: null }),
       supabase.from('configuracion_financiera')
         .select('acepta_efectivo,acepta_transferencia,acepta_pago_online,transferencia_banco,transferencia_tipo_cuenta,transferencia_numero,transferencia_rut,transferencia_correo,link_pago_online')
-        .eq('academia_id', req.user.academia_id).maybeSingle(),
+        .eq('academia_id', req.tenant.academyId).maybeSingle(),
     ]);
     if (matchesResult.error) throw matchesResult.error;
     if (attendanceResult.error) throw attendanceResult.error;
@@ -296,14 +297,14 @@ router.get('/me', authMiddleware, requireGuardian, ...guardianFeature, async (re
 });
 
 
-router.get('/me/solicitudes-privacidad', authMiddleware, requireGuardian, ...guardianFeature, async (req, res) => {
+router.get('/me/solicitudes-privacidad', authMiddleware, requireGuardian, requireTenantContext, ...guardianFeature, async (req, res) => {
   try {
     const { data: tutor, error: tutorError } = await supabase.from('tutores')
-      .select('id').eq('usuario_id', req.user.id).eq('academia_id', req.user.academia_id).eq('acceso_activo', true).maybeSingle();
+      .select('id').eq('usuario_id', req.user.id).eq('academia_id', req.tenant.academyId).eq('acceso_activo', true).maybeSingle();
     if (tutorError || !tutor) return res.status(403).json({ error: 'Tu acceso de apoderado no está activo.' });
     const { data, error } = await supabase.from('solicitudes_privacidad')
       .select('id,jugador_id,tipo,estado,detalle,fecha_recepcion,fecha_limite,fecha_limite_prorrogada,respuesta,fecha_resolucion,fecha_ejecucion,jugadores(id,nombre)')
-      .eq('academia_id', req.user.academia_id).eq('tutor_id', tutor.id).order('fecha_recepcion', { ascending: false }).limit(100);
+      .eq('academia_id', req.tenant.academyId).eq('tutor_id', tutor.id).order('fecha_recepcion', { ascending: false }).limit(100);
     if (error) throw error;
     res.json({ success: true, data: data || [] });
   } catch (error) {
@@ -311,21 +312,21 @@ router.get('/me/solicitudes-privacidad', authMiddleware, requireGuardian, ...gua
   }
 });
 
-router.post('/me/solicitudes-privacidad', authMiddleware, requireGuardian, ...guardianFeature, async (req, res) => {
+router.post('/me/solicitudes-privacidad', authMiddleware, requireGuardian, requireTenantContext, ...guardianFeature, async (req, res) => {
   try {
     const tipo = safeText(req.body?.tipo, 40).toLowerCase();
     if (!PRIVACY_TYPES.has(tipo)) return res.status(400).json({ error: 'Tipo de solicitud no válido.' });
     const { data: tutor, error: tutorError } = await supabase.from('tutores')
-      .select('id,nombre,nombre_completo,rut,email').eq('usuario_id', req.user.id).eq('academia_id', req.user.academia_id).eq('acceso_activo', true).maybeSingle();
+      .select('id,nombre,nombre_completo,rut,email').eq('usuario_id', req.user.id).eq('academia_id', req.tenant.academyId).eq('acceso_activo', true).maybeSingle();
     if (tutorError || !tutor) return res.status(403).json({ error: 'Tu acceso de apoderado no está activo.' });
-    const players = await getTutorPlayers(req.user.academia_id, tutor.id);
+    const players = await getTutorPlayers(req.tenant.academyId, tutor.id);
     const playerId = safeText(req.body?.jugador_id, 80);
     const player = players.find((item) => String(item.id) === playerId);
     if (!player) return res.status(403).json({ error: 'Solo puedes solicitar acciones sobre alumnos vinculados a tu cuenta.' });
     const now = new Date();
     const blockRequested = req.body?.bloqueo_solicitado === true && ['rectificacion', 'supresion', 'oposicion', 'bloqueo'].includes(tipo);
     const { data: created, error } = await supabase.from('solicitudes_privacidad').insert({
-      academia_id: req.user.academia_id,
+      academia_id: req.tenant.academyId,
       jugador_id: player.id,
       tutor_id: tutor.id,
       tipo,
@@ -344,7 +345,7 @@ router.post('/me/solicitudes-privacidad', authMiddleware, requireGuardian, ...gu
     if (error) throw error;
     await supabase.from('solicitudes_privacidad_eventos').insert({
       solicitud_id: created.id,
-      academia_id: req.user.academia_id,
+      academia_id: req.tenant.academyId,
       evento: 'solicitud_portal_apoderado',
       actor_user_id: req.user.id,
       detalle: { tipo, jugador_id: player.id },

@@ -1,11 +1,13 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { createTenantRepository } = require('../services/tenantRepository');
+const { requireTenantContext } = require('../middleware/tenantContext');
 const { recalculateFinancialStatus, summarizeCharges, todayInChile } = require('../services/monthlyBilling');
 const { getBranch, getStudentEnrollment, getStudentsForScope, safeText } = require('../services/branchContext');
 
 const router = express.Router();
-router.use(authMiddleware);
+router.use(authMiddleware, requireTenantContext);
 
 const money = (value) => Number(value || 0);
 const fail = (result, context) => {
@@ -55,7 +57,7 @@ router.get('/resumen', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     await getBranch(academyId, branchId);
     const [chargesResult, expensesResult, enrollmentsResult] = await Promise.all([
       supabase.from('cobros').select('id,jugador_id,monto,monto_pagado,estado,fecha_vencimiento').eq('academia_id', academyId).eq('rama_id', branchId),
@@ -97,7 +99,7 @@ router.get('/cuentas-corrientes', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     await getBranch(academyId, branchId);
     const [students, chargesResult] = await Promise.all([
       getStudentsForScope({ academyId, branchId, playerSelect: 'id,nombre,foto_base64,foto_url,avatar_url,tutor_id,tutores:tutores!jugadores_tutor_id_fkey(nombre_completo,telefono)' }),
@@ -135,7 +137,7 @@ router.get('/pagos', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     await getBranch(academyId, branchId);
     const { data: charges, error: chargeError } = await supabase.from('cobros').select('id').eq('academia_id', academyId).eq('rama_id', branchId);
     if (chargeError) throw chargeError;
@@ -154,7 +156,7 @@ router.post('/cobros', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const playerId = safeText(req.body?.jugador_id, 80);
     const concept = safeText(req.body?.concepto, 300);
     const amount = money(req.body?.monto);
@@ -183,7 +185,7 @@ router.post('/cobros', async (req, res, next) => {
       return res.json({ success: true, idempotent: true, data: existing });
     }
 
-    const insertResult = await supabase.from('cobros').insert(payload).select('*').single();
+    const insertResult = await createTenantRepository({ academyId: academyId }).table('cobros').insert(payload).select('*').single();
     if (insertResult.error) {
       if (insertResult.error.code === '23505' && key) {
         const raced = await findIdempotentRow('cobros', academyId, key);
@@ -203,9 +205,9 @@ router.get('/egresos', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    await getBranch(req.user.academia_id, branchId);
+    await getBranch(req.tenant.academyId, branchId);
     const data = list(await supabase.from('egresos').select('*,ramas(id,nombre,disciplina),sedes(id,nombre)')
-      .eq('academia_id', req.user.academia_id).eq('rama_id', branchId).is('anulado_at', null).order('fecha_gasto', { ascending: false }), 'No se pudieron leer los egresos');
+      .eq('academia_id', req.tenant.academyId).eq('rama_id', branchId).is('anulado_at', null).order('fecha_gasto', { ascending: false }), 'No se pudieron leer los egresos');
     return res.json({ success: true, data });
   } catch (error) {
     return res.status(error?.status || 500).json({ success: false, error: error?.message || 'No fue posible cargar los egresos de la rama.' });
@@ -216,7 +218,7 @@ router.post('/egresos', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const branch = await getBranch(academyId, branchId);
     const concept = safeText(req.body?.concepto, 300);
     const amount = money(req.body?.monto);
@@ -242,7 +244,7 @@ router.post('/egresos', async (req, res, next) => {
       return res.json({ success: true, idempotent: true, data: existing });
     }
 
-    const insertResult = await supabase.from('egresos').insert(payload).select('*,ramas(id,nombre,disciplina),sedes(id,nombre)').single();
+    const insertResult = await createTenantRepository({ academyId: academyId }).table('egresos').insert(payload).select('*,ramas(id,nombre,disciplina),sedes(id,nombre)').single();
     if (insertResult.error) {
       if (insertResult.error.code === '23505' && key) {
         const raced = await findIdempotentRow('egresos', academyId, key, '*,ramas(id,nombre,disciplina),sedes(id,nombre)');
@@ -261,7 +263,7 @@ router.get('/flujo-caja', async (req, res, next) => {
   const branchId = branchParam(req);
   if (!branchId) return next();
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     await getBranch(academyId, branchId);
     const [{ data: charges, error: chargeError }, expensesResult] = await Promise.all([
       supabase.from('cobros').select('id').eq('academia_id', academyId).eq('rama_id', branchId),

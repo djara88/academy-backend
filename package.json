@@ -12,7 +12,8 @@
     "lint": "eslint . --ext .js,.mjs --max-warnings 0",
     "build": "node --check server.js",
     "test": "node --test",
-    "security:audit": "npm audit --omit=dev --audit-level=high"
+    "security:audit": "npm audit --omit=dev --audit-level=high && npm run tenant-security:audit",
+    "tenant-security:audit": "node scripts/tenant-security-audit.js"
   },
   "keywords": [
     "academia",

@@ -3,6 +3,8 @@ const { randomUUID } = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
+const { requireTenantContext } = require('../middleware/tenantContext');
+const { createTenantRepository } = require('../services/tenantRepository');
 const { loadAcademyEntitlements } = require('../middleware/planAccess');
 const { FEATURES } = require('../services/planCatalog');
 const {
@@ -20,7 +22,7 @@ const {
 } = require('../services/recognitionCatalog');
 
 const router = express.Router();
-router.use(authMiddleware, requireDirector, loadAcademyEntitlements);
+router.use(authMiddleware, requireDirector, requireTenantContext, loadAcademyEntitlements);
 
 const safeText = (value, max = 180) => String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
 const evaluationCustomizationAllowed = (req) => req.entitlements.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA);
@@ -44,10 +46,10 @@ const publicEnrollment = (row) => ({
 });
 
 const loadPlayer = async (academyId, playerId) => {
-  const { data, error } = await supabase.from('jugadores')
+  const tenant = createTenantRepository({ academyId });
+  const { data, error } = await tenant.table('jugadores')
     .select('*')
     .eq('id', playerId)
-    .eq('academia_id', academyId)
     .maybeSingle();
   if (error) throw error;
   if (!data) throw Object.assign(new Error('Alumno no encontrado.'), { statusCode: 404 });
@@ -55,9 +57,9 @@ const loadPlayer = async (academyId, playerId) => {
 };
 
 const loadEnrollments = async (academyId, playerId) => {
-  const { data, error } = await supabase.from('inscripciones_deportivas')
+  const tenant = createTenantRepository({ academyId });
+  const { data, error } = await tenant.table('inscripciones_deportivas')
     .select('id,jugador_id,sede_id,rama_id,categoria_id,estado,fecha_inicio,fecha_fin,monto_matricula,monto_mensualidad,es_principal,rol_especialidad,created_at,sedes(id,nombre),ramas(id,nombre,disciplina,config_evaluacion,config_reconocimientos),categorias(id,nombre)')
-    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .order('es_principal', { ascending: false })
     .order('created_at', { ascending: true });
@@ -95,9 +97,9 @@ const buildEvaluationProfile = (req, player, enrollment) => {
 };
 
 const loadBranchEvaluations = async (academyId, playerId, branchId) => {
-  const { data, error } = await supabase.from('evaluaciones')
+  const tenant = createTenantRepository({ academyId });
+  const { data, error } = await tenant.table('evaluaciones')
     .select('id,jugador_id,sede_id,rama_id,datos_radar,comentarios_profesor,fecha_evaluacion,created_at,disciplina_codigo,perfil_evaluacion,metricas_version')
-    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .eq('rama_id', branchId)
     .order('created_at', { ascending: false })
@@ -253,6 +255,7 @@ const loadAttendance = async (academyId, playerId, branchId) => {
 
   const { data: rows, error } = await supabase.from('asistencias')
     .select('estado')
+    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .in('entrenamiento_id', trainingIds);
   if (error) throw error;
@@ -286,7 +289,7 @@ const normalizeAwards = (input) => (Array.isArray(input) ? input : []).map((item
 
 router.get('/', async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const [{ data: players, error: playerError }, { data: enrollments, error: enrollmentError }] = await Promise.all([
       supabase.from('jugadores')
         .select('id,nombre,rut,rut_pasaporte,numero_documento,fecha_nacimiento,foto_base64,foto_url,avatar_url,estado_financiero,alerta_medica,telefono_emergencia,posicion_cancha,insignias')
@@ -324,7 +327,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id/perfil', async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const player = await loadPlayer(academyId, req.params.id);
     const enrollments = await loadEnrollments(academyId, player.id);
     const enrollment = selectEnrollment(enrollments, safeText(req.query.rama_id, 80));
@@ -397,7 +400,7 @@ router.get('/:id/perfil', async (req, res) => {
 
 router.patch('/:id/ramas/:ramaId', async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     await loadPlayer(academyId, req.params.id);
     const role = safeText(req.body?.rol_especialidad, 120) || null;
     const { data, error } = await supabase.from('inscripciones_deportivas')
@@ -421,7 +424,7 @@ router.post('/:id/evaluaciones', async (req, res) => {
     if (!req.entitlements.features.includes(FEATURES.EVALUATIONS)) {
       return res.status(403).json({ error: 'Las evaluaciones no están habilitadas para esta academia.', code: 'FEATURE_NOT_INCLUDED' });
     }
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const player = await loadPlayer(academyId, req.params.id);
     const enrollments = await loadEnrollments(academyId, player.id);
     const enrollment = selectEnrollment(enrollments, safeText(req.body?.rama_id, 80));
@@ -454,7 +457,7 @@ router.post('/:id/evaluaciones', async (req, res) => {
 
 router.post('/:id/reconocimientos', async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const player = await loadPlayer(academyId, req.params.id);
     const enrollments = await loadEnrollments(academyId, player.id);
     const enrollment = selectEnrollment(enrollments, safeText(req.body?.rama_id, 80));
@@ -498,7 +501,7 @@ router.post('/:id/reconocimientos', async (req, res) => {
 
 router.delete('/:id/reconocimientos/:awardId', async (req, res) => {
   try {
-    const academyId = req.user.academia_id;
+    const academyId = req.tenant.academyId;
     const player = await loadPlayer(academyId, req.params.id);
     const awards = normalizeAwards(player.insignias);
     const before = awards.length;
@@ -529,7 +532,7 @@ router.put('/ramas/:ramaId/reconocimientos-config', async (req, res) => {
     const { data: branch, error: branchError } = await supabase.from('ramas')
       .select('id,nombre,disciplina,config_reconocimientos')
       .eq('id', req.params.ramaId)
-      .eq('academia_id', req.user.academia_id)
+      .eq('academia_id', req.tenant.academyId)
       .maybeSingle();
     if (branchError) throw branchError;
     if (!branch) return res.status(404).json({ error: 'Rama no encontrada.' });
@@ -538,7 +541,7 @@ router.put('/ramas/:ramaId/reconocimientos-config', async (req, res) => {
     const { data, error } = await supabase.from('ramas')
       .update({ config_reconocimientos: config, updated_at: new Date().toISOString() })
       .eq('id', branch.id)
-      .eq('academia_id', req.user.academia_id)
+      .eq('academia_id', req.tenant.academyId)
       .select('id,nombre,disciplina,config_reconocimientos')
       .single();
     if (error) throw error;
@@ -563,7 +566,7 @@ router.delete('/ramas/:ramaId/reconocimientos-config', async (req, res) => {
     const { data, error } = await supabase.from('ramas')
       .update({ config_reconocimientos: {}, updated_at: new Date().toISOString() })
       .eq('id', req.params.ramaId)
-      .eq('academia_id', req.user.academia_id)
+      .eq('academia_id', req.tenant.academyId)
       .select('id,nombre,disciplina,config_reconocimientos')
       .maybeSingle();
     if (error) throw error;
