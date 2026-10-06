@@ -9,7 +9,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test"
+    "lint": "eslint . --ext .js,.mjs --max-warnings 0",
+    "build": "node --check server.js",
+    "test": "node --test",
+    "security:audit": "npm audit --omit=dev --audit-level=high"
   },
   "keywords": [
     "academia",
@@ -23,9 +26,12 @@
     "@supabase/supabase-js": "^2.49.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "multer": "2.2.0",
+    "express": "4.22.3",
+    "multer": "2.4.0",
     "pdfkit": "^0.15.0",
-    "sharp": "0.35.3"
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "eslint": "8.57.1"
   }
 }
