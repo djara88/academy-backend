@@ -136,7 +136,7 @@ router.post('/', authMiddleware, requireTenantContext, async (req, res) => {
       const { data: existingTutor } = await supabase.from('tutores').select('id').eq('rut', tutor.rut).eq('academia_id', academia_id).maybeSingle();
       if (existingTutor) {
         tutorId = existingTutor.id;
-        await supabase.from('tutores').update({ nombre_completo: tutor.nombre_completo, telefono: tutor.telefono, email: tutor.email }).eq('id', tutorId);
+        await supabase.from('tutores').update({ nombre_completo: tutor.nombre_completo, telefono: tutor.telefono, email: tutor.email }).eq('id', tutorId).eq('academia_id', academia_id);
       } else {
         const { data: newTutor, error: errTutor } = await supabase.from('tutores').insert([{ academia_id, nombre_completo: tutor.nombre_completo, rut: tutor.rut, telefono: tutor.telefono, email: tutor.email }]).select().single();
         if (errTutor) throw errTutor;
@@ -407,7 +407,7 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, requireTenantCo
 
     if (jugadorIds.length === 0) return res.json({ success: true, data: {} });
 
-    const { data: evals } = await supabase.from('evaluaciones').select('jugador_id, datos_radar').in('jugador_id', jugadorIds).order('created_at', { ascending: false });
+    const { data: evals } = await supabase.from('evaluaciones').select('jugador_id, datos_radar').eq('academia_id', academia_id).in('jugador_id', jugadorIds).order('created_at', { ascending: false });
 
     const latestEvals = {};
     evals.forEach(ev => { if (!latestEvals[ev.jugador_id]) latestEvals[ev.jugador_id] = ev.datos_radar; });
