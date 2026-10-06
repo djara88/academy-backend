@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { requireTenantContext } = require('../middleware/tenantContext');
 const { enviarMensaje } = require('../services/whatsappService');
 const { academyMessage, getAcademyName } = require('../services/academyIdentity');
 const { getAcademyEntitlements } = require('../services/planCatalog');
@@ -25,9 +26,9 @@ const esTallaValidaApoderado = (talla) => {
 // ====================================================================
 // 1. OBTENER JUGADORES
 // ====================================================================
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     
     const { data: jugadores, error: errJugadores } = await supabase
       .from('jugadores')
@@ -102,9 +103,9 @@ router.get('/', authMiddleware, async (req, res) => {
 // ====================================================================
 // 2. CREAR JUGADORES + TUTOR + UNIFORMES + COBROS INICIALES 🔥
 // ====================================================================
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const playerLimit = getAcademyEntitlements(req.academy || {}).limits.players;
     if (Number.isInteger(playerLimit)) {
       const { count, error: countError } = await supabase.from('jugadores')
@@ -278,9 +279,9 @@ router.post('/', authMiddleware, async (req, res) => {
 // ====================================================================
 // OTROS ENDPOINTS
 // ====================================================================
-router.get('/categorias', authMiddleware, async (req, res) => {
+router.get('/categorias', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { data, error } = await supabase.from('categorias').select('*').eq('academia_id', academia_id).order('created_at', { ascending: true });
     if (error) throw error;
     res.json({ success: true, data });
@@ -289,9 +290,9 @@ router.get('/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/categorias', authMiddleware, async (req, res) => {
+router.post('/categorias', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { nombre, descripcion } = req.body;
     const { data, error } = await supabase.from('categorias').insert([{ academia_id, nombre, descripcion }]).select().single();
     if (error) throw error;
@@ -301,7 +302,7 @@ router.post('/categorias', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
+router.post('/:jugador_id/categorias', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const { jugador_id } = req.params;
     const { categoria_id } = req.body;
@@ -315,7 +316,7 @@ router.post('/:jugador_id/categorias', authMiddleware, async (req, res) => {
 
 router.get('/:jugador_id/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { jugador_id } = req.params;
     const { data, error } = await supabase
       .from('evaluaciones')
@@ -333,7 +334,7 @@ router.get('/:jugador_id/evaluaciones', authMiddleware, ...requireFeature(FEATUR
 
 router.post('/:jugador_id/evaluaciones', authMiddleware, ...requireFeature(FEATURES.EVALUATIONS), async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { jugador_id } = req.params;
     const { datos_radar, comentarios_profesor } = req.body;
     const { data, error } = await supabase.from('evaluaciones').insert([{ jugador_id, academia_id, datos_radar, comentarios_profesor }]).select().single();
@@ -346,7 +347,7 @@ router.post('/:jugador_id/evaluaciones', authMiddleware, ...requireFeature(FEATU
 
 router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEATURES.EXPORTS), async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const academyName = await getAcademyName(academia_id);
     const { jugador_id } = req.params;
     const { pdf_base64, comentarios } = req.body;
@@ -397,7 +398,7 @@ router.post('/:jugador_id/enviar-informe', authMiddleware, ...requireFeature(FEA
   }
 });
 
-router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res) => {
+router.get('/categorias/:categoria_id/promedio', authMiddleware, requireTenantContext, async (req, res) => {
   try {
     const { categoria_id } = req.params;
     
@@ -429,9 +430,9 @@ router.get('/categorias/:categoria_id/promedio', authMiddleware, async (req, res
   }
 });
 
-router.put('/:jugador_id/datos-rapidos', authMiddleware, async (req, res) => {
+router.put('/:jugador_id/datos-rapidos', authMiddleware, requireTenantContext, async (req, res) => {
   try {
-    const { academia_id } = req.user;
+    const academia_id = req.tenant.academyId;
     const { jugador_id } = req.params;
     const { estado_financiero, alerta_medica, telefono_emergencia, insignias } = req.body;
     
