@@ -1,6 +1,7 @@
 CREATE OR REPLACE FUNCTION public.commit_player_import_v1(p_academia_id uuid, p_sede_id uuid, p_rama_id uuid, p_rows jsonb, p_file_name text DEFAULT NULL::text, p_created_by uuid DEFAULT NULL::uuid, p_total_rows integer DEFAULT NULL::integer, p_skipped integer DEFAULT 0)
  RETURNS jsonb
  LANGUAGE plpgsql
+ SECURITY INVOKER
  SET search_path TO ''
  SET statement_timeout TO '90s'
 AS $function$
