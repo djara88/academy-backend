@@ -6,6 +6,7 @@ const { requireDirector } = require('../middleware/professorAccess');
 const { isTrialPlan } = require('../services/planCatalog');
 const { getBillingPlan, getBillingQuote, guardianAddonQuote, calculateGrossClp } = require('../services/billingCatalog');
 const { PLATFORM_ACCESS_TOKEN, createPreference } = require('../services/mercadoPagoGateway');
+const { requestIdempotencyKey, idempotencyFingerprint } = require('../services/idempotency');
 const {
   getAcademyContract,
   getBillingProfile,
@@ -34,6 +35,35 @@ const requireBillingProfile = async (academyId) => {
   return profile;
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getActiveGatewayOrder = async (chargeId) => {
+  const { data, error } = await supabase.from('payment_gateway_orders').select('*')
+    .eq('scope', 'plataforma')
+    .eq('plataforma_cobro_id', chargeId)
+    .in('status', ['created', 'pending'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+};
+
+const waitForGatewayOrder = async (chargeId, attempts = 12) => {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const order = await getActiveGatewayOrder(chargeId);
+    if (order?.checkout_url) return order;
+    if (!order || order.status === 'error' || order.status === 'cancelled') return null;
+    await sleep(150);
+  }
+  return null;
+};
+
+const checkoutPreparingError = () => Object.assign(
+  new Error('El checkout ya se está preparando. Reintenta la misma operación en unos segundos.'),
+  { status: 409, code: 'CHECKOUT_PREPARING' },
+);
+
 const createGatewayOrder = async ({ academyId, charge, title, amountClp, userId }) => {
   const token = PLATFORM_ACCESS_TOKEN();
   if (!token) {
@@ -41,11 +71,26 @@ const createGatewayOrder = async ({ academyId, charge, title, amountClp, userId 
     error.status = 503;
     throw error;
   }
-  const { data: reusable, error: reusableError } = await supabase.from('payment_gateway_orders').select('*')
-    .eq('scope', 'plataforma').eq('plataforma_cobro_id', charge.id).in('status', ['created', 'pending'])
-    .order('created_at', { ascending: false }).limit(1).maybeSingle();
-  if (reusableError) throw reusableError;
+
+  const reusable = await getActiveGatewayOrder(charge.id);
   if (reusable?.checkout_url) return reusable;
+  if (reusable) {
+    const ageMs = Date.now() - new Date(reusable.created_at).getTime();
+    if (Number.isFinite(ageMs) && ageMs < 120000) {
+      const ready = await waitForGatewayOrder(charge.id);
+      if (ready?.checkout_url) return ready;
+      throw checkoutPreparingError();
+    }
+    const { error: staleError } = await supabase.from('payment_gateway_orders')
+      .update({
+        status: 'error',
+        metadata: { ...(reusable.metadata || {}), error: 'stale checkout claim recovered' },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', reusable.id)
+      .in('status', ['created', 'pending']);
+    if (staleError) throw staleError;
+  }
 
   const externalReference = `lestra:plataforma:${crypto.randomUUID()}`;
   const { data: order, error } = await supabase.from('payment_gateway_orders').insert({
@@ -53,7 +98,16 @@ const createGatewayOrder = async ({ academyId, charge, title, amountClp, userId 
     external_reference: externalReference, amount_expected: amountClp, status: 'created',
     created_by: userId, metadata: { title },
   }).select('*').single();
-  if (error) throw error;
+
+  if (error) {
+    if (error.code === '23505') {
+      const ready = await waitForGatewayOrder(charge.id);
+      if (ready?.checkout_url) return ready;
+      throw checkoutPreparingError();
+    }
+    throw error;
+  }
+
   try {
     const preference = await createPreference({
       accessToken: token, externalReference, title, amountClp, orderId: order.id,
@@ -89,9 +143,11 @@ const reserveFounder = async (charge) => {
   return number;
 };
 
-const invalidatePreviousInitialCheckouts = async (academyId) => {
-  const { data: charges, error } = await supabase.from('plataforma_cobros').select('id')
+const invalidatePreviousInitialCheckouts = async (academyId, createdBefore = null) => {
+  let chargeQuery = supabase.from('plataforma_cobros').select('id')
     .eq('academia_id', academyId).eq('estado', 'pendiente').in('charge_kind', ['manual', 'initial']).not('target_plan_code', 'is', null);
+  if (createdBefore) chargeQuery = chargeQuery.lt('created_at', createdBefore);
+  const { data: charges, error } = await chargeQuery;
   if (error) throw error;
   const ids = (charges || []).map((row) => row.id);
   if (!ids.length) return;
@@ -107,6 +163,57 @@ const invalidatePreviousInitialCheckouts = async (academyId) => {
   }).in('charge_id', ids).is('activated_at', null);
   if (founderError) throw founderError;
   const { error: chargeError } = await supabase.from('plataforma_cobros').update({ estado: 'anulado', updated_at: now }).in('id', ids);
+  if (chargeError) throw chargeError;
+};
+
+const findOpenPlatformCharge = async (academyId, chargeKind) => {
+  const { data, error } = await supabase.from('plataforma_cobros').select('*')
+    .eq('academia_id', academyId)
+    .eq('charge_kind', chargeKind)
+    .in('estado', ['pendiente', 'vencido'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+};
+
+const findIdempotentPlatformCharge = async (academyId, key) => {
+  if (!key) return null;
+  const { data, error } = await supabase.from('plataforma_cobros').select('*')
+    .eq('academia_id', academyId)
+    .eq('idempotency_key', key)
+    .in('estado', ['pendiente', 'vencido', 'pagado'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+};
+
+const assertCheckoutFingerprint = (charge, fingerprint) => {
+  if (charge?.idempotency_fingerprint && charge.idempotency_fingerprint !== fingerprint) {
+    const error = new Error('La misma clave de operación ya fue usada con una selección de checkout distinta.');
+    error.status = 409;
+    error.code = 'IDEMPOTENCY_KEY_REUSED';
+    throw error;
+  }
+};
+
+const cancelOpenAddonCheckout = async (academyId, chargeId) => {
+  if (!chargeId) return;
+  const now = new Date().toISOString();
+  const { error: orderError } = await supabase.from('payment_gateway_orders')
+    .update({ status: 'cancelled', updated_at: now })
+    .eq('scope', 'plataforma')
+    .eq('plataforma_cobro_id', chargeId)
+    .in('status', ['created', 'pending']);
+  if (orderError) throw orderError;
+  const { error: chargeError } = await supabase.from('plataforma_cobros')
+    .update({ estado: 'anulado', updated_at: now })
+    .eq('id', chargeId)
+    .eq('academia_id', academyId)
+    .in('estado', ['pendiente', 'vencido']);
   if (chargeError) throw chargeError;
 };
 
