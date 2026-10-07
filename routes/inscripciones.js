@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { todayInChile } = require('../services/monthlyBilling');
 const { createSportEnrollment } = require('../services/sportEnrollmentService');
+const { requestIdempotencyKey } = require('../services/idempotency');
 
 router.use(authMiddleware, requireDirector);
 
@@ -65,8 +66,9 @@ router.post('/', async (req, res) => {
     const data = await createSportEnrollment({
       academiaId: req.user.academia_id, userId: req.user.id, jugadorId, sedeId, ramaId, categoriaId,
       montoMatricula: req.body?.monto_matricula, abonoMatricula: req.body?.abono_matricula, montoMensualidad: req.body?.monto_mensualidad,
+      idempotencyKey: requestIdempotencyKey(req),
     });
-    return res.status(201).json({ success: true, data });
+    return res.status(data.idempotent ? 200 : 201).json({ success: true, idempotent: data.idempotent, data });
   } catch (error) {
     return res.status(error?.statusCode || 500).json({ success: false, code: error?.code, error: error?.statusCode ? error.message : 'No fue posible crear la inscripción deportiva.' });
   }
@@ -79,21 +81,23 @@ router.post('/solicitudes/:id/aprobar', async (req, res) => {
       .select('*').eq('id', req.params.id).eq('academia_id', academyId).maybeSingle();
     if (requestError) throw requestError;
     if (!request) return res.status(404).json({ error: 'Solicitud no encontrada.' });
-    if (request.estado !== 'pendiente') return res.status(409).json({ error: 'Esta solicitud ya fue resuelta.' });
+    if (!['pendiente', 'aprobada'].includes(request.estado)) return res.status(409).json({ error: 'Esta solicitud ya fue resuelta.' });
 
     const data = await createSportEnrollment({
-      academiaId: academyId, userId: req.user.id, jugadorId: request.jugador_id, sedeId: request.sede_id, ramaId: request.rama_id,
+      academiaId: academyId,
+      userId: req.user.id,
+      jugadorId: request.jugador_id,
+      sedeId: request.sede_id,
+      ramaId: request.rama_id,
       categoriaId: String(req.body?.categoria_id || request.categoria_id || '').trim() || null,
-      montoMatricula: req.body?.monto_matricula, abonoMatricula: req.body?.abono_matricula, montoMensualidad: req.body?.monto_mensualidad,
+      montoMatricula: req.body?.monto_matricula ?? request.monto_matricula,
+      abonoMatricula: req.body?.abono_matricula ?? request.abono_matricula,
+      montoMensualidad: req.body?.monto_mensualidad ?? request.monto_mensualidad,
+      idempotencyKey: `sport-request:${request.id}`,
+      requestId: request.id,
+      response: String(req.body?.respuesta || request.respuesta || 'Solicitud aprobada por la academia.').trim().slice(0, 1000),
     });
-    const { error: updateError } = await supabase.from('solicitudes_inscripcion_deportiva').update({
-      estado: 'aprobada', monto_matricula: Number(req.body?.monto_matricula || 0), abono_matricula: Number(req.body?.abono_matricula || 0),
-      monto_mensualidad: Number(req.body?.monto_mensualidad || 0), categoria_id: data.categoria_id || null, inscripcion_id: data.id,
-      resuelto_por: req.user.id, respuesta: String(req.body?.respuesta || 'Solicitud aprobada por la academia.').trim().slice(0, 1000),
-      resuelto_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('id', request.id).eq('academia_id', academyId).eq('estado', 'pendiente');
-    if (updateError) throw updateError;
-    return res.json({ success: true, data });
+    return res.json({ success: true, idempotent: data.idempotent, data });
   } catch (error) {
     console.error('Error aprobando solicitud deportiva:', error?.message || error);
     return res.status(error?.statusCode || 500).json({ error: error?.statusCode ? error.message : 'No fue posible aprobar la solicitud.', code: error?.code });
