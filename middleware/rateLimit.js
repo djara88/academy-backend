@@ -1,44 +1,51 @@
+const { getRateLimitStore } = require('../services/redisRateLimitStore');
+
 const defaultKey = (req) => req.user?.id || req.ip || req.socket?.remoteAddress || 'unknown';
 
 const createRateLimiter = ({
   windowMs = 5 * 60 * 1000,
   max = 300,
+  namespace = 'default',
   keyGenerator = defaultKey,
   skip = () => false,
   message = 'Demasiadas solicitudes. Intenta nuevamente en unos minutos.',
+  failClosed = false,
+  store,
 } = {}) => {
-  const buckets = new Map();
-  let requestCount = 0;
+  const selectedStore = store || getRateLimitStore();
 
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (skip(req)) return next();
 
-    const now = Date.now();
-    requestCount += 1;
+    const rawKey = String(keyGenerator(req) || 'unknown');
+    const key = `${namespace}:${rawKey}`;
 
-    // Limpieza oportunista para mantener memoria acotada sin timers permanentes.
-    if (requestCount % 250 === 0) {
-      for (const [key, bucket] of buckets.entries()) {
-        if (bucket.resetAt <= now) buckets.delete(key);
+    let bucket;
+    try {
+      bucket = await selectedStore.consume(key, windowMs);
+    } catch (error) {
+      console.error(`Rate limiter store unavailable (${namespace}):`, error?.message || error);
+      if (failClosed) {
+        res.setHeader('Retry-After', '5');
+        return res.status(503).json({
+          error: 'La protección de esta operación no está disponible temporalmente. Intenta nuevamente.',
+          code: 'RATE_LIMIT_STORE_UNAVAILABLE',
+          retryAfterSeconds: 5,
+        });
       }
+      return next();
     }
 
-    const key = String(keyGenerator(req) || 'unknown');
-    let bucket = buckets.get(key);
-    if (!bucket || bucket.resetAt <= now) {
-      bucket = { count: 0, resetAt: now + windowMs };
-      buckets.set(key, bucket);
-    }
-
-    bucket.count += 1;
-    const remaining = Math.max(0, max - bucket.count);
-    const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+    const count = Number(bucket.count || 0);
+    const resetAt = Number(bucket.resetAt || (Date.now() + windowMs));
+    const remaining = Math.max(0, max - count);
+    const retryAfterSeconds = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
 
     res.setHeader('RateLimit-Limit', String(max));
     res.setHeader('RateLimit-Remaining', String(remaining));
-    res.setHeader('RateLimit-Reset', String(Math.ceil(bucket.resetAt / 1000)));
+    res.setHeader('RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
 
-    if (bucket.count > max) {
+    if (count > max) {
       res.setHeader('Retry-After', String(retryAfterSeconds));
       return res.status(429).json({ error: message, retryAfterSeconds });
     }
