@@ -213,10 +213,28 @@ router.post('/solicitudes', async (req, res) => {
       categoria_id: categoriaId, mensaje: String(req.body?.mensaje || '').trim().slice(0, 1000) || null,
     }).select('id,estado,created_at').single();
     if (error) {
-      if (error.code === '23505') return res.status(409).json({ error: 'Ya existe una solicitud pendiente para esa disciplina.', code: 'SPORT_REQUEST_EXISTS' });
+      if (error.code === '23505') {
+        const { data: existingRequest, error: existingRequestError } = await supabase.from('solicitudes_inscripcion_deportiva')
+          .select('id,estado,created_at')
+          .eq('academia_id', academiaId)
+          .eq('jugador_id', jugadorId)
+          .eq('rama_id', ramaId)
+          .eq('estado', 'pendiente')
+          .maybeSingle();
+        if (existingRequestError) throw existingRequestError;
+        if (existingRequest) {
+          return res.json({
+            success: true,
+            idempotent: true,
+            data: existingRequest,
+            message: `La solicitud para ${branchResult.data.disciplina || branchResult.data.nombre} ya estaba enviada.`,
+          });
+        }
+        return res.status(409).json({ error: 'Ya existe una solicitud pendiente para esa disciplina.', code: 'SPORT_REQUEST_EXISTS' });
+      }
       throw error;
     }
-    return res.status(201).json({ success: true, data, message: `Solicitud enviada para ${branchResult.data.disciplina || branchResult.data.nombre}. La academia definirá categoría y valores antes de aprobar.` });
+    return res.status(201).json({ success: true, idempotent: false, data, message: `Solicitud enviada para ${branchResult.data.disciplina || branchResult.data.nombre}. La academia definirá categoría y valores antes de aprobar.` });
   } catch (error) {
     console.error('Error creando solicitud deportiva:', error?.message || error);
     return res.status(500).json({ error: 'No fue posible enviar la solicitud deportiva.' });
