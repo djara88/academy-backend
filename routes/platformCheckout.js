@@ -272,6 +272,9 @@ router.post('/change-request', async (req, res) => {
 router.post('/plan', async (req, res) => {
   let charge = null;
   let founderSlot = null;
+  let ownsCharge = false;
+  const operationStartedAt = new Date().toISOString();
+
   try {
     const academy = await getAcademyContract(req.user.academia_id);
     if (academy.contract_locked_at) {
@@ -280,55 +283,159 @@ router.post('/plan', async (req, res) => {
         code: 'PLAN_CHANGE_APPROVAL_REQUIRED',
       });
     }
+
     if (req.body?.billing_profile) await saveBillingProfile({ academyId: academy.id, userId: req.user.id, payload: req.body.billing_profile });
     const profile = await requireBillingProfile(academy.id);
     const plan = getBillingPlan(String(req.body?.plan_code || ''));
     if (!plan) return res.status(400).json({ error: 'Selecciona un plan válido.' });
+
     const billingCycle = req.body?.billing_cycle === 'annual' ? 'annual' : 'monthly';
     const promotionCode = req.body?.promotion_code === 'founder' ? 'founder' : null;
     const guardians = req.body?.guardian_license === true;
+    const idempotencyKey = requestIdempotencyKey(req);
+
     let quote;
     try { quote = getBillingQuote({ planCode: plan.code, billingCycle, promotionCode, guardians }); }
     catch (error) { return res.status(400).json({ error: error.message, code: error.code || 'INVALID_BILLING_OFFER' }); }
+
     if (promotionCode === 'founder' && academy.founder_number && academy.promotion_ends_at && academy.promotion_ends_at < today()) {
       return res.status(409).json({ error: 'Tu período de Precio Fundador de 12 meses ya terminó.', code: 'FOUNDER_EXPIRED' });
     }
 
-    await invalidatePreviousInitialCheckouts(academy.id);
-    const label = promotionCode === 'founder' ? `${plan.name} · Precio Fundador` : billingCycle === 'annual' ? `${plan.name} · Anual (12 meses pagando 10)` : `${plan.name} · Mensual`;
-    const { data: created, error: chargeError } = await supabase.from('plataforma_cobros').insert({
-      academia_id: academy.id,
-      concepto: `Suscripción Lestra Deportivo · ${label}${guardians ? ' + Apoderados PRO' : ''}`,
-      subtotal_clp: calculateGrossClp({ priceClp: quote.baseChargedNetClp }),
-      addon_clp: quote.guardianChargedGrossClp,
-      target_plan_code: plan.code,
-      target_guardian_license: guardians,
+    const profileSnapshot = billingSnapshot(profile);
+    const fingerprint = idempotencyFingerprint({
+      kind: 'initial',
+      academy_id: academy.id,
+      plan_code: plan.code,
       billing_cycle: quote.billingCycle,
-      billing_period_months: quote.billingPeriodMonths,
       promotion_code: quote.promotionCode,
-      discount_clp: quote.discountGrossClp,
-      fecha_vencimiento: addDays(3),
-      charge_kind: 'initial',
+      guardian_license: guardians,
+      charged_net_clp: quote.chargedNetClp,
+      charged_gross_clp: quote.chargedGrossClp,
       billing_document_type: profile.documento_tipo,
-      billing_snapshot: billingSnapshot(profile),
-      notas: `Checkout Pro Mercado Pago. Documento solicitado: ${profile.documento_tipo}. Neto total: $${quote.chargedNetClp.toLocaleString('es-CL')} CLP. Total con IVA esperado: $${quote.chargedGrossClp.toLocaleString('es-CL')} CLP.`,
-      created_by: req.user.id,
-    }).select('*').single();
-    if (chargeError) throw chargeError;
-    charge = created;
-    if (promotionCode === 'founder') founderSlot = await reserveFounder(charge);
+      billing_snapshot: profileSnapshot,
+    });
+
+    charge = await findIdempotentPlatformCharge(academy.id, idempotencyKey);
+    if (charge) assertCheckoutFingerprint(charge, fingerprint);
+
+    if (!charge) {
+      const openCharge = await findOpenPlatformCharge(academy.id, 'initial');
+      if (openCharge?.idempotency_fingerprint === fingerprint) {
+        charge = openCharge;
+      } else {
+        await invalidatePreviousInitialCheckouts(academy.id, operationStartedAt);
+      }
+    }
+
+    const label = promotionCode === 'founder'
+      ? `${plan.name} · Precio Fundador`
+      : billingCycle === 'annual'
+        ? `${plan.name} · Anual (12 meses pagando 10)`
+        : `${plan.name} · Mensual`;
+
+    if (!charge) {
+      const payload = {
+        academia_id: academy.id,
+        concepto: `Suscripción Lestra Deportivo · ${label}${guardians ? ' + Apoderados PRO' : ''}`,
+        subtotal_clp: calculateGrossClp({ priceClp: quote.baseChargedNetClp }),
+        addon_clp: quote.guardianChargedGrossClp,
+        target_plan_code: plan.code,
+        target_guardian_license: guardians,
+        billing_cycle: quote.billingCycle,
+        billing_period_months: quote.billingPeriodMonths,
+        promotion_code: quote.promotionCode,
+        discount_clp: quote.discountGrossClp,
+        fecha_vencimiento: addDays(3),
+        charge_kind: 'initial',
+        billing_document_type: profile.documento_tipo,
+        billing_snapshot: profileSnapshot,
+        notas: `Checkout Pro Mercado Pago. Documento solicitado: ${profile.documento_tipo}. Neto total: $${quote.chargedNetClp.toLocaleString('es-CL')} CLP. Total con IVA esperado: $${quote.chargedGrossClp.toLocaleString('es-CL')} CLP.`,
+        created_by: req.user.id,
+        idempotency_key: idempotencyKey,
+        idempotency_fingerprint: fingerprint,
+      };
+      const { data: created, error: chargeError } = await supabase.from('plataforma_cobros').insert(payload).select('*').single();
+
+      if (chargeError) {
+        if (chargeError.code !== '23505') throw chargeError;
+        const raced = (await findIdempotentPlatformCharge(academy.id, idempotencyKey))
+          || (await findOpenPlatformCharge(academy.id, 'initial'));
+        if (!raced || raced.idempotency_fingerprint !== fingerprint) {
+          throw Object.assign(
+            new Error('Existe otro checkout de plan en preparación. Termínalo o vuelve a intentar el cambio.'),
+            { status: 409, code: 'CHECKOUT_IN_PROGRESS' },
+          );
+        }
+        charge = raced;
+      } else {
+        charge = created;
+        ownsCharge = true;
+      }
+    }
+
+    assertCheckoutFingerprint(charge, fingerprint);
+    founderSlot = Number(charge.founder_slot || 0) || null;
+    if (promotionCode === 'founder' && !founderSlot) founderSlot = await reserveFounder(charge);
+
     const amount = Number(charge.total_clp || quote.chargedGrossClp);
+    if (charge.estado === 'pagado' && charge.checkout_url) {
+      return res.json({
+        success: true,
+        idempotent: true,
+        data: {
+          chargeId: charge.id,
+          orderId: null,
+          checkoutUrl: charge.checkout_url,
+          amountClp: amount,
+          netAmountClp: quote.chargedNetClp,
+          planName: plan.name,
+          guardianLicense: guardians,
+          billingCycle: quote.billingCycle,
+          promotionCode: quote.promotionCode,
+          founderSlot,
+          discountClp: quote.discountGrossClp,
+          documentType: profile.documento_tipo,
+          manualVerification: false,
+          alreadyPaid: true,
+        },
+      });
+    }
+
     const order = await createGatewayOrder({ academyId: academy.id, charge, title: charge.concepto, amountClp: amount, userId: req.user.id });
-    await supabase.from('plataforma_cobros').update({ checkout_url: order.checkout_url, referencia: order.external_reference, updated_at: new Date().toISOString() }).eq('id', charge.id);
-    return res.status(201).json({ success: true, data: {
-      chargeId: charge.id, orderId: order.id, checkoutUrl: order.checkout_url, amountClp: amount,
-      netAmountClp: quote.chargedNetClp, planName: plan.name, guardianLicense: guardians,
-      billingCycle: quote.billingCycle, promotionCode: quote.promotionCode, founderSlot,
-      discountClp: quote.discountGrossClp, documentType: profile.documento_tipo, manualVerification: false,
-    } });
+    const { error: chargeUpdateError } = await supabase.from('plataforma_cobros').update({
+      checkout_url: order.checkout_url,
+      referencia: order.external_reference,
+      updated_at: new Date().toISOString(),
+    }).eq('id', charge.id);
+    if (chargeUpdateError) throw chargeUpdateError;
+
+    return res.status(ownsCharge ? 201 : 200).json({
+      success: true,
+      idempotent: !ownsCharge,
+      data: {
+        chargeId: charge.id,
+        orderId: order.id,
+        checkoutUrl: order.checkout_url,
+        amountClp: amount,
+        netAmountClp: quote.chargedNetClp,
+        planName: plan.name,
+        guardianLicense: guardians,
+        billingCycle: quote.billingCycle,
+        promotionCode: quote.promotionCode,
+        founderSlot,
+        discountClp: quote.discountGrossClp,
+        documentType: profile.documento_tipo,
+        manualVerification: false,
+      },
+    });
   } catch (error) {
-    if (charge?.id) {
-      if (founderSlot) await supabase.from('syncademia_founder_slots').update({ academia_id: null, charge_id: null, reserved_until: null, updated_at: new Date().toISOString() }).eq('slot_no', founderSlot).eq('charge_id', charge.id).is('activated_at', null);
+    if (ownsCharge && charge?.id) {
+      if (founderSlot) {
+        await supabase.from('syncademia_founder_slots').update({
+          academia_id: null, charge_id: null, reserved_until: null, updated_at: new Date().toISOString(),
+        }).eq('slot_no', founderSlot).eq('charge_id', charge.id).is('activated_at', null);
+      }
       if (!charge.checkout_url) await supabase.from('plataforma_cobros').delete().eq('id', charge.id).eq('estado', 'pendiente');
     }
     console.error('Error preparando suscripción Checkout Pro:', error?.message || error);
@@ -362,38 +469,119 @@ router.post('/renewal/checkout', async (req, res) => {
 
 router.post('/guardian-addon', async (req, res) => {
   let charge = null;
+  let ownsCharge = false;
+  const operationStartedAt = new Date().toISOString();
+
   try {
     const academyContract = await getAcademyContract(req.user.academia_id);
     if (academyContract.contract_locked_at) {
       return res.status(409).json({ error: 'Los cambios de complementos de un contrato activo deben ser autorizados por Lestra.', code: 'CONTRACT_CHANGE_APPROVAL_REQUIRED' });
     }
+
     const profile = await requireBillingProfile(req.user.academia_id);
-    const { data: academy, error: academyError } = await supabase.from('academias').select('id,plan,plan_codigo,subscription_status,licencia_apoderados,guardian_license_ends_at').eq('id', req.user.academia_id).single();
+    const { data: academy, error: academyError } = await supabase.from('academias')
+      .select('id,plan,plan_codigo,subscription_status,licencia_apoderados,guardian_license_ends_at')
+      .eq('id', req.user.academia_id)
+      .single();
     if (academyError) throw academyError;
     if (isTrialPlan(academy)) return res.status(409).json({ error: 'Apoderados PRO ya está incluido durante tu prueba Full.', code: 'GUARDIAN_INCLUDED_IN_TRIAL' });
     if (academy.subscription_status !== 'active') return res.status(409).json({ error: 'Activa primero un plan de Lestra Deportivo.', code: 'BASE_PLAN_REQUIRED' });
+
     const cycle = req.body?.billing_cycle === 'annual' ? 'annual' : 'monthly';
     const quote = guardianAddonQuote(cycle);
-    const { data: created, error } = await supabase.from('plataforma_cobros').insert({
-      academia_id: req.user.academia_id,
-      concepto: `Complemento Lestra Deportivo · Apoderados PRO · ${cycle === 'annual' ? 'Anual (12 meses pagando 10)' : 'Mensual'}`,
-      subtotal_clp: 0, addon_clp: quote.chargedGrossClp, target_plan_code: null, target_guardian_license: true,
-      billing_cycle: quote.billingCycle, billing_period_months: quote.billingPeriodMonths, promotion_code: null,
-      discount_clp: quote.discountGrossClp, fecha_vencimiento: addDays(3), charge_kind: 'addon',
-      billing_document_type: profile.documento_tipo, billing_snapshot: billingSnapshot(profile),
-      notas: `Checkout Pro Mercado Pago. Documento solicitado: ${profile.documento_tipo}. Neto: $${quote.chargedNetClp.toLocaleString('es-CL')} CLP. Total con IVA: $${quote.chargedGrossClp.toLocaleString('es-CL')} CLP.`,
-      created_by: req.user.id,
-    }).select('*').single();
-    if (error) throw error;
-    charge = created;
+    const idempotencyKey = requestIdempotencyKey(req);
+    const profileSnapshot = billingSnapshot(profile);
+    const fingerprint = idempotencyFingerprint({
+      kind: 'addon',
+      academy_id: academy.id,
+      billing_cycle: quote.billingCycle,
+      charged_net_clp: quote.chargedNetClp,
+      charged_gross_clp: quote.chargedGrossClp,
+      billing_document_type: profile.documento_tipo,
+      billing_snapshot: profileSnapshot,
+    });
+
+    charge = await findIdempotentPlatformCharge(academy.id, idempotencyKey);
+    if (charge) assertCheckoutFingerprint(charge, fingerprint);
+
+    if (!charge) {
+      const openCharge = await findOpenPlatformCharge(academy.id, 'addon');
+      if (openCharge?.idempotency_fingerprint === fingerprint) {
+        charge = openCharge;
+      } else if (openCharge && new Date(openCharge.created_at).toISOString() < operationStartedAt) {
+        await cancelOpenAddonCheckout(academy.id, openCharge.id);
+      }
+    }
+
+    if (!charge) {
+      const payload = {
+        academia_id: academy.id,
+        concepto: `Complemento Lestra Deportivo · Apoderados PRO · ${cycle === 'annual' ? 'Anual (12 meses pagando 10)' : 'Mensual'}`,
+        subtotal_clp: 0,
+        addon_clp: quote.chargedGrossClp,
+        target_plan_code: null,
+        target_guardian_license: true,
+        billing_cycle: quote.billingCycle,
+        billing_period_months: quote.billingPeriodMonths,
+        promotion_code: null,
+        discount_clp: quote.discountGrossClp,
+        fecha_vencimiento: addDays(3),
+        charge_kind: 'addon',
+        billing_document_type: profile.documento_tipo,
+        billing_snapshot: profileSnapshot,
+        notas: `Checkout Pro Mercado Pago. Documento solicitado: ${profile.documento_tipo}. Neto: $${quote.chargedNetClp.toLocaleString('es-CL')} CLP. Total con IVA: $${quote.chargedGrossClp.toLocaleString('es-CL')} CLP.`,
+        created_by: req.user.id,
+        idempotency_key: idempotencyKey,
+        idempotency_fingerprint: fingerprint,
+      };
+      const { data: created, error } = await supabase.from('plataforma_cobros').insert(payload).select('*').single();
+
+      if (error) {
+        if (error.code !== '23505') throw error;
+        const raced = (await findIdempotentPlatformCharge(academy.id, idempotencyKey))
+          || (await findOpenPlatformCharge(academy.id, 'addon'));
+        if (!raced || raced.idempotency_fingerprint !== fingerprint) {
+          throw Object.assign(
+            new Error('Existe otro checkout de Apoderados PRO en preparación.'),
+            { status: 409, code: 'CHECKOUT_IN_PROGRESS' },
+          );
+        }
+        charge = raced;
+      } else {
+        charge = created;
+        ownsCharge = true;
+      }
+    }
+
+    assertCheckoutFingerprint(charge, fingerprint);
     const amount = Number(charge.total_clp || quote.chargedGrossClp);
-    const order = await createGatewayOrder({ academyId: req.user.academia_id, charge, title: charge.concepto, amountClp: amount, userId: req.user.id });
-    await supabase.from('plataforma_cobros').update({ checkout_url: order.checkout_url, referencia: order.external_reference, updated_at: new Date().toISOString() }).eq('id', charge.id);
-    return res.status(201).json({ success: true, data: { chargeId: charge.id, orderId: order.id, checkoutUrl: order.checkout_url, amountClp: amount, netAmountClp: quote.chargedNetClp, manualVerification: false } });
+    const order = await createGatewayOrder({ academyId: academy.id, charge, title: charge.concepto, amountClp: amount, userId: req.user.id });
+    const { error: chargeUpdateError } = await supabase.from('plataforma_cobros').update({
+      checkout_url: order.checkout_url,
+      referencia: order.external_reference,
+      updated_at: new Date().toISOString(),
+    }).eq('id', charge.id);
+    if (chargeUpdateError) throw chargeUpdateError;
+
+    return res.status(ownsCharge ? 201 : 200).json({
+      success: true,
+      idempotent: !ownsCharge,
+      data: {
+        chargeId: charge.id,
+        orderId: order.id,
+        checkoutUrl: order.checkout_url,
+        amountClp: amount,
+        netAmountClp: quote.chargedNetClp,
+        manualVerification: false,
+      },
+    });
   } catch (error) {
-    if (charge?.id && !charge.checkout_url) await supabase.from('plataforma_cobros').delete().eq('id', charge.id).eq('estado', 'pendiente');
+    if (ownsCharge && charge?.id && !charge.checkout_url) {
+      await supabase.from('plataforma_cobros').delete().eq('id', charge.id).eq('estado', 'pendiente');
+    }
     return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible preparar Apoderados PRO.', code: error?.code });
   }
 });
+
 
 module.exports = router;
