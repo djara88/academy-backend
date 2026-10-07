@@ -280,7 +280,10 @@ const port = process.env.PORT || 8080;
 const server = app.listen(port, '0.0.0.0', () => console.log(`Servidor escuchando en http://0.0.0.0:${port}`));
 warmRateLimitStore()
   .then(({ kind }) => console.log(`🛡️ Rate limit store listo: ${kind}`))
-  .catch((error) => console.error('❌ Rate limit store no disponible:', error?.message || error));
+  .catch((error) => {
+    console.error('❌ Rate limit store no disponible:', error?.message || error);
+    if (String(process.env.RATE_LIMIT_REDIS_REQUIRED || '').toLowerCase() === 'true') process.exit(1);
+  });
 const systemMetricsSampler = startSystemMetricsSampler();
 const presenceSampler = startPresenceSampler();
 const academyRegistrationNotifier = startAcademyRegistrationNotifier();
