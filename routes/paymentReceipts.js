@@ -7,6 +7,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { loadPortalToken, authorizedPlayersForToken } = require('../services/collectionPortal');
 const { assertUploadedFile } = require('../services/fileValidation');
+const { resolveIdempotencyKey } = require('../services/idempotency');
 
 const router = express.Router();
 const allowedTypes = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
@@ -41,7 +42,21 @@ router.post('/public/transferencia/:token', upload.single('comprobante'), async 
     const amount = Math.round(Number(req.body?.monto));
     const paymentDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.fecha_pago || '')) ? String(req.body.fecha_pago) : new Date().toISOString().slice(0, 10);
     const observations = safe(req.body?.observaciones, 1000) || null;
-    const idempotencyKey = safe(req.body?.idempotency_key, 160) || crypto.randomUUID();
+    const fileDigest = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+    const idempotencyKey = resolveIdempotencyKey({
+      providedKey: req.get('Idempotency-Key') || safe(req.body?.idempotency_key, 160),
+      namespace: 'payment-receipt',
+      windowMs: 15 * 60 * 1000,
+      payload: {
+        tokenId: tokenRow.id,
+        chargeId,
+        quotaId,
+        amount,
+        paymentDate,
+        observations,
+        fileDigest,
+      },
+    });
     if (!chargeId || !Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Cobro y monto son obligatorios.' });
 
     const { data: charge, error: chargeError } = await supabase.from('cobros')
@@ -65,6 +80,16 @@ router.post('/public/transferencia/:token', upload.single('comprobante'), async 
     availableBalance = Math.max(availableBalance - (pending || []).reduce((sum, row) => sum + Number(row.monto || 0), 0), 0);
     if (amount > availableBalance) return res.status(400).json({ error: 'El monto informado supera el saldo disponible para este concepto.' });
 
+    const { data: existing, error: existingError } = await supabase.from('pagos_informados')
+      .select('id,estado,monto,created_at')
+      .eq('academia_id', tokenRow.academia_id)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) {
+      return res.json({ success: true, data: existing, reused: true, message: 'Esta transferencia ya había sido informada.' });
+    }
+
     const ownerPart = tokenRow.tutor_id || tokenRow.jugador_id || 'portal';
     storedPath = `${tokenRow.academia_id}/${ownerPart}/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}${extensionFor(req.file)}`;
     const uploadResult = await supabase.storage.from('comprobantes-pago').upload(storedPath, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
@@ -85,7 +110,24 @@ router.post('/public/transferencia/:token', upload.single('comprobante'), async 
       canal: 'portal',
       idempotency_key: idempotencyKey,
     }).select('id,estado,monto,created_at').single();
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23505') {
+        const { data: duplicate } = await supabase.from('pagos_informados')
+          .select('id,estado,monto,created_at')
+          .eq('academia_id', tokenRow.academia_id)
+          .eq('idempotency_key', idempotencyKey)
+          .maybeSingle();
+        if (duplicate) {
+          if (storedPath) {
+            await supabase.storage.from('comprobantes-pago').remove([storedPath]).catch(() => null);
+            storedPath = null;
+          }
+          return res.json({ success: true, data: duplicate, reused: true, message: 'Esta transferencia ya había sido informada.' });
+        }
+      }
+      throw error;
+    }
+    storedPath = null;
     return res.status(201).json({ success: true, data, message: 'Transferencia informada. La academia revisará el comprobante antes de aplicar el pago.' });
   } catch (error) {
     if (storedPath) await supabase.storage.from('comprobantes-pago').remove([storedPath]).catch(() => null);
