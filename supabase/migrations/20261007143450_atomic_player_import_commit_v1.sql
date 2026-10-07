@@ -2,8 +2,8 @@ CREATE OR REPLACE FUNCTION public.commit_player_import_v1(p_academia_id uuid, p_
  RETURNS jsonb
  LANGUAGE plpgsql
  SECURITY INVOKER
- SET search_path TO ''
- SET statement_timeout TO '90s'
+ SET search_path = ''
+ SET statement_timeout = '90s'
 AS $function$
 declare
   v_lote_id uuid;
