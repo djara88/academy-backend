@@ -5,6 +5,7 @@ const supabase = require('./config/supabase');
 const authMiddleware = require('./middleware/auth');
 const jerseyReservationGuard = require('./middleware/jerseyReservationGuard');
 const { createRateLimiter } = require('./middleware/rateLimit');
+const { warmRateLimitStore } = require('./services/redisRateLimitStore');
 const { requireFeature } = require('./middleware/planAccess');
 const { FEATURES } = require('./services/planCatalog');
 const { validatePassword } = require('./services/passwordPolicy');
@@ -46,6 +47,7 @@ app.use(cors({
 }));
 
 const apiLimiter = createRateLimiter({
+  namespace: 'api',
   windowMs: 5 * 60 * 1000,
   max: Math.max(100, Number(process.env.API_RATE_LIMIT_MAX || 300)),
   skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/')
@@ -54,27 +56,52 @@ const apiLimiter = createRateLimiter({
     || req.originalUrl?.startsWith('/api/presence/heartbeat'),
 });
 const sensitiveLimiter = createRateLimiter({
+  namespace: 'sensitive',
   windowMs: 15 * 60 * 1000,
   max: Math.max(10, Number(process.env.SENSITIVE_RATE_LIMIT_MAX || 30)),
   message: 'Demasiados intentos en esta operación. Espera unos minutos antes de reintentar.',
+  failClosed: true,
+});
+const paymentLimiter = createRateLimiter({
+  namespace: 'payment',
+  windowMs: 15 * 60 * 1000,
+  max: Math.max(10, Number(process.env.PAYMENT_RATE_LIMIT_MAX || process.env.SENSITIVE_RATE_LIMIT_MAX || 30)),
+  message: 'Demasiados intentos de pago. Espera unos minutos antes de reintentar.',
+  failClosed: true,
+});
+const webhookLimiter = createRateLimiter({
+  namespace: 'webhook',
+  windowMs: 60 * 1000,
+  max: Math.max(100, Number(process.env.WEBHOOK_RATE_LIMIT_MAX || 300)),
+  keyGenerator: (req) => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.path || req.originalUrl || '').split('?')[0]}`,
+  message: 'Se alcanzó temporalmente el límite de eventos para este webhook.',
+  failClosed: true,
 });
 const registrationLimiter = createRateLimiter({
+  namespace: 'registration',
   windowMs: 60 * 60 * 1000,
   max: Math.max(3, Number(process.env.REGISTRATION_RATE_LIMIT_MAX || 10)),
   message: 'Se alcanzó temporalmente el límite de registros desde esta conexión.',
+  failClosed: true,
 });
 const collectionLimiter = createRateLimiter({
+  namespace: 'collection',
   windowMs: 10 * 60 * 1000,
   max: Math.max(6, Number(process.env.COLLECTION_RATE_LIMIT_MAX || 15)),
   keyGenerator: (req) => `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(req.params?.slug || '').toLowerCase()}`,
   message: 'Demasiados intentos de consulta de pagos. Espera unos minutos antes de reintentar.',
+  failClosed: true,
 });
 
+app.use('/api/whatsapp/webhook', webhookLimiter);
+app.use('/api/whatsapp-bridge/webhook', webhookLimiter);
+app.use('/api/mercadopago/webhook', webhookLimiter);
 app.use('/api', apiLimiter);
 app.use('/api/cambiar-password', sensitiveLimiter);
-app.use('/api/subscriptions/checkout', sensitiveLimiter);
-app.use('/api/subscriptions/guardian-addon/checkout', sensitiveLimiter);
-app.use('/api/subscriptions/payment-notice', sensitiveLimiter);
+app.use('/api/subscriptions/checkout', paymentLimiter);
+app.use('/api/subscriptions/guardian-addon/checkout', paymentLimiter);
+app.use('/api/subscriptions/payment-notice', paymentLimiter);
+app.use('/api/mercadopago/platform-subscription', paymentLimiter);
 app.use('/api/prematriculas/public', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
 app.use('/api/solicitudes-admision/public', registrationLimiter);
@@ -251,6 +278,9 @@ app.use((error, _req, res, next) => {
 
 const port = process.env.PORT || 8080;
 const server = app.listen(port, '0.0.0.0', () => console.log(`Servidor escuchando en http://0.0.0.0:${port}`));
+warmRateLimitStore()
+  .then(({ kind }) => console.log(`🛡️ Rate limit store listo: ${kind}`))
+  .catch((error) => console.error('❌ Rate limit store no disponible:', error?.message || error));
 const systemMetricsSampler = startSystemMetricsSampler();
 const presenceSampler = startPresenceSampler();
 const academyRegistrationNotifier = startAcademyRegistrationNotifier();
