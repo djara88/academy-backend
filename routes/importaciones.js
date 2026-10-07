@@ -9,7 +9,6 @@ const text = (value, max = 250) => String(value ?? '').trim().slice(0, max);
 const normalizeDocument = (value) => text(value, 60).replace(/\s/g, '').toUpperCase();
 const documentKey = (value) => normalizeDocument(value).replace(/[^A-Z0-9]/g, '');
 const nameKey = (value) => text(value, 180).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const today = () => new Date().toISOString().slice(0, 10);
 const numeric = (value) => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   const raw = String(value ?? '').replace(/[$\s]/g, '').trim();
@@ -45,12 +44,6 @@ const normalizeRow = (raw = {}, index = 0) => ({
   numero_camiseta: raw.numero_camiseta === '' || raw.numero_camiseta == null ? null : Number(raw.numero_camiseta),
   estado: text(raw.estado, 40) || 'Activo',
 });
-const enrollmentStatus = (value) => {
-  const key = nameKey(value);
-  if (key.includes('retir')) return 'Retirada';
-  if (key.includes('inactiv')) return 'Inactiva';
-  return 'Activa';
-};
 const playerDocKey = (player) => documentKey(player.rut || player.numero_documento || player.dni || player.pasaporte || player.rut_pasaporte);
 
 const getCapacity = async (academiaId) => {
@@ -175,7 +168,6 @@ router.post('/preview', authMiddleware, async (req, res) => {
 
 router.post('/commit', authMiddleware, async (req, res) => {
   const academiaId = req.user.academia_id;
-  let loteId = null;
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     const ramaId = text(req.body?.rama_id, 80);
@@ -183,168 +175,123 @@ router.post('/commit', authMiddleware, async (req, res) => {
     if (!rows.length || rows.length > 3000) return res.status(400).json({ success: false, error: 'La importación debe contener entre 1 y 3.000 filas.' });
 
     const scope = await resolveScope(academiaId, ramaId);
-    const [validated, capacity] = await Promise.all([validateRows(academiaId, ramaId, rows), getCapacity(academiaId)]);
+    const [validated, capacity] = await Promise.all([
+      validateRows(academiaId, ramaId, rows),
+      getCapacity(academiaId),
+    ]);
     const accepted = validated.filter((row) => row.valido);
     if (!accepted.length) return res.status(400).json({ success: false, error: 'No hay filas válidas para importar.' });
+
     const newPlayersRequired = accepted.filter((row) => row.modo === 'crear_alumno').length;
     if (capacity.remaining !== null && newPlayersRequired > capacity.remaining) {
-      return res.status(403).json({ success: false, code: 'PLAYER_LIMIT_REACHED', error: `Tu plan permite crear ${capacity.remaining} alumno(s) más. Esta importación necesita crear ${newPlayersRequired}; los alumnos ya existentes no consumen cupos adicionales.`, available_slots: capacity.remaining, new_players: newPlayersRequired });
+      return res.status(403).json({
+        success: false,
+        code: 'PLAYER_LIMIT_REACHED',
+        error: `Tu plan permite crear ${capacity.remaining} alumno(s) más. Esta importación necesita crear ${newPlayersRequired}; los alumnos ya existentes no consumen cupos adicionales.`,
+        available_slots: capacity.remaining,
+        new_players: newPlayersRequired,
+      });
     }
 
-    const { data: lote, error: loteError } = await supabase.from('import_lotes').insert([{
-      academia_id: academiaId,
-      sede_id: scope.sede_id,
-      rama_id: ramaId,
-      nombre_archivo: text(req.body?.file_name, 255) || null,
-      estado: 'procesando',
-      total_filas: validated.length,
-      created_by: req.user.id || null,
-      resumen: { rama: scope.branch.nombre, disciplina: scope.branch.disciplina, sede: scope.branch.sedes?.nombre || null },
-    }]).select('id').single();
-    if (loteError) throw loteError;
-    loteId = lote.id;
+    const atomicRows = accepted.map((row) => ({
+      fila: row.fila,
+      nombre_alumno: row.nombre_alumno,
+      rut_alumno: row.rut_alumno,
+      fecha_nacimiento: row.fecha_nacimiento,
+      sexo: row.sexo,
+      posicion: row.posicion,
+      categoria: row.categoria,
+      nombre_apoderado: row.nombre_apoderado,
+      rut_apoderado: row.rut_apoderado,
+      telefono_apoderado: row.telefono_apoderado,
+      email_apoderado: row.email_apoderado,
+      monto_matricula: row.monto_matricula,
+      mensualidad: row.mensualidad,
+      saldo_pendiente: row.saldo_pendiente,
+      talla_uniforme: row.talla_uniforme,
+      numero_camiseta: row.numero_camiseta,
+      estado: row.estado,
+      jugador_existente_id: row.jugador_existente_id,
+    }));
 
-    const [{ data: categories, error: catError }, { data: tutors, error: tutorError }, { data: activeEnrollments, error: activeError }] = await Promise.all([
-      supabase.from('categorias').select('id,nombre').eq('academia_id', academiaId).eq('sede_id', scope.sede_id).eq('rama_id', ramaId),
-      supabase.from('tutores').select('id,rut,email,nombre_completo,telefono').eq('academia_id', academiaId),
-      supabase.from('inscripciones_deportivas').select('jugador_id').eq('academia_id', academiaId).eq('estado', 'Activa'),
-    ]);
-    if (catError || tutorError || activeError) throw catError || tutorError || activeError;
-    const categoryCache = new Map((categories || []).map((item) => [nameKey(item.nombre), item.id]));
-    const tutorCache = new Map();
-    for (const tutor of tutors || []) {
-      const doc = documentKey(tutor.rut);
-      if (doc) tutorCache.set(`doc:${doc}`, tutor.id);
-      if (tutor.email) tutorCache.set(`mail:${String(tutor.email).toLowerCase()}`, tutor.id);
-      if (tutor.nombre_completo) tutorCache.set(`name:${nameKey(tutor.nombre_completo)}|${text(tutor.telefono, 80)}`, tutor.id);
-    }
-    const hasActiveEnrollment = new Set((activeEnrollments || []).map((row) => String(row.jugador_id)));
+    const { data, error } = await supabase.rpc('commit_player_import_v1', {
+      p_academia_id: academiaId,
+      p_sede_id: scope.sede_id,
+      p_rama_id: ramaId,
+      p_rows: atomicRows,
+      p_file_name: text(req.body?.file_name, 255) || null,
+      p_created_by: req.user.id || req.user.sub || null,
+      p_total_rows: validated.length,
+      p_skipped: validated.length - accepted.length,
+    });
 
-    const record = async (row, entidad, id, detalle = {}) => {
-      const { error } = await supabase.from('import_lote_items').insert([{ lote_id: loteId, academia_id: academiaId, fila: row.fila, entidad, entidad_id: id, accion: 'creado', detalle }]);
-      if (error) throw error;
-    };
-    const createCategory = async (row) => {
-      if (!row.categoria) return { id: null, created: false };
-      const key = nameKey(row.categoria);
-      if (categoryCache.has(key)) return { id: categoryCache.get(key), created: false };
-      const { data, error } = await supabase.from('categorias').insert([{ academia_id: academiaId, sede_id: scope.sede_id, rama_id: ramaId, nombre: row.categoria }]).select('id').single();
-      if (error) throw error;
-      categoryCache.set(key, data.id);
-      try { await record(row, 'categoria', data.id, { nombre: row.categoria, rama_id: ramaId, sede_id: scope.sede_id }); }
-      catch (error) { categoryCache.delete(key); await supabase.from('categorias').delete().eq('id', data.id).eq('academia_id', academiaId); throw error; }
-      return { id: data.id, created: true };
-    };
-    const createTutor = async (row) => {
-      if (!row.nombre_apoderado) return { id: null, created: false };
-      const keys = [documentKey(row.rut_apoderado) ? `doc:${documentKey(row.rut_apoderado)}` : null, row.email_apoderado ? `mail:${row.email_apoderado}` : null, `name:${nameKey(row.nombre_apoderado)}|${row.telefono_apoderado}`].filter(Boolean);
-      const existing = keys.map((key) => tutorCache.get(key)).find(Boolean);
-      if (existing) return { id: existing, created: false };
-      const { data, error } = await supabase.from('tutores').insert([{ academia_id: academiaId, nombre_completo: row.nombre_apoderado, rut: row.rut_apoderado || null, telefono: row.telefono_apoderado || null, email: row.email_apoderado || null }]).select('id').single();
-      if (error) throw error;
-      keys.forEach((key) => tutorCache.set(key, data.id));
-      try { await record(row, 'tutor', data.id, { nombre: row.nombre_apoderado }); }
-      catch (error) { keys.forEach((key) => tutorCache.delete(key)); await supabase.from('tutores').delete().eq('id', data.id).eq('academia_id', academiaId); throw error; }
-      return { id: data.id, created: true };
-    };
+    if (error) {
+      const detail = [error.message, error.details, error.hint].filter(Boolean).join(' ');
+      const normalized = detail.toUpperCase();
 
-    let imported = 0;
-    let createdPlayers = 0;
-    let enrolledExisting = 0;
-    let failed = 0;
-    const skipped = validated.length - accepted.length;
-    const rowErrors = [];
-
-    for (const row of accepted) {
-      const made = { category: null, tutor: null, player: null, enrollment: null, link: null, charge: null };
-      try {
-        const category = await createCategory(row);
-        made.category = category.created ? category.id : null;
-        let playerId = row.jugador_existente_id || null;
-        if (!playerId) {
-          const tutor = await createTutor(row);
-          made.tutor = tutor.created ? tutor.id : null;
-          const { data: player, error } = await supabase.from('jugadores').insert([{
-            academia_id: academiaId, sede_id: scope.sede_id, rama_id: ramaId, tutor_id: tutor.id, categoria_id: category.id,
-            nombre: row.nombre_alumno, rut: row.rut_alumno || null, fecha_nacimiento: row.fecha_nacimiento, sexo: row.sexo || null,
-            posicion_cancha: row.posicion || null, tipo_alumno: 'Antiguo', estado: row.estado, estado_matricula: 'Migrado',
-            monto_matricula: row.monto_matricula, monto_mensualidad: row.mensualidad, talla_uniforme: row.talla_uniforme || null,
-            numero_camiseta: Number.isFinite(row.numero_camiseta) ? row.numero_camiseta : null, saldo_pendiente: row.saldo_pendiente,
-            estado_financiero: row.saldo_pendiente > 0 ? 'Moroso' : 'Al Día',
-          }]).select('id').single();
-          if (error) throw error;
-          playerId = player.id;
-          made.player = player.id;
-          await record(row, 'jugador', player.id, { nombre: row.nombre_alumno, rama_id: ramaId, sede_id: scope.sede_id });
-        }
-
-        const status = enrollmentStatus(row.estado);
-        const { data: enrollment, error: enrollmentError } = await supabase.from('inscripciones_deportivas').insert([{
-          academia_id: academiaId, jugador_id: playerId, sede_id: scope.sede_id, rama_id: ramaId, categoria_id: category.id,
-          estado: status, fecha_inicio: today(), monto_matricula: row.monto_matricula, monto_mensualidad: row.mensualidad,
-          es_principal: made.player ? true : !hasActiveEnrollment.has(String(playerId)), rol_especialidad: row.posicion || null,
-        }]).select('id').single();
-        if (enrollmentError) throw enrollmentError;
-        made.enrollment = enrollment.id;
-        await record(row, 'inscripcion', enrollment.id, { jugador_id: playerId, rama_id: ramaId, sede_id: scope.sede_id, categoria_id: category.id, estado: status, alumno_existente: !made.player });
-
-        if (category.id) {
-          const { data: existingLink, error: lookupError } = await supabase.from('jugador_categoria').select('id').eq('jugador_id', playerId).eq('categoria_id', category.id).maybeSingle();
-          if (lookupError) throw lookupError;
-          if (!existingLink) {
-            const { data: link, error: linkError } = await supabase.from('jugador_categoria').insert([{ jugador_id: playerId, categoria_id: category.id }]).select('id').single();
-            if (linkError) throw linkError;
-            made.link = link.id;
-            await record(row, 'jugador_categoria', link.id, { jugador_id: playerId, categoria_id: category.id });
-          }
-        }
-
-        if (row.saldo_pendiente > 0) {
-          const { data: charge, error: chargeError } = await supabase.from('cobros').insert([{
-            academia_id: academiaId, jugador_id: playerId, inscripcion_id: enrollment.id, sede_id: scope.sede_id, rama_id: ramaId,
-            concepto: 'Saldo inicial migrado', tipo_concepto: 'Migración', monto: row.saldo_pendiente, monto_pagado: 0,
-            estado: 'Pendiente', fecha_vencimiento: today(), observaciones: `Importado en ${scope.branch.nombre}`,
-          }]).select('id').single();
-          if (chargeError) throw chargeError;
-          made.charge = charge.id;
-          await record(row, 'cobro', charge.id, { concepto: 'Saldo inicial migrado', inscripcion_id: enrollment.id, rama_id: ramaId });
-        }
-
-        imported += 1;
-        if (made.player) createdPlayers += 1; else enrolledExisting += 1;
-        if (status === 'Activa') hasActiveEnrollment.add(String(playerId));
-      } catch (rowError) {
-        if (made.charge) await supabase.from('cobros').delete().eq('id', made.charge).eq('academia_id', academiaId);
-        if (made.link) await supabase.from('jugador_categoria').delete().eq('id', made.link);
-        if (made.enrollment) await supabase.from('inscripciones_deportivas').delete().eq('id', made.enrollment).eq('academia_id', academiaId);
-        if (made.player) await supabase.from('jugadores').delete().eq('id', made.player).eq('academia_id', academiaId);
-        if (made.tutor) {
-          const { count } = await supabase.from('jugadores').select('id', { count: 'exact', head: true }).eq('academia_id', academiaId).eq('tutor_id', made.tutor);
-          if (!count) await supabase.from('tutores').delete().eq('id', made.tutor).eq('academia_id', academiaId);
-        }
-        if (made.category) {
-          const [{ count: enrollmentCount }, { count: linkCount }] = await Promise.all([
-            supabase.from('inscripciones_deportivas').select('id', { count: 'exact', head: true }).eq('categoria_id', made.category),
-            supabase.from('jugador_categoria').select('id', { count: 'exact', head: true }).eq('categoria_id', made.category),
-          ]);
-          if (!enrollmentCount && !linkCount) {
-            await supabase.from('categorias').delete().eq('id', made.category).eq('academia_id', academiaId);
-            categoryCache.delete(nameKey(row.categoria));
-          }
-        }
-        failed += 1;
-        rowErrors.push({ fila: row.fila, error: rowError?.message || 'Error de importación' });
+      if (normalized.includes('PLAYER_LIMIT_REACHED')) {
+        return res.status(403).json({
+          success: false,
+          code: 'PLAYER_LIMIT_REACHED',
+          error: 'La academia alcanzó el máximo de alumnos permitido por su plan.',
+        });
       }
+      if (
+        normalized.includes('IMPORT_ACTIVE_ENROLLMENT_EXISTS')
+        || normalized.includes('IMPORT_DUPLICATE_PLAYER_DOCUMENT')
+        || normalized.includes('IMPORT_PLAYER_SCOPE_MISMATCH')
+        || normalized.includes('IMPORT_INVALID_SCOPE')
+      ) {
+        return res.status(409).json({
+          success: false,
+          code: 'IMPORT_CONFLICT',
+          error: 'La base cambió desde la previsualización. Vuelve a validar el archivo antes de importarlo.',
+        });
+      }
+      if (
+        normalized.includes('IMPORT_ROW_LIMIT')
+        || normalized.includes('IMPORT_ROWS_MUST_BE_ARRAY')
+        || normalized.includes('IMPORT_PLAYER_NAME_REQUIRED')
+        || normalized.includes('IMPORT_INVALID_SKIPPED_COUNT')
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: 'IMPORT_VALIDATION_ERROR',
+          error: 'El lote contiene datos inválidos y no fue aplicado.',
+        });
+      }
+      throw error;
     }
 
-    const estado = failed ? (imported ? 'parcial' : 'error') : 'completado';
-    const fullSummary = { total: validated.length, imported, created_players: createdPlayers, enrolled_existing: enrolledExisting, skipped, failed, rama_id: ramaId, rama: scope.branch.nombre, disciplina: scope.branch.disciplina, sede_id: scope.sede_id, sede: scope.branch.sedes?.nombre || null, errores: rowErrors.slice(0, 100) };
-    await supabase.from('import_lotes').update({ estado, filas_importadas: imported, filas_omitidas: skipped, filas_error: failed, resumen: fullSummary, completed_at: new Date().toISOString() }).eq('id', loteId).eq('academia_id', academiaId);
-    return res.status(201).json({ success: true, lote_id: loteId, estado, scope: { rama_id: ramaId, rama_nombre: scope.branch.nombre, disciplina: scope.branch.disciplina, sede_id: scope.sede_id, sede_nombre: scope.branch.sedes?.nombre || null }, summary: { total: validated.length, imported, created_players: createdPlayers, enrolled_existing: enrolledExisting, skipped, failed }, errors: rowErrors });
+    return res.status(201).json({
+      success: true,
+      lote_id: data?.lote_id,
+      estado: data?.estado || 'completado',
+      scope: data?.scope || {
+        rama_id: ramaId,
+        rama_nombre: scope.branch.nombre,
+        disciplina: scope.branch.disciplina,
+        sede_id: scope.sede_id,
+        sede_nombre: scope.branch.sedes?.nombre || null,
+      },
+      summary: data?.summary || {
+        total: validated.length,
+        imported: accepted.length,
+        created_players: newPlayersRequired,
+        enrolled_existing: accepted.length - newPlayersRequired,
+        skipped: validated.length - accepted.length,
+        failed: 0,
+      },
+      errors: Array.isArray(data?.errors) ? data.errors : [],
+      atomic: true,
+    });
   } catch (error) {
-    if (loteId) await supabase.from('import_lotes').update({ estado: 'error', completed_at: new Date().toISOString(), resumen: { error: error?.message || 'Error' } }).eq('id', loteId).eq('academia_id', academiaId);
-    console.error('Error importando base:', error?.message || error);
-    return res.status(error?.status || 500).json({ success: false, code: error?.code, error: error?.status ? error.message : 'No fue posible completar la importación.' });
+    console.error('Error importando base de forma atómica:', error?.message || error);
+    return res.status(error?.status || 500).json({
+      success: false,
+      code: error?.code,
+      error: error?.status ? error.message : 'No fue posible completar la importación. No se aplicó ningún cambio parcial.',
+    });
   }
 });
 
