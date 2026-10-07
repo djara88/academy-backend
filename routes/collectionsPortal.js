@@ -5,6 +5,7 @@ const { normalizeRut } = require('../services/rutGuard');
 const { sendCollectionVerificationEmail } = require('../services/collectionEmail');
 const { enviarMensaje } = require('../services/whatsappService');
 const { academyMessage } = require('../services/academyIdentity');
+const { resolveIdempotencyKey } = require('../services/idempotency');
 const {
   digest,
   createPortalToken,
@@ -201,7 +202,20 @@ router.post('/public/pagos-informados/:token', async (req,res)=>{
       if(!installment||installment.estado==='Anulada'||amount>balance)return res.status(400).json({error:'La cuota seleccionada no admite ese monto considerando pagos que esperan validación.'});
     }
 
-    const clientKey=safe(req.body?.idempotency_key,100)||crypto.randomUUID();const idempotencyKey=`portal-${tokenRow.id}-${clientKey}`;
+    const providedKey=safe(req.get('Idempotency-Key')||req.body?.idempotency_key,160);
+    const idempotencyKey=resolveIdempotencyKey({
+      providedKey,
+      namespace:'portal-payment',
+      windowMs:5*60*1000,
+      payload:{
+        tokenId:tokenRow.id,
+        chargeId:charge.id,
+        installmentId,
+        amount,
+        paymentDate:/^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.fecha_pago||''))?String(req.body.fecha_pago):today(),
+        observations:safe(req.body?.observaciones,1000)||null,
+      },
+    });
     const {data:existing,error:existingError}=await supabase.from('pagos_informados').select('id,estado').eq('academia_id',tokenRow.academia_id).eq('idempotency_key',idempotencyKey).maybeSingle();if(existingError)throw existingError;if(existing)return res.json({success:true,data:existing,message:'Este pago ya había sido informado.'});
     const paymentDate=/^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.fecha_pago||''))?String(req.body.fecha_pago):today();
     if(paymentDate>today())return res.status(400).json({error:'La fecha de transferencia no puede estar en el futuro.'});
