@@ -90,15 +90,6 @@ router.post('/solicitudes/:id/aprobar', async (req, res) => {
       solicitudId: request.id,
       respuesta: String(req.body?.respuesta || 'Solicitud aprobada por la academia.').trim().slice(0, 1000),
     });
-    const updateError = null;
-    /* La RPC create_sport_enrollment_v2 resuelve la solicitud dentro de la misma transacción. */
-    if (false) await supabase.from('solicitudes_inscripcion_deportiva').update({
-      estado: 'aprobada', monto_matricula: Number(req.body?.monto_matricula || 0), abono_matricula: Number(req.body?.abono_matricula || 0),
-      monto_mensualidad: Number(req.body?.monto_mensualidad || 0), categoria_id: data.categoria_id || null, inscripcion_id: data.id,
-      resuelto_por: req.user.id, respuesta: String(req.body?.respuesta || 'Solicitud aprobada por la academia.').trim().slice(0, 1000),
-      resuelto_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('id', request.id).eq('academia_id', academyId).eq('estado', 'pendiente');
-    if (updateError) throw updateError;
     return res.json({ success: true, data });
   } catch (error) {
     console.error('Error aprobando solicitud deportiva:', error?.message || error);
