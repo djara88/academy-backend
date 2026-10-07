@@ -7,7 +7,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { loadPortalToken, authorizedPlayersForToken } = require('../services/collectionPortal');
 const { assertUploadedFile } = require('../services/fileValidation');
-const { resolveIdempotencyKey, fingerprint } = require('../services/idempotency');
+const { resolveIdempotencyKey } = require('../services/idempotency');
 
 const router = express.Router();
 const allowedTypes = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
@@ -42,7 +42,7 @@ router.post('/public/transferencia/:token', upload.single('comprobante'), async 
     const amount = Math.round(Number(req.body?.monto));
     const paymentDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.fecha_pago || '')) ? String(req.body.fecha_pago) : new Date().toISOString().slice(0, 10);
     const observations = safe(req.body?.observaciones, 1000) || null;
-    const fileDigest = fingerprint(req.file.buffer.toString('base64'));
+    const fileDigest = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
     const idempotencyKey = resolveIdempotencyKey({
       providedKey: req.get('Idempotency-Key') || safe(req.body?.idempotency_key, 160),
       namespace: 'payment-receipt',
