@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { getAcademyEntitlements } = require('../services/planCatalog');
 const { getBranch, listAcademyBranches } = require('../services/branchContext');
+const { parseStrictIsoDate } = require('../services/strictDate');
 
 const text = (value, max = 250) => String(value ?? '').trim().slice(0, max);
 const normalizeDocument = (value) => text(value, 60).replace(/\s/g, '').toUpperCase();
@@ -20,11 +21,7 @@ const numeric = (value) => {
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
-const dateOrNull = (value) => {
-  if (!value) return null;
-  const d = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-};
+const dateOrNull = (value) => parseStrictIsoDate(value);
 const normalizeRow = (raw = {}, index = 0) => ({
   fila: index + 2,
   nombre_alumno: text(raw.nombre_alumno, 180),
@@ -86,12 +83,16 @@ const validateRows = async (academiaId, ramaId, rows) => {
   const normalized = rows.map(normalizeRow);
   const { byDocument, activeInBranch } = await loadExisting(academiaId, ramaId);
   const seen = new Set();
-  return normalized.map((row) => {
+  return normalized.map((row, index) => {
     const errors = [];
     const warnings = [];
     const key = documentKey(row.rut_alumno);
     const existing = key ? byDocument.get(key) || null : null;
     if (!row.nombre_alumno) errors.push('Falta nombre del alumno');
+    const rawBirthDate = rows[index]?.fecha_nacimiento;
+    if (rawBirthDate != null && String(rawBirthDate).trim() !== '' && !row.fecha_nacimiento) {
+      errors.push('Fecha de nacimiento inválida. Usa exclusivamente YYYY-MM-DD');
+    }
     if (!row.nombre_apoderado && !existing) warnings.push('Sin nombre de apoderado');
     if (!row.rut_apoderado && !existing) warnings.push('Sin documento de apoderado');
     if (row.email_apoderado && !/^\S+@\S+\.\S+$/.test(row.email_apoderado)) warnings.push('Correo de apoderado parece inválido');

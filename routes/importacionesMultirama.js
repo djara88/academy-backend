@@ -6,6 +6,7 @@ const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
 const { getBranch, safeText } = require('../services/branchContext');
 const { createSportEnrollment } = require('../services/sportEnrollmentService');
+const { parseStrictIsoDate } = require('../services/strictDate');
 
 const router = express.Router();
 router.use(authMiddleware, requireDirector);
@@ -57,7 +58,7 @@ const mapRows = (sheetRows) => {
 const parseFile = (file) => {
   const extension = String(file.originalname || '').toLowerCase().split('.').pop();
   if (!['xlsx','xls','csv'].includes(extension)) throw Object.assign(new Error('Formato inválido. Usa XLSX, XLS o CSV.'), { status: 400 });
-  const workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: true, raw: false });
+  const workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: false, raw: false });
   const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!firstSheet) throw Object.assign(new Error('El archivo no contiene una hoja legible.'), { status: 400 });
   const records = XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: false });
@@ -65,16 +66,7 @@ const parseFile = (file) => {
   return mapRows(records);
 };
 
-const parseDate = (value) => {
-  if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0,10);
-  const text = String(value).trim();
-  const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (iso) return `${iso[1]}-${iso[2].padStart(2,'0')}-${iso[3].padStart(2,'0')}`;
-  const latin = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
-  if (latin) return `${latin[3]}-${latin[2].padStart(2,'0')}-${latin[1].padStart(2,'0')}`;
-  return null;
-};
+const parseDate = (value) => parseStrictIsoDate(value);
 
 const sanitizeRow = (row) => ({
   fila: Number(row.fila) || null,
@@ -167,7 +159,9 @@ router.post('/preview', upload.single('file'), async (req, res) => {
       const errors = [];
       if (!row.nombre) errors.push('Falta nombre');
       if (!row.documento) errors.push('Falta documento');
-      if (row.fecha_nacimiento === null && parsed.detected.fecha_nacimiento && parsed.rows.find((item) => item.fila === row.fila)?.fecha_nacimiento) errors.push('Fecha inválida');
+      if (row.fecha_nacimiento === null && parsed.detected.fecha_nacimiento && parsed.rows.find((item) => item.fila === row.fila)?.fecha_nacimiento) {
+      errors.push('Fecha inválida. Usa exclusivamente YYYY-MM-DD');
+    }
       const duplicate = row.documento && existingDocs.has(row.documento);
       return {
         ...row,
