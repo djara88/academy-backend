@@ -78,6 +78,7 @@ const createOrder = async ({ scope, academyId, platformChargeId = null, amountCl
   const reusable = (activeOrders || []).find((row) => row.checkout_url && row.metadata?.checkout_fingerprint === fingerprint);
   if (reusable) return reusable;
 
+  const idempotencyKey = `checkout:${fingerprint}`;
   const externalReference = `lestra:${scope}:${cryptoRandom()}`;
   const { data: order, error } = await supabase.from('payment_gateway_orders').insert({
     scope,
@@ -87,9 +88,25 @@ const createOrder = async ({ scope, academyId, platformChargeId = null, amountCl
     amount_expected: amountClp,
     status: 'created',
     created_by: createdBy,
+    idempotency_key: idempotencyKey,
     metadata: { title, checkout_fingerprint: fingerprint },
   }).select('*').single();
-  if (error) throw error;
+  if (error) {
+    if (error.code === '23505') {
+      const { data: duplicate, error: duplicateError } = await supabase.from('payment_gateway_orders')
+        .select('*')
+        .eq('academia_id', academyId)
+        .eq('idempotency_key', idempotencyKey)
+        .in('status', ['created', 'pending'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (duplicateError) throw duplicateError;
+      if (duplicate?.checkout_url) return duplicate;
+      if (duplicate) throw Object.assign(new Error('El checkout ya se está preparando. Reintenta en unos segundos.'), { status: 409, code: 'CHECKOUT_IN_PROGRESS' });
+    }
+    throw error;
+  }
 
   if (items.length) {
     const { error: itemError } = await supabase.from('payment_gateway_order_items').insert(items.map((item) => ({
