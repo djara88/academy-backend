@@ -10,6 +10,7 @@ const { selectEnrollmentTerms } = require('../services/premiumPdf');
 const { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');
 const { fetchWithTimeout } = require('../services/httpClient');
 const { findRutConflict, assertRutAvailable } = require('../services/rutGuard');
+const { requestIdempotencyKey, idempotencyFingerprint } = require('../services/idempotency');
 
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'https://academy-frontend-wheat.vercel.app').replace(/\/$/, '');
 const TOKEN_TTL_DAYS = Math.max(2, Number(process.env.PREMATRICULA_TTL_DAYS || 7));
@@ -144,17 +145,64 @@ router.post('/', authMiddleware, async (req, res) => {
     const finanzas = req.body?.finanzas || {};
     const evaluacion = req.body?.evaluacion || {};
     const emergencia = req.body?.emergencia || {};
+    const idempotencyKey = requestIdempotencyKey(req);
+    const fingerprint = idempotencyFingerprint({ tutor, jugador, finanzas, evaluacion, emergencia });
 
     if (!safeText(tutor.nombre_completo, 180) || !safeText(tutor.email, 240) || !safeText(jugador.nombre, 180)) {
       return res.status(400).json({ success: false, error: 'Nombre del alumno, apoderado y correo son obligatorios.' });
     }
 
+    const { data: academia, error: academyError } = await supabase.from('academias').select('*').eq('id', academia_id).single();
+    if (academyError || !academia) return res.status(404).json({ success: false, error: 'Academia no encontrada.' });
+
+    const reissueExisting = async (existing) => {
+      if (existing.idempotency_fingerprint && existing.idempotency_fingerprint !== fingerprint) {
+        return res.status(409).json({
+          success: false,
+          code: 'IDEMPOTENCY_KEY_REUSED',
+          error: 'La misma clave de operación ya fue usada con datos de pre-matrícula diferentes.',
+        });
+      }
+      if (['firmada', 'cancelada'].includes(existing.estado)) {
+        return res.status(409).json({
+          success: false,
+          code: 'PRE_ENROLLMENT_ALREADY_FINALIZED',
+          error: 'Esta operación de pre-matrícula ya fue cerrada.',
+        });
+      }
+
+      const token = crypto.randomBytes(32).toString('base64url');
+      const tokenHash = hashToken(token);
+      const expiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000).toISOString();
+      const now = new Date().toISOString();
+      const { data: updated, error: updateError } = await supabase.from('prematriculas').update({
+        estado: 'enviada',
+        token_hash: tokenHash,
+        expires_at: expiresAt,
+        sent_at: now,
+        opened_at: null,
+        updated_at: now,
+      }).eq('id', existing.id).eq('academia_id', academia_id).select('id,estado,expires_at').single();
+      if (updateError) throw updateError;
+
+      const link = `${FRONTEND_URL}/prematricula/${token}`;
+      const emailSent = await sendPrematriculaEmail({ academia, tutor, jugador, link });
+      return res.json({ success: true, idempotent: true, data: updated, link, email_sent: emailSent });
+    };
+
+    if (idempotencyKey) {
+      const { data: existing, error: existingError } = await supabase.from('prematriculas')
+        .select('id,estado,idempotency_fingerprint')
+        .eq('academia_id', academia_id)
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existing) return reissueExisting(existing);
+    }
+
     if (jugador.rut) {
       await assertRutAvailable({ supabase, academiaId: academia_id, rut: jugador.rut });
     }
-
-    const { data: academia, error: academyError } = await supabase.from('academias').select('*').eq('id', academia_id).single();
-    if (academyError || !academia) return res.status(404).json({ success: false, error: 'Academia no encontrada.' });
 
     const token = crypto.randomBytes(32).toString('base64url');
     const tokenHash = hashToken(token);
@@ -178,20 +226,38 @@ router.post('/', authMiddleware, async (req, res) => {
       consent_snapshot: consentCatalog,
       created_by: userId || null,
       updated_at: new Date().toISOString(),
+      idempotency_key: idempotencyKey,
+      idempotency_fingerprint: fingerprint,
     }]).select('id,estado,expires_at').single();
-    if (error) throw error;
+
+    if (error) {
+      if (error.code === '23505' && idempotencyKey) {
+        const { data: raced, error: racedError } = await supabase.from('prematriculas')
+          .select('id,estado,idempotency_fingerprint')
+          .eq('academia_id', academia_id)
+          .eq('idempotency_key', idempotencyKey)
+          .maybeSingle();
+        if (racedError) throw racedError;
+        if (raced) return reissueExisting(raced);
+      }
+      throw error;
+    }
 
     const link = `${FRONTEND_URL}/prematricula/${token}`;
     const emailSent = await sendPrematriculaEmail({ academia, tutor, jugador, link });
-    return res.status(201).json({ success: true, data: created, link, email_sent: emailSent });
+    return res.status(201).json({ success: true, idempotent: false, data: created, link, email_sent: emailSent });
   } catch (error) {
     console.error('Error creando pre-matrícula:', error?.message || 'Error desconocido');
     if (['PLAYER_RUT_EXISTS', 'PRE_ENROLLMENT_RUT_EXISTS'].includes(error?.code)) {
       return res.status(409).json({ success: false, code: error.code, error: error.message, conflict: error.conflict || null });
     }
+    if (['IDEMPOTENCY_KEY_INVALID', 'IDEMPOTENCY_KEY_REQUIRED'].includes(error?.code)) {
+      return res.status(400).json({ success: false, code: error.code, error: error.message });
+    }
     return res.status(500).json({ success: false, error: 'No fue posible crear la pre-matrícula.' });
   }
 });
+
 
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
