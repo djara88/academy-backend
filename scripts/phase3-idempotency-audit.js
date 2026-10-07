@@ -29,7 +29,7 @@ for (const [name, source, expected] of [
   ['paymentReceipts', paymentReceipts, 'resolveIdempotencyKey'],
   ['uniformLegacy', uniformLegacy, 'createUniformOrder'],
   ['uniformMulti', uniformMulti, 'createUniformOrder'],
-  ['uniformService', uniformService, "supabase.rpc('create_uniform_order_v1'")],
+  ['uniformService', uniformService, "supabase.rpc('create_uniform_order_v1'"],
 ]) {
   if (!source.includes(expected)) throw new Error(`Phase 3 idempotency audit failed: ${name} missing ${expected}.`);
 }
