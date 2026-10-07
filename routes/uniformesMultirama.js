@@ -11,6 +11,7 @@ const {
   listAcademyBranches,
   safeText,
 } = require('../services/branchContext');
+const { createUniformOrder } = require('../services/uniformOrderService');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -176,13 +177,16 @@ router.post('/pedidos', async (req, res) => {
     const playerId = safeText(req.body?.jugador_id, 80);
     const branchId = safeText(req.body?.rama_id, 80);
     if (!playerId || !branchId) return res.status(400).json({ error: 'Selecciona alumno y rama para asignar la prenda.' });
-    const enrollment = await getStudentEnrollment(academyId, playerId, { branchId });
 
+    const enrollment = await getStudentEnrollment(academyId, playerId, { branchId });
+    const garmentId = safeText(req.body?.prenda_id, 80) || null;
     let garment = null;
-    const garmentId = safeText(req.body?.prenda_id, 80);
     if (garmentId) {
-      const { data, error } = await supabase.from('prendas_catalogo').select('*')
-        .eq('id', garmentId).eq('academia_id', academyId).maybeSingle();
+      const { data, error } = await supabase.from('prendas_catalogo')
+        .select('id,nombre,precio,tipo_operacion,stock_disponible,rama_id')
+        .eq('id', garmentId)
+        .eq('academia_id', academyId)
+        .maybeSingle();
       if (error) throw error;
       if (!data) return res.status(404).json({ error: 'Prenda no encontrada.' });
       if (data.rama_id && String(data.rama_id) !== String(branchId)) {
@@ -191,64 +195,33 @@ router.post('/pedidos', async (req, res) => {
       garment = data;
     }
 
-    const garmentName = safeText(req.body?.prenda_nombre || garment?.nombre, 180);
-    if (!garmentName) return res.status(400).json({ error: 'Selecciona o indica una prenda.' });
-    const amount = Math.max(0, Number(req.body?.monto ?? garment?.precio) || 0);
-    let chargeId = null;
-    if (req.body?.generar_cobro === true && amount > 0 && req.body?.estado_pago !== 'Pagado') {
-      const { data: charge, error } = await supabase.from('cobros').insert({
-        academia_id: academyId,
-        jugador_id: playerId,
-        inscripcion_id: enrollment.id,
-        sede_id: enrollment.sede_id,
-        rama_id: enrollment.rama_id,
-        concepto: `Indumentaria · ${garmentName} (Talla ${safeText(req.body?.talla, 30) || 'S/T'})`,
-        tipo_concepto: 'Indumentaria',
-        monto: amount,
-        monto_pagado: 0,
-        estado: 'Pendiente',
-        fecha_vencimiento: new Date().toISOString().slice(0, 10),
-      }).select('id').single();
-      if (error) throw error;
-      chargeId = charge.id;
-    }
+    const result = await createUniformOrder({
+      academyId,
+      userId: req.user.id,
+      enrollment,
+      garment,
+      garmentId,
+      garmentName: req.body?.prenda_nombre,
+      size: req.body?.talla,
+      jerseyNumber: req.body?.numero_estampado,
+      printedName: req.body?.nombre_estampado,
+      amount: req.body?.monto ?? garment?.precio,
+      generateCharge: req.body?.generar_cobro === true,
+      paymentStatus: req.body?.estado_pago,
+      idempotencyKey: req.get('Idempotency-Key') || req.body?.idempotency_key,
+    });
 
-    const { data: order, error: orderError } = await supabase.from('pedidos_indumentaria').insert({
-      academia_id: academyId,
-      jugador_id: playerId,
-      inscripcion_id: enrollment.id,
-      sede_id: enrollment.sede_id,
-      rama_id: enrollment.rama_id,
-      prenda_id: garment?.id || null,
-      prenda_nombre: garmentName,
-      talla: safeText(req.body?.talla, 30) || 'S/T',
-      numero_estampado: req.body?.numero_estampado === '' || req.body?.numero_estampado == null ? null : Number(req.body.numero_estampado),
-      nombre_estampado: safeText(req.body?.nombre_estampado, 80),
-      monto: amount,
-      cobro_id: chargeId,
-      estado_pago: safeText(req.body?.estado_pago, 60) || 'Pendiente de Pago',
-      estado_entrega: 'Pendiente',
-    }).select('*').single();
-    if (orderError) {
-      if (chargeId) await supabase.from('cobros').delete().eq('id', chargeId).eq('academia_id', academyId);
-      throw orderError;
-    }
-
-    if (garment?.tipo_operacion === 'Stock') {
-      if (Number(garment.stock_disponible || 0) <= 0) {
-        await supabase.from('pedidos_indumentaria').delete().eq('id', order.id);
-        if (chargeId) await supabase.from('cobros').delete().eq('id', chargeId).eq('academia_id', academyId);
-        return res.status(409).json({ error: 'No queda stock disponible de esta prenda.' });
-      }
-      const { error: stockError } = await supabase.from('prendas_catalogo')
-        .update({ stock_disponible: Number(garment.stock_disponible) - 1 })
-        .eq('id', garment.id).eq('academia_id', academyId).eq('stock_disponible', garment.stock_disponible);
-      if (stockError) throw stockError;
-    }
-
-    return res.status(201).json({ success: true, message: 'Indumentaria asignada a la rama seleccionada.', data: order });
+    return res.status(result.idempotent ? 200 : 201).json({
+      success: true,
+      reused: result.idempotent,
+      message: result.idempotent ? 'El pedido ya había sido creado.' : 'Indumentaria asignada a la rama seleccionada.',
+      data: result.order,
+    });
   } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible asignar la prenda.', code: error?.code });
+    return res.status(error?.status || 500).json({
+      error: error?.message || 'No fue posible asignar la prenda.',
+      code: error?.code,
+    });
   }
 });
 
