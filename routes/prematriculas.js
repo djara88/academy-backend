@@ -16,7 +16,16 @@ const TOKEN_TTL_DAYS = Math.max(2, Number(process.env.PREMATRICULA_TTL_DAYS || 7
 const MAX_PUBLIC_PHOTO_DATA_URL_CHARS = 1800000;
 const MAX_PUBLIC_PHOTO_SOURCE_BYTES = 1400000;
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
-const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+const prematriculaFingerprint = ({ academiaId, tutor, jugador, finanzas, evaluacion, emergencia }) => sha256(JSON.stringify([
+  academiaId,
+  tutor || {},
+  jugador || {},
+  finanzas || {},
+  evaluacion || {},
+  emergencia || {},
+]));
+const prematriculaIdempotencyKey = (fingerprint) => `prematricula:${fingerprint}`;
 const safeText = (value, max = 5000) => String(value || '').trim().slice(0, max);
 const escapeHtml = (value) => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -161,6 +170,25 @@ router.post('/', authMiddleware, async (req, res) => {
     const expiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 86400000).toISOString();
     const termsSnapshot = selectEnrollmentTerms(academia) || 'La academia no mantiene condiciones adicionales de matrícula configuradas en Syncademia.';
     const consentCatalog = getConsentCatalog(academia?.nombre || 'la academia');
+    const fingerprint = prematriculaFingerprint({ academiaId: academia_id, tutor, jugador, finanzas, evaluacion, emergencia });
+    const idempotencyKey = prematriculaIdempotencyKey(fingerprint);
+
+    const { data: existing, error: existingError } = await supabase.from('prematriculas')
+      .select('id,estado,expires_at')
+      .eq('academia_id', academia_id)
+      .eq('idempotency_key', idempotencyKey)
+      .in('estado', ['enviada', 'abierta', 'procesando'])
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) {
+      return res.status(200).json({
+        success: true,
+        data: existing,
+        reused: true,
+        email_sent: false,
+        message: 'La misma pre-matrícula ya está activa. No se creó un duplicado.',
+      });
+    }
 
     const { data: created, error } = await supabase.from('prematriculas').insert([{
       academia_id,
@@ -177,9 +205,31 @@ router.post('/', authMiddleware, async (req, res) => {
       terms_snapshot: termsSnapshot,
       consent_snapshot: consentCatalog,
       created_by: userId || null,
+      idempotency_key: idempotencyKey,
+      idempotency_fingerprint: fingerprint,
       updated_at: new Date().toISOString(),
     }]).select('id,estado,expires_at').single();
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23505') {
+        const { data: duplicate, error: duplicateError } = await supabase.from('prematriculas')
+          .select('id,estado,expires_at')
+          .eq('academia_id', academia_id)
+          .eq('idempotency_key', idempotencyKey)
+          .in('estado', ['enviada', 'abierta', 'procesando'])
+          .maybeSingle();
+        if (duplicateError) throw duplicateError;
+        if (duplicate) {
+          return res.status(200).json({
+            success: true,
+            data: duplicate,
+            reused: true,
+            email_sent: false,
+            message: 'La misma pre-matrícula ya está activa. No se creó un duplicado.',
+          });
+        }
+      }
+      throw error;
+    }
 
     const link = `${FRONTEND_URL}/prematricula/${token}`;
     const emailSent = await sendPrematriculaEmail({ academia, tutor, jugador, link });

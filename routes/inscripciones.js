@@ -65,6 +65,7 @@ router.post('/', async (req, res) => {
     const data = await createSportEnrollment({
       academiaId: req.user.academia_id, userId: req.user.id, jugadorId, sedeId, ramaId, categoriaId,
       montoMatricula: req.body?.monto_matricula, abonoMatricula: req.body?.abono_matricula, montoMensualidad: req.body?.monto_mensualidad,
+      idempotencyKey: req.get('Idempotency-Key'),
     });
     return res.status(201).json({ success: true, data });
   } catch (error) {
@@ -85,14 +86,10 @@ router.post('/solicitudes/:id/aprobar', async (req, res) => {
       academiaId: academyId, userId: req.user.id, jugadorId: request.jugador_id, sedeId: request.sede_id, ramaId: request.rama_id,
       categoriaId: String(req.body?.categoria_id || request.categoria_id || '').trim() || null,
       montoMatricula: req.body?.monto_matricula, abonoMatricula: req.body?.abono_matricula, montoMensualidad: req.body?.monto_mensualidad,
+      idempotencyKey: `sport-request:${request.id}`,
+      solicitudId: request.id,
+      respuesta: String(req.body?.respuesta || 'Solicitud aprobada por la academia.').trim().slice(0, 1000),
     });
-    const { error: updateError } = await supabase.from('solicitudes_inscripcion_deportiva').update({
-      estado: 'aprobada', monto_matricula: Number(req.body?.monto_matricula || 0), abono_matricula: Number(req.body?.abono_matricula || 0),
-      monto_mensualidad: Number(req.body?.monto_mensualidad || 0), categoria_id: data.categoria_id || null, inscripcion_id: data.id,
-      resuelto_por: req.user.id, respuesta: String(req.body?.respuesta || 'Solicitud aprobada por la academia.').trim().slice(0, 1000),
-      resuelto_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    }).eq('id', request.id).eq('academia_id', academyId).eq('estado', 'pendiente');
-    if (updateError) throw updateError;
     return res.json({ success: true, data });
   } catch (error) {
     console.error('Error aprobando solicitud deportiva:', error?.message || error);

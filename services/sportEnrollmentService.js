@@ -1,8 +1,21 @@
+const crypto = require('crypto');
 const supabase = require('../config/supabase');
-const { todayInChile, recalculateFinancialStatus } = require('./monthlyBilling');
 
 const moneyValue = (value) => Math.max(0, Number(value) || 0);
-const currentPeriod = () => `${todayInChile().slice(0, 7)}-01`;
+const safeKey = (value) => String(value || '').trim().slice(0, 160);
+const deterministicEnrollmentKey = ({ academiaId, jugadorId, sedeId, ramaId, categoriaId, montoMatricula, abonoMatricula, montoMensualidad }) => {
+  const payload = [
+    academiaId,
+    jugadorId,
+    sedeId,
+    ramaId,
+    categoriaId || '',
+    moneyValue(montoMatricula),
+    moneyValue(abonoMatricula),
+    moneyValue(montoMensualidad),
+  ].join('|');
+  return `sport:${crypto.createHash('sha256').update(payload).digest('hex')}`;
+};
 
 const loadEnrollmentContext = async ({ academiaId, jugadorId, sedeId, ramaId, categoriaId }) => {
   const [playerResult, siteResult, branchResult, categoryResult] = await Promise.all([
@@ -20,74 +33,89 @@ const loadEnrollmentContext = async ({ academiaId, jugadorId, sedeId, ramaId, ca
   return { player: playerResult.data, site: siteResult.data, branch: branchResult.data, category: categoryResult.data };
 };
 
-const createSportEnrollment = async ({ academiaId, userId, jugadorId, sedeId, ramaId, categoriaId = null, montoMatricula = 0, abonoMatricula = 0, montoMensualidad = 0 }) => {
-  let enrollment = null;
-  const createdChargeIds = [];
-  try {
-    const context = await loadEnrollmentContext({ academiaId, jugadorId, sedeId, ramaId, categoriaId });
-    const { data: existing, error: existingError } = await supabase.from('inscripciones_deportivas')
-      .select('id').eq('academia_id', academiaId).eq('jugador_id', jugadorId).eq('rama_id', ramaId).eq('estado', 'Activa').maybeSingle();
-    if (existingError) throw existingError;
-    if (existing) throw Object.assign(new Error(`${context.player.nombre} ya tiene una inscripción activa en ${context.branch.disciplina}.`), { statusCode: 409, code: 'SPORT_ENROLLMENT_EXISTS' });
+const translateRpcError = (error) => {
+  const detail = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ');
+  const code = [
+    'IDEMPOTENCY_KEY_REUSED',
+    'SPORT_ENROLLMENT_EXISTS',
+    'SPORT_REQUEST_RESOLVED',
+    'SPORT_REQUEST_NOT_FOUND',
+    'SPORT_REQUEST_SCOPE_MISMATCH',
+    'SPORT_PLAYER_NOT_FOUND',
+    'SPORT_SITE_NOT_AVAILABLE',
+    'SPORT_BRANCH_NOT_AVAILABLE',
+    'SPORT_CATEGORY_SCOPE_MISMATCH',
+    'SPORT_ENROLLMENT_INVALID_SCOPE',
+  ].find((candidate) => detail.includes(candidate));
 
-    const matricula = moneyValue(montoMatricula);
-    const mensualidad = moneyValue(montoMensualidad);
-    const abono = Math.min(moneyValue(abonoMatricula), matricula);
-    const { count, error: countError } = await supabase.from('inscripciones_deportivas').select('id', { count: 'exact', head: true })
-      .eq('academia_id', academiaId).eq('jugador_id', jugadorId).eq('estado', 'Activa');
-    if (countError) throw countError;
-
-    const { data: created, error: enrollmentError } = await supabase.from('inscripciones_deportivas').insert({
-      academia_id: academiaId, jugador_id: jugadorId, sede_id: sedeId, rama_id: ramaId, categoria_id: categoriaId,
-      estado: 'Activa', fecha_inicio: todayInChile(), monto_matricula: matricula, monto_mensualidad: mensualidad,
-      es_principal: Number(count || 0) === 0,
-    }).select('*').single();
-    if (enrollmentError) {
-      if (enrollmentError.code === '23505') throw Object.assign(new Error('El alumno ya está inscrito en esa rama deportiva.'), { statusCode: 409, code: 'SPORT_ENROLLMENT_EXISTS' });
-      throw enrollmentError;
-    }
-    enrollment = created;
-
-    if (categoriaId) {
-      const { error } = await supabase.from('jugador_categoria').upsert([{ jugador_id: jugadorId, categoria_id: categoriaId }], { onConflict: 'jugador_id,categoria_id', ignoreDuplicates: true });
-      if (error) throw error;
-    }
-
-    if (matricula > 0) {
-      const { data: charge, error } = await supabase.from('cobros').insert({
-        academia_id: academiaId, inscripcion_id: enrollment.id, sede_id: sedeId, rama_id: ramaId, jugador_id: jugadorId,
-        concepto: `Matrícula ${context.branch.disciplina}${context.category?.nombre ? ` · ${context.category.nombre}` : ''}`,
-        tipo_concepto: 'Matrícula', monto: matricula, monto_pagado: 0, estado: 'Pendiente', fecha_vencimiento: todayInChile(),
-      }).select('id').single();
-      if (error) throw error;
-      createdChargeIds.push(charge.id);
-      if (abono > 0) {
-        const { error: paymentError } = await supabase.rpc('registrar_pago_cobro', {
-          p_academia_id: academiaId, p_cobro_id: charge.id, p_monto: abono, p_metodo_pago: 'Sin registrar',
-          p_observaciones: `Abono al inscribir en ${context.branch.disciplina}`,
-          p_idempotency_key: `inscripcion-${enrollment.id}-abono`, p_usuario_id: userId || null,
-        });
-        if (paymentError) throw paymentError;
-      }
-    }
-
-    if (mensualidad > 0) {
-      const { data: charge, error } = await supabase.from('cobros').insert({
-        academia_id: academiaId, inscripcion_id: enrollment.id, sede_id: sedeId, rama_id: ramaId, jugador_id: jugadorId,
-        concepto: `Mensualidad Inicial · ${context.branch.disciplina}`, tipo_concepto: 'Mensualidad', monto: mensualidad,
-        monto_pagado: 0, estado: 'Pendiente', fecha_vencimiento: todayInChile(), periodo_mensualidad: currentPeriod(),
-      }).select('id').single();
-      if (error) throw error;
-      createdChargeIds.push(charge.id);
-    }
-
-    await recalculateFinancialStatus(academiaId);
-    return { ...enrollment, jugador: context.player, sede: context.site, rama: context.branch, categoria: context.category, cobros_creados: createdChargeIds.length };
-  } catch (error) {
-    if (createdChargeIds.length) await supabase.from('cobros').delete().in('id', createdChargeIds);
-    if (enrollment?.id) await supabase.from('inscripciones_deportivas').delete().eq('id', enrollment.id);
-    throw error;
-  }
+  if (!code) return error;
+  const statusCode = code.includes('NOT_FOUND') ? 404 : code.includes('EXISTS') || code.includes('RESOLVED') || code.includes('REUSED') ? 409 : 400;
+  const messages = {
+    IDEMPOTENCY_KEY_REUSED: 'La clave de idempotencia ya fue utilizada con datos diferentes.',
+    SPORT_ENROLLMENT_EXISTS: 'El alumno ya tiene una inscripción activa en esa rama deportiva.',
+    SPORT_REQUEST_RESOLVED: 'Esta solicitud ya fue resuelta.',
+    SPORT_REQUEST_NOT_FOUND: 'La solicitud de inscripción no existe.',
+    SPORT_REQUEST_SCOPE_MISMATCH: 'La solicitud no corresponde a la sede o rama indicada.',
+    SPORT_PLAYER_NOT_FOUND: 'El alumno no pertenece a esta academia.',
+    SPORT_SITE_NOT_AVAILABLE: 'La sede seleccionada no está disponible.',
+    SPORT_BRANCH_NOT_AVAILABLE: 'La rama deportiva seleccionada no está disponible.',
+    SPORT_CATEGORY_SCOPE_MISMATCH: 'La categoría no pertenece a esa sede y rama deportiva.',
+    SPORT_ENROLLMENT_INVALID_SCOPE: 'Faltan datos obligatorios para crear la inscripción.',
+  };
+  return Object.assign(new Error(messages[code] || 'No fue posible crear la inscripción deportiva.'), { statusCode, code });
 };
 
-module.exports = { createSportEnrollment, loadEnrollmentContext, moneyValue };
+const createSportEnrollment = async ({
+  academiaId,
+  userId,
+  jugadorId,
+  sedeId,
+  ramaId,
+  categoriaId = null,
+  montoMatricula = 0,
+  abonoMatricula = 0,
+  montoMensualidad = 0,
+  idempotencyKey = null,
+  solicitudId = null,
+  respuesta = null,
+}) => {
+  const context = await loadEnrollmentContext({ academiaId, jugadorId, sedeId, ramaId, categoriaId });
+  const resolvedKey = safeKey(idempotencyKey) || deterministicEnrollmentKey({
+    academiaId, jugadorId, sedeId, ramaId, categoriaId, montoMatricula, abonoMatricula, montoMensualidad,
+  });
+
+  const { data, error } = await supabase.rpc('create_sport_enrollment_v2', {
+    p_academia_id: academiaId,
+    p_usuario_id: userId || null,
+    p_jugador_id: jugadorId,
+    p_sede_id: sedeId,
+    p_rama_id: ramaId,
+    p_categoria_id: categoriaId || null,
+    p_monto_matricula: moneyValue(montoMatricula),
+    p_abono_matricula: moneyValue(abonoMatricula),
+    p_monto_mensualidad: moneyValue(montoMensualidad),
+    p_idempotency_key: resolvedKey,
+    p_solicitud_id: solicitudId || null,
+    p_respuesta: respuesta || null,
+  });
+
+  if (error) throw translateRpcError(error);
+  const enrollment = data?.enrollment || {};
+  return {
+    ...enrollment,
+    jugador: context.player,
+    sede: context.site,
+    rama: context.branch,
+    categoria: context.category,
+    cobros_creados: Array.isArray(data?.charge_ids) ? data.charge_ids.length : 0,
+    idempotent: data?.idempotent === true,
+    idempotency_key: resolvedKey,
+  };
+};
+
+module.exports = {
+  createSportEnrollment,
+  loadEnrollmentContext,
+  moneyValue,
+  deterministicEnrollmentKey,
+};
