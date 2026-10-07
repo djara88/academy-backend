@@ -12,7 +12,7 @@
     "lint": "eslint . --ext .js,.mjs --max-warnings 0",
     "build": "node --check server.js",
     "test": "node --test",
-    "security:audit": "npm audit --omit=dev --audit-level=high && npm run tenant-security:audit && npm run admin-notification-security:audit && npm run supabase-phase2-security:audit && npm run rate-limit-security:audit && npm run import-atomic-security:audit && npm run phase3-idempotency:audit",
+    "security:audit": "npm audit --omit=dev --audit-level=high && npm run tenant-security:audit && npm run admin-notification-security:audit && npm run supabase-phase2-security:audit && npm run rate-limit-security:audit && npm run import-atomic-security:audit && npm run phase3-idempotency:audit && npm run strict-import-date:audit",
     "tenant-security:audit": "node scripts/tenant-security-audit.js",
     "admin-notification-security:audit": "node scripts/admin-notification-security-audit.js",
     "supabase:leaked-passwords:enable": "node scripts/enable-supabase-leaked-password-protection.mjs",
@@ -20,7 +20,8 @@
     "supabase-phase2-security:audit": "node scripts/supabase-phase2-security-audit.js",
     "rate-limit-security:audit": "node scripts/rate-limit-security-audit.js",
     "import-atomic-security:audit": "node scripts/import-atomic-security-audit.js",
-    "phase3-idempotency:audit": "node scripts/phase3-idempotency-audit.js"
+    "phase3-idempotency:audit": "node scripts/phase3-idempotency-audit.js",
+    "strict-import-date:audit": "node scripts/strict-import-date-audit.js"
   },
   "keywords": [
     "academia",
