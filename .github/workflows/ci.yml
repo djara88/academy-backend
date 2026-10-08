@@ -78,3 +78,5 @@ jobs:
           node-version: '22.x'
       - name: Audit production dependencies
         run: npm run security:audit
+      - name: Audit browser observability privacy contract
+        run: node scripts/phase4-observability-audit.js
