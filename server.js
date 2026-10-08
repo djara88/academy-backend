@@ -15,6 +15,7 @@ const { startPresenceSampler } = require('./services/userPresence');
 const { startAcademyRegistrationNotifier } = require('./services/academyRegistrationNotifier');
 const { startCollectionAutomation } = require('./services/collectionAutomation');
 const { startSubscriptionRenewalAutomation } = require('./services/subscriptionContract');
+const observabilityRoutes = require('./routes/observability');
 
 const app = express();
 app.disable('x-powered-by');
@@ -53,7 +54,8 @@ const apiLimiter = createRateLimiter({
   skip: (req) => req.originalUrl?.startsWith('/api/whatsapp/webhook/')
     || req.originalUrl?.startsWith('/api/whatsapp-bridge/webhook/')
     || req.originalUrl?.startsWith('/api/mercadopago/webhook')
-    || req.originalUrl?.startsWith('/api/presence/heartbeat'),
+    || req.originalUrl?.startsWith('/api/presence/heartbeat')
+    || req.originalUrl?.startsWith('/api/observability/'),
 });
 const sensitiveLimiter = createRateLimiter({
   namespace: 'sensitive',
@@ -92,10 +94,18 @@ const collectionLimiter = createRateLimiter({
   message: 'Demasiados intentos de consulta de pagos. Espera unos minutos antes de reintentar.',
   failClosed: true,
 });
+const observabilityLimiter = createRateLimiter({
+  namespace: 'browser-observability',
+  windowMs: 60 * 1000,
+  max: Math.max(20, Number(process.env.OBSERVABILITY_RATE_LIMIT_MAX || 60)),
+  message: 'Se alcanzó temporalmente el límite de telemetría del navegador.',
+  failClosed: false,
+});
 
 app.use('/api/whatsapp/webhook', webhookLimiter);
 app.use('/api/whatsapp-bridge/webhook', webhookLimiter);
 app.use('/api/mercadopago/webhook', webhookLimiter);
+app.use('/api/observability', observabilityLimiter, express.json({ limit: '128kb' }), observabilityRoutes);
 app.use('/api', apiLimiter);
 app.use('/api/cambiar-password', sensitiveLimiter);
 app.use('/api/subscriptions/checkout', paymentLimiter);
