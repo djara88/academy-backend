@@ -12,7 +12,7 @@ test('la lectura directa de academias requiere cuenta activa de esa academia', (
 });
 
 test('el acceso Realtime a chat no sobrevive a la desactivación ni permite cruce de academias', () => {
-  assert.match(sql, /function private\.can_access_chat_conversation/);
+  assert.match(sql, /function private\.can_access_chat_conversation/i);
   assert.match(sql, /active_user\.id = auth\.uid\(\)/);
   assert.match(sql, /active_user\.academia_id = c\.academia_id/);
   assert.match(sql, /active_user\.activo is distinct from false/);
