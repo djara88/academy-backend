@@ -2,6 +2,8 @@ name: Lestra Live Read-Only Smoke
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
   push:
     branches: [main]
     paths:
@@ -31,6 +33,8 @@ jobs:
             { name: 'Render health', url: backend + '/health', status: 200, type: 'health' },
             { name: 'Lestra Deportivo login', url: 'https://deportivo.lestra.app/login', status: 200, type: 'html' },
             { name: 'Academy plan requires auth', url: backend + '/api/academias/mi-plan', status: 401, type: 'unauthorized' },
+            { name: 'Academy profile requires auth', url: backend + '/api/academias/mi-academia', status: 401, type: 'unauthorized' },
+            { name: 'Academy inventory requires auth', url: backend + '/api/academias', status: 401, type: 'unauthorized' },
             { name: 'Master dashboard requires auth', url: backend + '/api/saas-admin/resumen', status: 401, type: 'unauthorized' },
             { name: 'Sports analytics requires auth', url: backend + '/api/rendimiento/analitica', status: 401, type: 'unauthorized' },
           ];
@@ -45,6 +49,11 @@ jobs:
             });
             console.log(check.name + ': HTTP ' + response.status);
             assert.equal(response.status, check.status, check.name + ' unexpected HTTP status');
+
+            if (check.url.startsWith(backend)) {
+              assert.equal(response.headers.get('x-content-type-options'), 'nosniff', 'Backend must block MIME sniffing');
+              assert.equal(response.headers.get('x-frame-options'), 'DENY', 'Backend must block framing');
+            }
 
             const contentType = response.headers.get('content-type') || '';
             if (check.type === 'html') {
@@ -61,5 +70,5 @@ jobs:
               assert.equal(typeof payload.error, 'string', 'Unauthorized response must be an error');
             }
           }
-          console.log('Live read-only smoke passed: 2 public and 3 protected endpoints.');
+          console.log('Live read-only smoke passed: 2 public and 5 protected endpoints.');
           NODE
