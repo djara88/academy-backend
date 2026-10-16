@@ -1,0 +1,65 @@
+name: Lestra Live Read-Only Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/lestra-live-readonly-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lestra-live-readonly-smoke
+  cancel-in-progress: true
+
+jobs:
+  anonymous-security:
+    name: Production HTTP and anonymous access contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify public pages and fail-closed private endpoints
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+
+          const backend = 'https://academy-backend-kqsv.onrender.com';
+          const checks = [
+            { name: 'Render health', url: backend + '/health', status: 200, type: 'health' },
+            { name: 'Lestra Deportivo login', url: 'https://deportivo.lestra.app/login', status: 200, type: 'html' },
+            { name: 'Academy plan requires auth', url: backend + '/api/academias/mi-plan', status: 401, type: 'unauthorized' },
+            { name: 'Master dashboard requires auth', url: backend + '/api/saas-admin/resumen', status: 401, type: 'unauthorized' },
+            { name: 'Sports analytics requires auth', url: backend + '/api/rendimiento/analitica', status: 401, type: 'unauthorized' },
+          ];
+
+          for (const check of checks) {
+            // Deliberately no Authorization header, cookies, tokens or modifying HTTP methods.
+            const response = await fetch(check.url, {
+              method: 'GET',
+              redirect: 'manual',
+              signal: AbortSignal.timeout(15_000),
+              headers: { 'Cache-Control': 'no-store', 'User-Agent': 'Lestra-ReadOnly-Smoke/1.0' },
+            });
+            console.log(check.name + ': HTTP ' + response.status);
+            assert.equal(response.status, check.status, check.name + ' unexpected HTTP status');
+
+            const contentType = response.headers.get('content-type') || '';
+            if (check.type === 'html') {
+              assert.match(contentType, /text\/html/i, check.name + ' must serve HTML');
+            }
+            if (check.type === 'health') {
+              assert.match(contentType, /application\/json/i);
+              const payload = await response.json();
+              assert.equal(payload.status, 'ok');
+            }
+            if (check.type === 'unauthorized') {
+              assert.match(contentType, /application\/json/i);
+              const payload = await response.json();
+              assert.equal(typeof payload.error, 'string', 'Unauthorized response must be an error');
+            }
+          }
+          console.log('Live read-only smoke passed: 2 public and 3 protected endpoints.');
+          NODE
