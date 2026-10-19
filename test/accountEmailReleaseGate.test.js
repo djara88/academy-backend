@@ -80,3 +80,13 @@ test('enlaces de redirección son HTTPS y sólo usan rutas de autenticación con
   process.env.AUTH_PUBLIC_APP_ORIGIN = 'http://localhost:5173';
   assert.throws(() => accountLinkRedirect('/login'));
 }));
+
+test('recuperación pública no revela existencia de cuentas y aplica limitador', () => {
+  const route = read().split("router.post('/recuperar-acceso'")[1]?.split('// 🚀 NUEVA RUTA: REGISTRO PÚBLICO')[0];
+  assert.ok(route);
+  assert.match(route, /type: 'recovery'/);
+  assert.match(route, /res.status\(202\)\.json\(generic\)/);
+  assert.match(route, /sendAccountLink/);
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(server, /app\.use\('\/api\/academias\/recuperar-acceso', sensitiveLimiter\)/);
+});
