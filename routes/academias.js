@@ -1,4 +1,5 @@
 const express = require('express');
+const { generateTemporaryPassword } = require('../services/credentialGeneration');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
@@ -297,7 +298,7 @@ router.post('/', authMiddleware, requireSuperadmin, logoUpload, async (req, res)
   let createdAuthUser = null;
 
   try {
-    const tempPassword = Math.random().toString(36).substring(2, 10) + "A1!";
+    const tempPassword = generateTemporaryPassword();
 
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email: director_email, password: tempPassword, email_confirm: true
@@ -405,7 +406,7 @@ router.post('/:id/reset-password', authMiddleware, requireSuperadmin, async (req
     const { data: academia, error: acaError } = await supabase.from('academias').select('director_email, nombre_director').eq('id', id).single();
     if (acaError) throw new Error('Academia no encontrada');
 
-    const newPassword = Math.random().toString(36).substring(2, 10) + "X9#";
+    const newPassword = generateTemporaryPassword();
     const { data: userData } = await supabase.from('usuarios').select('id').eq('academia_id', id).single();
 
     if (userData && userData.id) {
