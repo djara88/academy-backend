@@ -114,6 +114,14 @@ router.post('/registro-publico', async (req, res) => {
       }
       throw authError;
     }
+    // Fail closed if Supabase's email-confirmation policy is disabled.
+    // Do not delete a pre-existing confirmed identity returned by the provider.
+    if (signup?.user?.email_confirmed_at || signup?.user?.confirmed_at) {
+      return res.status(503).json({
+        error: 'La confirmación de correo no está disponible. Contacta a soporte.',
+        code: 'AUTH_CONFIRMATION_NOT_ENFORCED',
+      });
+    }
     createdAuthUser = signup?.user;
     const actionLink = signup?.properties?.action_link;
     if (!createdAuthUser?.id || !actionLink) throw new Error('No se pudo preparar la verificación de correo.');
