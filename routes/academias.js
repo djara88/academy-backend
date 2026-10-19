@@ -56,6 +56,35 @@ const trialWindow = () => {
   return { start: start.toISOString(), end: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString() };
 };
 
+// Recovery is available to legitimate users without exposing account existence.
+// Server-level sensitiveLimiter applies before this route.
+router.post('/recuperar-acceso', async (req, res) => {
+  const generic = { success: true, message: 'Si el correo está registrado, recibirás un enlace para recuperar tu acceso.' };
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    return res.status(400).json({ error: 'Ingresa un correo electrónico válido.' });
+  }
+  if (!emailDeliveryConfigured()) {
+    return res.status(503).json({ error: 'El servicio de correo está temporalmente no disponible.', code: 'ACCOUNT_EMAIL_NOT_CONFIGURED' });
+  }
+  try {
+    const { data, error } = await supabase.auth.admin.generateLink({
+      type: 'recovery',
+      email,
+      options: { redirectTo: accountLinkRedirect('/cambiar-password') },
+    });
+    if (error || !data?.properties?.action_link) {
+      // Deliberately return an identical response for unknown email addresses.
+      return res.status(202).json(generic);
+    }
+    await sendAccountLink({ to: email, recipientName: '', academyName: 'Lestra Deportivo', link: data.properties.action_link, purpose: 'recover' });
+    return res.status(202).json(generic);
+  } catch (error) {
+    console.error('Falló la entrega del enlace de recuperación:', error?.code || 'RECOVERY_ERROR');
+    return res.status(503).json({ error: 'No se pudo iniciar recuperación en este momento. Reintenta más tarde.' });
+  }
+});
+
 // ====================================================================
 // 🚀 NUEVA RUTA: REGISTRO PÚBLICO AUTOMÁTICO (SELF-SERVICE)
 // ====================================================================
