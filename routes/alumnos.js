@@ -253,9 +253,10 @@ const loadAttendance = async (academyId, playerId, branchId) => {
   const trainingIds = (trainings || []).map((row) => row.id);
   if (!trainingIds.length) return { total: 0, presente: 0, ausente: 0, justificado: 0, porcentaje: null };
 
+  // asistencias has no academia_id column. The training IDs are already
+  // restricted to this academy and branch above; keep the player filter here.
   const { data: rows, error } = await supabase.from('asistencias')
     .select('estado')
-    .eq('academia_id', academyId)
     .eq('jugador_id', playerId)
     .in('entrenamiento_id', trainingIds);
   if (error) throw error;
