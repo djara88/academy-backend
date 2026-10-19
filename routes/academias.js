@@ -401,21 +401,48 @@ router.delete('/:id', authMiddleware, requireSuperadmin, async (req, res) => {
 });
 
 router.post('/:id/reset-password', authMiddleware, requireSuperadmin, async (req, res) => {
-  const { id } = req.params;
+  if (!emailDeliveryConfigured()) {
+    return res.status(503).json({ error: 'El servicio de recuperación por correo no está disponible.', code: 'ACCOUNT_EMAIL_NOT_CONFIGURED' });
+  }
   try {
-    const { data: academia, error: acaError } = await supabase.from('academias').select('director_email, nombre_director').eq('id', id).single();
-    if (acaError) throw new Error('Academia no encontrada');
-
-    const newPassword = generateTemporaryPassword();
-    const { data: userData } = await supabase.from('usuarios').select('id').eq('academia_id', id).single();
-
-    if (userData && userData.id) {
-      await supabase.auth.admin.updateUserById(userData.id, { password: newPassword });
-      await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', userData.id);
+    const { id } = req.params;
+    const { data: academy, error: academyError } = await supabase.from('academias')
+      .select('id,nombre,director_email,nombre_director').eq('id', id).single();
+    if (academyError || !academy?.director_email) {
+      return res.status(404).json({ error: 'Academia o correo de director no encontrado.' });
     }
-    res.json({ message: 'Contraseña restablecida' });
+    const { data: director, error: directorError } = await supabase.from('usuarios')
+      .select('id').eq('academia_id', id).eq('rol', 'director').limit(1).maybeSingle();
+    if (directorError) throw directorError;
+    if (!director?.id) return res.status(409).json({ error: 'La academia no tiene un director con acceso válido.' });
+
+    // Prevent sending an account-recovery link to a stale/mismatched director address.
+    const { data: authRecord, error: userError } = await supabase.auth.admin.getUserById(director.id);
+    if (userError) throw userError;
+    const normalizedEmail = String(academy.director_email).trim().toLowerCase();
+    if (!authRecord?.user?.email || authRecord.user.email.toLowerCase() !== normalizedEmail) {
+      return res.status(409).json({ error: 'El correo del director no coincide con la identidad autenticada. Actualízalo antes de recuperar la cuenta.' });
+    }
+
+    // Generate an expiring, one-use recovery link; do not overwrite the password.
+    const { data: recovery, error: linkError } = await supabase.auth.admin.generateLink({
+      type: 'recovery',
+      email: normalizedEmail,
+      options: { redirectTo: accountLinkRedirect('/cambiar-password') },
+    });
+    if (linkError || !recovery?.properties?.action_link) throw linkError || new Error('Recovery link unavailable');
+
+    await sendAccountLink({
+      to: normalizedEmail,
+      recipientName: academy.nombre_director,
+      academyName: academy.nombre,
+      link: recovery.properties.action_link,
+      purpose: 'recover',
+    });
+    return res.status(202).json({ success: true, message: 'Enlace de recuperación enviado al correo del director.' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('No fue posible iniciar recuperación administrativa:', error?.code || error?.message || 'UNKNOWN');
+    return res.status(503).json({ error: 'No se pudo entregar el enlace de recuperación. Reintenta más tarde.', code: 'RECOVERY_EMAIL_UNAVAILABLE' });
   }
 });
 
