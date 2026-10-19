@@ -31,7 +31,7 @@ const withMasterId = (fn) => {
 test('requireSuperadmin acepta variantes de mayúsculas solo para el UUID maestro', () => withMasterId(() => {
   const res = response();
   let nextCalled = false;
-  requireSuperadmin({ user: { id: AUTHORIZED_ID, rol: 'SUPERADMIN' } }, res, () => { nextCalled = true; });
+  requireSuperadmin({ user: { id: AUTHORIZED_ID, rol: 'SUPERADMIN' }, auth: { aal: 'aal2' } }, res, () => { nextCalled = true; });
   assert.equal(nextCalled, true);
   assert.equal(res.statusCode, 200);
 }));
@@ -39,7 +39,7 @@ test('requireSuperadmin acepta variantes de mayúsculas solo para el UUID maestr
 test('requireSuperadmin acepta SUPER_ADMIN solo para el UUID maestro', () => withMasterId(() => {
   const res = response();
   let nextCalled = false;
-  requireSuperadmin({ user: { id: AUTHORIZED_ID, rol: 'SUPER_ADMIN' } }, res, () => { nextCalled = true; });
+  requireSuperadmin({ user: { id: AUTHORIZED_ID, rol: 'SUPER_ADMIN' }, auth: { aal: 'aal2' } }, res, () => { nextCalled = true; });
   assert.equal(nextCalled, true);
   assert.equal(res.statusCode, 200);
 }));
@@ -70,3 +70,39 @@ test('requireOwnAcademyOrSuperadmin limita por academia y reserva bypass al UUID
   assert.equal(fakeAdmin.statusCode, 403);
 }));
 
+
+test('un JWT del superadministrador sin MFA AAL2 nunca permite operar ni consultar academias ajenas', () => withMasterId(() => {
+  for (const aal of ['aal1', undefined]) {
+    const admin = { user: { id: AUTHORIZED_ID, rol: 'superadmin', academia_id: null }, auth: aal ? { aal } : undefined };
+    const resAdmin = response();
+    requireSuperadmin(admin, resAdmin, () => assert.fail('Master route must require AAL2'));
+    assert.equal(resAdmin.statusCode, 403);
+    assert.equal(resAdmin.body.code, 'MFA_REQUIRED');
+    assert.equal(resAdmin.body.required_aal, 'aal2');
+
+    const resCrossTenant = response();
+    requireOwnAcademyOrSuperadmin({ ...admin, params: { id: 'academy-b' } }, resCrossTenant, () => assert.fail('Cross-academy route must require AAL2'));
+    assert.equal(resCrossTenant.statusCode, 403);
+    assert.equal(resCrossTenant.body.code, 'MFA_REQUIRED');
+  }
+}));
+
+test('superadministrador AAL2 puede consultar academia ajena y director conserva acceso a la propia sin MFA', () => withMasterId(() => {
+  const resMaster = response();
+  let masterAllowed = false;
+  requireOwnAcademyOrSuperadmin({
+    user: { id: AUTHORIZED_ID, rol: 'superadmin', academia_id: null },
+    auth: { aal: 'aal2' },
+    params: { id: 'academy-b' },
+  }, resMaster, () => { masterAllowed = true; });
+  assert.equal(masterAllowed, true);
+
+  const resDirector = response();
+  let directorAllowed = false;
+  requireOwnAcademyOrSuperadmin({
+    user: { id: 'user-a', rol: 'director', academia_id: 'academy-a' },
+    auth: { aal: 'aal1' },
+    params: { id: 'academy-a' },
+  }, resDirector, () => { directorAllowed = true; });
+  assert.equal(directorAllowed, true);
+}));
