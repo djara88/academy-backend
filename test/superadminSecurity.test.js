@@ -97,7 +97,7 @@ test('superadmin authorization requires both role and configured UUID', () => wi
   const allowed = mockResponse();
   let allowedNext = false;
   requireSuperadmin(
-    { user: { id: AUTHORIZED_ID, rol: 'superadmin' } },
+    { user: { id: AUTHORIZED_ID, rol: 'superadmin' }, auth: { aal: 'aal2' } },
     allowed,
     () => { allowedNext = true; },
   );
