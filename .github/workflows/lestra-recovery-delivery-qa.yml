@@ -1,0 +1,24 @@
+name: Lestra One-time Recovery Delivery QA
+on:
+  push:
+    branches:
+      - qa/lestra-recovery-email-20261022
+permissions:
+  contents: read
+jobs:
+  verify-recovery-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Request one recovery email (no password changes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          response=$(mktemp)
+          status=$(curl --silent --show-error --output "$response" --write-out '%{http_code}' \
+            --max-time 25 --retry 0 \
+            --header 'Content-Type: application/json' \
+            --data '{"email":"contacto@lestra.app"}' \
+            'https://academy-backend-kqsv.onrender.com/api/academias/recuperar-acceso')
+          printf 'Recovery endpoint HTTP status: %s\n' "$status"
+          node -e "const fs=require('fs'); const d=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(process.argv[2]!=='202'||d.success!==true) { console.error('Recovery request was not accepted.'); process.exit(1); } console.log('Recovery request accepted; inbox receipt requires user confirmation.');" "$response" "$status"
