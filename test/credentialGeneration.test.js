@@ -16,9 +16,13 @@ test('contraseñas administrativas usan CSPRNG y complejidad consistente', () =>
   }
 });
 
-test('alta y recuperación administrativa utilizan generador criptográfico', () => {
+test('alta administrativa usa CSPRNG; recuperación usa enlace sin reemplazar la clave', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'routes', 'academias.js'), 'utf8');
   assert.doesNotMatch(source, /Math\.random\(/);
   assert.match(source, /const tempPassword = generateTemporaryPassword\(\)/);
-  assert.match(source, /const newPassword = generateTemporaryPassword\(\)/);
+  const reset = source.split("router.post('/:id/reset-password'")[1]?.split('// RUTAS DE TÉRMINOS Y CONDICIONES')[0];
+  assert.ok(reset, 'administrative recovery route exists');
+  assert.match(reset, /type: 'recovery'/);
+  assert.doesNotMatch(reset, /generateTemporaryPassword\(/);
+  assert.doesNotMatch(reset, /updateUserById/);
 });

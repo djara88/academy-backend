@@ -113,6 +113,7 @@ app.use('/api/subscriptions/guardian-addon/checkout', paymentLimiter);
 app.use('/api/subscriptions/payment-notice', paymentLimiter);
 app.use('/api/mercadopago/platform-subscription', paymentLimiter);
 app.use('/api/prematriculas/public', sensitiveLimiter);
+app.use('/api/academias/recuperar-acceso', sensitiveLimiter);
 app.use('/api/academias/registro-publico', registrationLimiter);
 app.use('/api/solicitudes-admision/public', registrationLimiter);
 app.use('/api/cobranza/public', collectionLimiter);

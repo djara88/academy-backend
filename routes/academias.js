@@ -1,5 +1,6 @@
 const express = require('express');
 const { generateTemporaryPassword } = require('../services/credentialGeneration');
+const { emailDeliveryConfigured, accountLinkRedirect, sendAccountLink } = require('../services/accountEmail');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
@@ -55,96 +56,132 @@ const trialWindow = () => {
   return { start: start.toISOString(), end: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString() };
 };
 
+// Recovery is available to legitimate users without exposing account existence.
+// Server-level sensitiveLimiter applies before this route.
+router.post('/recuperar-acceso', async (req, res) => {
+  const generic = { success: true, message: 'Si el correo está registrado, recibirás un enlace para recuperar tu acceso.' };
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    return res.status(400).json({ error: 'Ingresa un correo electrónico válido.' });
+  }
+  if (!emailDeliveryConfigured()) {
+    return res.status(503).json({ error: 'El servicio de correo está temporalmente no disponible.', code: 'ACCOUNT_EMAIL_NOT_CONFIGURED' });
+  }
+  try {
+    const { data, error } = await supabase.auth.admin.generateLink({
+      type: 'recovery',
+      email,
+      options: { redirectTo: accountLinkRedirect('/cambiar-password') },
+    });
+    if (error || !data?.properties?.action_link) {
+      // Deliberately return an identical response for unknown email addresses.
+      return res.status(202).json(generic);
+    }
+    await sendAccountLink({ to: email, recipientName: '', academyName: 'Lestra Deportivo', link: data.properties.action_link, purpose: 'recover' });
+    return res.status(202).json(generic);
+  } catch (error) {
+    console.error('Falló la entrega del enlace de recuperación:', error?.code || 'RECOVERY_ERROR');
+    return res.status(503).json({ error: 'No se pudo iniciar recuperación en este momento. Reintenta más tarde.' });
+  }
+});
+
 // ====================================================================
 // 🚀 NUEVA RUTA: REGISTRO PÚBLICO AUTOMÁTICO (SELF-SERVICE)
 // ====================================================================
 router.post('/registro-publico', async (req, res) => {
-  const { nombre_academia, nombre_director, email, password } = req.body;
-  let createdAuthUser = null;
-
-  try {
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email: email,
-      password: password,
-      email_confirm: true
+  // Never enroll users without a working verification delivery channel.
+  if (!emailDeliveryConfigured()) {
+    return res.status(503).json({
+      error: 'El registro por correo está temporalmente no disponible. Prueba con Google o inténtalo más tarde.',
+      code: 'ACCOUNT_EMAIL_NOT_CONFIGURED',
     });
-
+  }
+  const { nombre_academia, nombre_director, email, password } = req.body || {};
+  let createdAuthUser = null;
+  let createdAcademyId = null;
+  try {
+    // Supabase creates an unconfirmed user and a single-use signup confirmation link.
+    // No service_role-created user may bypass proof of inbox ownership.
+    const { data: signup, error: authError } = await supabase.auth.admin.generateLink({
+      type: 'signup',
+      email: String(email || '').trim().toLowerCase(),
+      password,
+      options: { redirectTo: accountLinkRedirect('/login') },
+    });
     if (authError) {
       if (authError.code === 'user_already_exists' || authError.status === 422) {
-        return res.status(400).json({ error: 'Este correo ya está registrado en el sistema.' });
+        return res.status(409).json({ error: 'Este correo ya está registrado en el sistema.' });
       }
       throw authError;
     }
-
-    createdAuthUser = authData.user;
+    // Fail closed if Supabase's email-confirmation policy is disabled.
+    // Do not delete a pre-existing confirmed identity returned by the provider.
+    if (signup?.user?.email_confirmed_at || signup?.user?.confirmed_at) {
+      return res.status(503).json({
+        error: 'La confirmación de correo no está disponible. Contacta a soporte.',
+        code: 'AUTH_CONFIRMATION_NOT_ENFORCED',
+      });
+    }
+    createdAuthUser = signup?.user;
+    const actionLink = signup?.properties?.action_link;
+    if (!createdAuthUser?.id || !actionLink) throw new Error('No se pudo preparar la verificación de correo.');
 
     const trial = trialWindow();
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
       .insert([{
         nombre: nombre_academia,
-        nombre_director: nombre_director,
-        director_email: email,
+        nombre_director,
+        director_email: String(email || '').trim().toLowerCase(),
         plan: 'Prueba 15 Días', plan_codigo: 'formacion',
         max_profesores: 30, max_jugadores: 1000,
         subscription_status: 'trialing', trial_started_at: trial.start, trial_ends_at: trial.end,
         plan_price_clp: 0, guardian_price_clp: 0,
         estado: 'Activa',
-        jugadores_count: 0
+        jugadores_count: 0,
       }])
       .select()
       .single();
-
     if (dbError) throw dbError;
+    createdAcademyId = nuevaAcademia.id;
 
     const { error: userTableError } = await supabase.from('usuarios').insert([{
       id: createdAuthUser.id,
       academia_id: nuevaAcademia.id,
       nombre_completo: nombre_director,
       rol: 'director',
-      requiere_cambio_password: false
+      requiere_cambio_password: false,
     }]);
-
     if (userTableError) throw userTableError;
 
-    const brevoApiKey = process.env.BREVO_API_KEY;
-    const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL;
-
-    if (brevoApiKey && brevoSenderEmail) {
-      try {
-        await fetchWithTimeout('https://api.brevo.com/v3/smtp/email', {
-          method: 'POST',
-          headers: {
-            'accept': 'application/json',
-            'api-key': brevoApiKey,
-            'content-type': 'application/json'
-          },
-          body: JSON.stringify({
-            sender: { name: "Syncademia", email: brevoSenderEmail },
-            to: [{ email: email }],
-            subject: "¡Bienvenido a Syncademia! 🚀",
-            htmlContent: `
-              <div style="font-family: sans-serif; color: #333;">
-                <h2>¡Hola ${nombre_director}! Bienvenido a Syncademia</h2>
-                <p>Tu academia <strong>${nombre_academia}</strong> ha sido creada con éxito.</p>
-                <p>Tienes 15 días de prueba gratis para disfrutar de todas las funcionalidades.</p>
-                <p>Ya puedes iniciar sesión utilizando tu correo y la contraseña que creaste.</p>
-                <p>¡Mucho éxito en tu gestión!</p>
-                <p>El equipo de Syncademia</p>
-                <p><em>Gestión de academias deportivas, tu ecosistema de élite.</em></p>
-              </div>
-            `
-          })
-        }, 10000);
-      } catch (fetchError) {
-        console.error(`❌ Error al enviar correo de bienvenida:`, fetchError);
-      }
-    }
-
-    res.status(201).json({ success: true, academia: nuevaAcademia });
+    await sendAccountLink({
+      to: String(email || '').trim().toLowerCase(),
+      recipientName: nombre_director,
+      academyName: nombre_academia,
+      link: actionLink,
+      purpose: 'verify',
+    });
+    return res.status(201).json({
+      success: true,
+      requiresEmailVerification: true,
+      message: 'Academia registrada. Revisa tu correo y confirma la dirección antes de iniciar sesión.',
+    });
   } catch (error) {
-    if (createdAuthUser) await supabase.auth.admin.deleteUser(createdAuthUser.id);
-    res.status(500).json({ error: error.message || 'Error interno del servidor al crear tu cuenta' });
+    // Compensate best-effort for failures spanning Auth, PostgreSQL and email.
+    // Never leave a confirmed user behind when delivery fails.
+    if (createdAuthUser?.id) {
+      const { error: authCleanupError } = await supabase.auth.admin.deleteUser(createdAuthUser.id);
+      if (authCleanupError) console.error('Error limpiando cuenta de registro incompleto:', authCleanupError.code);
+    }
+    if (createdAcademyId) {
+      const { error: academyCleanupError } = await supabase.from('academias').delete().eq('id', createdAcademyId);
+      if (academyCleanupError) console.error('Error limpiando academia de registro incompleto:', academyCleanupError.code);
+    }
+    console.error('Falló registro con verificación de correo:', error?.code || error?.message || 'UNKNOWN');
+    return res.status(503).json({
+      error: 'No pudimos completar el registro y enviar el enlace de confirmación. Inténtalo más tarde.',
+      code: 'SIGNUP_CONFIRMATION_UNAVAILABLE',
+    });
   }
 });
 
@@ -401,21 +438,48 @@ router.delete('/:id', authMiddleware, requireSuperadmin, async (req, res) => {
 });
 
 router.post('/:id/reset-password', authMiddleware, requireSuperadmin, async (req, res) => {
-  const { id } = req.params;
+  if (!emailDeliveryConfigured()) {
+    return res.status(503).json({ error: 'El servicio de recuperación por correo no está disponible.', code: 'ACCOUNT_EMAIL_NOT_CONFIGURED' });
+  }
   try {
-    const { data: academia, error: acaError } = await supabase.from('academias').select('director_email, nombre_director').eq('id', id).single();
-    if (acaError) throw new Error('Academia no encontrada');
-
-    const newPassword = generateTemporaryPassword();
-    const { data: userData } = await supabase.from('usuarios').select('id').eq('academia_id', id).single();
-
-    if (userData && userData.id) {
-      await supabase.auth.admin.updateUserById(userData.id, { password: newPassword });
-      await supabase.from('usuarios').update({ requiere_cambio_password: true }).eq('id', userData.id);
+    const { id } = req.params;
+    const { data: academy, error: academyError } = await supabase.from('academias')
+      .select('id,nombre,director_email,nombre_director').eq('id', id).single();
+    if (academyError || !academy?.director_email) {
+      return res.status(404).json({ error: 'Academia o correo de director no encontrado.' });
     }
-    res.json({ message: 'Contraseña restablecida' });
+    const { data: director, error: directorError } = await supabase.from('usuarios')
+      .select('id').eq('academia_id', id).eq('rol', 'director').limit(1).maybeSingle();
+    if (directorError) throw directorError;
+    if (!director?.id) return res.status(409).json({ error: 'La academia no tiene un director con acceso válido.' });
+
+    // Prevent sending an account-recovery link to a stale/mismatched director address.
+    const { data: authRecord, error: userError } = await supabase.auth.admin.getUserById(director.id);
+    if (userError) throw userError;
+    const normalizedEmail = String(academy.director_email).trim().toLowerCase();
+    if (!authRecord?.user?.email || authRecord.user.email.toLowerCase() !== normalizedEmail) {
+      return res.status(409).json({ error: 'El correo del director no coincide con la identidad autenticada. Actualízalo antes de recuperar la cuenta.' });
+    }
+
+    // Generate an expiring, one-use recovery link; do not overwrite the password.
+    const { data: recovery, error: linkError } = await supabase.auth.admin.generateLink({
+      type: 'recovery',
+      email: normalizedEmail,
+      options: { redirectTo: accountLinkRedirect('/cambiar-password') },
+    });
+    if (linkError || !recovery?.properties?.action_link) throw linkError || new Error('Recovery link unavailable');
+
+    await sendAccountLink({
+      to: normalizedEmail,
+      recipientName: academy.nombre_director,
+      academyName: academy.nombre,
+      link: recovery.properties.action_link,
+      purpose: 'recover',
+    });
+    return res.status(202).json({ success: true, message: 'Enlace de recuperación enviado al correo del director.' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('No fue posible iniciar recuperación administrativa:', error?.code || error?.message || 'UNKNOWN');
+    return res.status(503).json({ error: 'No se pudo entregar el enlace de recuperación. Reintenta más tarde.', code: 'RECOVERY_EMAIL_UNAVAILABLE' });
   }
 });
 
