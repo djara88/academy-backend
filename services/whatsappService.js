@@ -117,7 +117,11 @@ const conectarAcademia = async (academiaId) => {
           }
         })
       });
-      return await parseResponse(createResponse);
+      const created = await parseResponse(createResponse);
+      if (!createResponse.ok) {
+        throw new Error(`Evolution API no pudo crear la instancia de WhatsApp (HTTP ${createResponse.status}).`);
+      }
+      return created;
     }
 
     const connectResponse = await evolutionFetch(`${EVOLUTION_URL}/instance/connect/${instanceName}`, {
@@ -125,7 +129,11 @@ const conectarAcademia = async (academiaId) => {
       headers: getHeaders()
     });
 
-    return await parseResponse(connectResponse);
+    const connected = await parseResponse(connectResponse);
+    if (!connectResponse.ok) {
+      throw new Error(`Evolution API no pudo iniciar la conexión de WhatsApp (HTTP ${connectResponse.status}).`);
+    }
+    return connected;
   } catch (error) {
     console.error('❌ Error al conectar una instancia de WhatsApp:', error?.message || 'Error desconocido');
     throw error;
