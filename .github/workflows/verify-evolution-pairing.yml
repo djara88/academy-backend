@@ -1,0 +1,21 @@
+name: Verify Evolution API pairing patch image
+
+on:
+  push:
+    branches: [deploy/evolution-baileys-pairing-fix]
+    paths:
+      - Dockerfile.evolution
+      - .github/workflows/verify-evolution-pairing.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned patched Evolution image without secrets
+        run: docker build --file Dockerfile.evolution --tag evolution-pairing:verify .
