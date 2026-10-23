@@ -4,6 +4,7 @@ on:
   push:
     branches: [deploy/evolution-baileys-pairing-fix]
     paths:
+      - Dockerfile
       - Dockerfile.evolution
       - .github/workflows/verify-evolution-pairing.yml
   workflow_dispatch:
@@ -18,4 +19,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned patched Evolution image without secrets
-        run: docker build --file Dockerfile.evolution --tag evolution-pairing:verify .
+        run: docker build --file Dockerfile --tag evolution-pairing:verify .
