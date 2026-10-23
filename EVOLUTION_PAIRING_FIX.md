@@ -11,7 +11,7 @@ and does not contain the patch for `companion_reg_refresh`.
 ## Build
 
 ```sh
-docker build -f Dockerfile.evolution -t evolution-pairing:verify .
+docker build -f Dockerfile -t evolution-pairing:verify .
 ```
 
 Source is pinned to `ErgoCodes/evolution-api@5cdf324044d4ddb178f1be487b42cfba2c346c47`
@@ -28,9 +28,12 @@ lockfile and vendored patch-package patch. Build checks require
    WhatsApp instance.
 3. Validate with a test Evolution service configured using a **separate database
    and Redis namespace**; no production instance may be attached in parallel.
-4. Change the existing service's Git repository to `djara88/academy-backend`,
-   branch `deploy/evolution-baileys-pairing-fix`, and Dockerfile path
-   `./Dockerfile.evolution` **only after verification and backup**. This source
+4. The deploy branch contains a default `Dockerfile` identical to
+   `Dockerfile.evolution`: Render can retain its existing `./Dockerfile` path.
+   After verification and backup, change the existing service's Git repository
+   to `djara88/academy-backend` and branch
+   `deploy/evolution-baileys-pairing-fix`. Render will start a deployment
+   automatically on source change. This source
    change cannot currently be made through the connected Render tools.
 5. After deploying, scan an up-to-date QR once, confirm
    `instance/connectionState` reports `open` and verify inbound/outbound test
