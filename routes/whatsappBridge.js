@@ -182,6 +182,53 @@ router.get('/connection/:academiaId', authMiddleware, requireAcademyAccess, asyn
   }
 });
 
+// Evolution /connectionState only returns connection status, not the QR image.
+// This explicit authenticated endpoint requests a fresh QR from Evolution when
+// a director is pairing their academy. It does not create or delete instances.
+router.get('/connection/:academiaId/qr', authMiddleware, requireAcademyAccess, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, private');
+  const instanceName = instanceNameFor(req.params.academiaId);
+  try {
+    const stateResponse = await evolutionRequest(`/instance/connectionState/${instanceName}`, { method: 'GET' });
+    if (stateResponse.status === 404) {
+      return res.status(404).json({
+        error: 'La instancia de WhatsApp todavía no existe. Utiliza Conectar WhatsApp para iniciar.',
+        code: 'WHATSAPP_INSTANCE_NOT_CREATED',
+      });
+    }
+    const stateData = await readEvolutionBody(stateResponse);
+    if (!stateResponse.ok) {
+      return res.status(502).json({ error: 'Evolution API no pudo consultar el estado de WhatsApp.', code: 'WHATSAPP_STATE_UNAVAILABLE' });
+    }
+    if (extractState(stateData) === 'open') {
+      return res.json(connectionPayload(stateData));
+    }
+
+    const qrResponse = await evolutionRequest(`/instance/connect/${instanceName}`, { method: 'GET' });
+    const qrData = await readEvolutionBody(qrResponse);
+    if (!qrResponse.ok) {
+      return res.status(502).json({
+        error: 'Evolution API no pudo generar el QR. Comprueba la instancia y el servicio de WhatsApp.',
+        code: 'WHATSAPP_QR_PROVIDER_ERROR',
+      });
+    }
+
+    const payload = connectionPayload(qrData);
+    // Versions of Evolution can report connecting or omit instance.state.
+    // Never report "disconnected" while QR generation is still pending.
+    return res.json({
+      ...payload,
+      estado: payload.conectado ? 'open' : payload.qrCode ? 'qr' : 'connecting',
+    });
+  } catch (error) {
+    console.error('No fue posible consultar el QR de Evolution API:', error?.code || error?.name || 'UNKNOWN');
+    return res.status(502).json({
+      error: 'No fue posible generar el QR de WhatsApp. Revisa la conexión con Evolution API.',
+      code: 'WHATSAPP_QR_UNAVAILABLE',
+    });
+  }
+});
+
 // Crea/reutiliza la instancia de la academia y entrega QR cuando corresponde.
 router.post('/connection/:academiaId/connect', authMiddleware, requireAcademyAccess, async (req, res) => {
   const academyId = req.params.academiaId;
