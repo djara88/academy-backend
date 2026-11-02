@@ -1,11 +1,10 @@
-const { offer } = require('./deportivoOffer');
+const { offer, GUARDIAN_ADDON_CLP } = require('./deportivoOffer');
 const PLAN_CODES = Object.freeze({
   FORMACION: 'formacion',
   COMPETENCIA: 'competencia',
   ALTO_RENDIMIENTO: 'alto_rendimiento',
 });
 
-const GUARDIAN_ADDON_CLP = 15000;
 
 const FEATURES = Object.freeze({
   CORE: 'core',
@@ -123,7 +122,7 @@ const resolvePlanCode = (academy = {}) => {
 };
 
 const guardianLicenseIsActive = (academy = {}, today = new Date().toISOString().slice(0, 10)) => {
-  if (isTrialPlan(academy) || academy.plan === offer.name) return true;
+  // El acceso familiar requiere una licencia independiente, incluso durante la prueba.
   if (academy.licencia_apoderados !== true) return false;
   if (!academy.guardian_license_ends_at) return true;
   return String(academy.guardian_license_ends_at).slice(0, 10) >= today;
@@ -137,6 +136,7 @@ const getAcademyEntitlements = (academy = {}) => {
   const trialPlan = PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO];
   const singlePlan = academy.plan === offer.name;
   const features = new Set(singlePlan ? Object.values(FEATURES) : trial ? trialPlan.features : plan.features);
+  features.delete(FEATURES.GUARDIANS);
   const guardianActive = guardianLicenseIsActive(academy);
   if (guardianActive) features.add(FEATURES.GUARDIANS);
 
@@ -155,11 +155,11 @@ const getAcademyEntitlements = (academy = {}) => {
     },
     addOns: {
       guardians: guardianActive,
-      guardiansIncludedByPlan: singlePlan,
-      guardiansIncludedByTrial: trial,
+      guardiansIncludedByPlan: false,
+      guardiansIncludedByTrial: false,
       guardianLicenseEndsAt: trial ? academy.trial_ends_at || null : academy.guardian_license_ends_at || null,
     },
-    pricing: singlePlan ? { planClp: offer.priceClp, guardiansClp: 0 } : { planClp: plan.priceClp, guardiansClp: GUARDIAN_ADDON_CLP },
+    pricing: { planClp: singlePlan ? offer.priceClp : plan.priceClp, guardiansClp: GUARDIAN_ADDON_CLP },
     features: [...features],
   };
 };

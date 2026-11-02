@@ -1,4 +1,4 @@
-const { offer, monthlyQuote, PRICE_CLP } = require('./deportivoOffer');
+const { offer, monthlyQuote, TOTAL_CLP } = require('./deportivoOffer');
 const supabase = require('../config/supabase');
 const { getBillingQuote, GUARDIAN_ADDON_CLP } = require('./billingCatalog');
 
@@ -51,7 +51,7 @@ const activateChargePlan = async (charge) => {
   const billingCycle = charge.billing_cycle === 'annual' ? 'annual' : 'monthly';
   const promotionCode = charge.promotion_code === 'founder' ? 'founder' : null;
   const targetGuardians = charge.target_guardian_license === true;
-  const singlePlan = charge.target_plan_code === offer.code && Number(charge.total_clp) === PRICE_CLP && billingCycle === 'monthly' && !promotionCode && targetGuardians;
+  const singlePlan = charge.target_plan_code === offer.code && Number(charge.total_clp) === TOTAL_CLP && billingCycle === 'monthly' && !promotionCode && !targetGuardians;
   const quote = singlePlan ? monthlyQuote : getBillingQuote({
     planCode: charge.target_plan_code,
     billingCycle,
@@ -111,9 +111,12 @@ const activateChargePlan = async (charge) => {
     blocked_at: null,
     blocked_reason: null,
     next_billing_date: nextBillingDate,
-    licencia_apoderados: targetGuardians,
-    guardian_price_clp: targetGuardians && !singlePlan ? GUARDIAN_ADDON_CLP : 0,
-    guardian_license_ends_at: targetGuardians ? nextBillingDate : null,
+    // El plan único no modifica ni regala licencias de apoderados independientes.
+    ...(singlePlan ? {} : {
+      licencia_apoderados: targetGuardians,
+      guardian_price_clp: targetGuardians ? GUARDIAN_ADDON_CLP : 0,
+      guardian_license_ends_at: targetGuardians ? nextBillingDate : null,
+    }),
   };
 
   const { error } = await supabase.from('academias').update(update).eq('id', charge.academia_id);
@@ -137,8 +140,8 @@ const activateChargePlan = async (charge) => {
     nextBillingDate,
     billingAmountClp: quote.chargedNetClp,
     monthlyEquivalentClp: baseMonthlyEquivalentClp,
-    guardianLicense: targetGuardians,
-    guardianLicenseEndsAt: targetGuardians ? nextBillingDate : null,
+    guardianLicense: singlePlan ? activeGuardianLicense(current) : targetGuardians,
+    guardianLicenseEndsAt: singlePlan ? current.guardian_license_ends_at : targetGuardians ? nextBillingDate : null,
   };
 };
 
