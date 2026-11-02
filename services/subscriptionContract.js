@@ -153,7 +153,7 @@ const ensureRenewalChargeForAcademy = async (academyOrId, { force = false } = {}
   if (existing) return existing;
 
   const singlePlan = academy.plan === offer.name;
-  const target = singlePlan ? { guardians: true } : await getRenewalTarget(academy);
+  const target = singlePlan ? { guardians: false } : await getRenewalTarget(academy);
   const { plan, quote } = singlePlan ? { plan: offer, quote: monthlyQuote } : quoteForTarget(target);
   const profile = await getBillingProfile(academy.id);
   const periodEndExclusive = addMonths(academy.next_billing_date, quote.billingPeriodMonths);

@@ -352,7 +352,7 @@ router.post('/', authMiddleware, requireSuperadmin, logoUpload, async (req, res)
         nombre, logo: logoUrl, direccion, telefono, correo_academia, nombre_director, director_email,
         plan: offer.name, plan_codigo: offer.code,
         max_profesores: offer.professorLimit, max_jugadores: offer.playerLimit || 100000,
-        licencia_apoderados: true,
+        licencia_apoderados: false,
         subscription_status: 'active', plan_price_clp: offer.priceClp,
         guardian_price_clp: 0,
         next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
@@ -391,7 +391,7 @@ router.put('/:id', authMiddleware, requireSuperadmin, logoUpload, async (req, re
         plan: offer.name,
         plan_codigo: offer.code,
         max_profesores: offer.professorLimit, max_jugadores: offer.playerLimit || 100000,
-        licencia_apoderados: true,
+        // Conservar el complemento adquirido; una edición no puede regalarlo ni revocarlo.
         plan_price_clp: offer.priceClp,
         guardian_price_clp: 0,
       });

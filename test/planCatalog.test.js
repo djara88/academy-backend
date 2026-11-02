@@ -61,18 +61,18 @@ test('todos los planes tienen radar y catálogo estándar; solo Competencia y Al
   assert.equal(highPerformance.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
 });
 
-test('la prueba Full habilita Apoderados PRO y capacidad premium', () => {
+test('la prueba Full habilita capacidad premium pero no regala el portal familiar', () => {
   const trial = getAcademyEntitlements({ plan: 'Prueba 15 Días', plan_codigo: 'formacion', max_profesores: 2, licencia_apoderados: false, trial_ends_at: '2099-12-31' });
   assert.equal(trial.plan.trial, true);
   assert.equal(trial.features.includes(FEATURES.ADVANCED_ANALYTICS), true);
-  assert.equal(trial.features.includes(FEATURES.GUARDIANS), true);
+  assert.equal(trial.features.includes(FEATURES.GUARDIANS), false);
   assert.equal(trial.features.includes(FEATURES.WHATSAPP_GROUPS), true);
   assert.equal(trial.features.includes(FEATURES.CUSTOM_EVALUATION_CRITERIA), true);
   assert.equal(trial.features.includes(FEATURES.CUSTOM_RECOGNITIONS), true);
   assert.equal(trial.features.includes(FEATURES.TOURNAMENTS), true);
   assert.equal(trial.features.includes(FEATURES.MATCHES), true);
   assert.equal(trial.features.includes(FEATURES.FRIENDLIES), false);
-  assert.equal(trial.addOns.guardiansIncludedByTrial, true);
+  assert.equal(trial.addOns.guardiansIncludedByTrial, false);
   assert.equal(trial.limits.professors, 30);
   assert.equal(trial.limits.players, null);
   assert.equal(trial.limits.sites, null);
