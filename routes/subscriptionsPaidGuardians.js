@@ -2,69 +2,17 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
-const { guardianLicenseIsActive, isTrialPlan } = require('../services/planCatalog');
-const {
-  BILLING_PLANS,
-  GUARDIAN_ADDON_CLP,
-  VAT_RATE,
-  FOUNDER_SLOTS,
-  publicPlanPricing,
-  guardianAddonQuote,
-} = require('../services/billingCatalog');
-
+const { catalog, checkoutEnabled } = require('../services/deportivoOffer');
+const { PLATFORM_ACCESS_TOKEN } = require('../services/mercadoPagoGateway');
 const router = express.Router();
 const clean = (value, max = 160) => String(value || '').trim().replace(/[\r\n|]+/g, ' ').slice(0, max);
-const today = () => new Date().toISOString().slice(0, 10);
 
-const getPromotionState = async (academyId) => {
-  const [{ data: academy, error: academyError }, { data: slots, error: slotError }] = await Promise.all([
-    supabase.from('academias')
-      .select('id,plan,plan_codigo,billing_cycle,billing_amount_clp,promotion_code,promotion_ends_at,founder_number,subscription_status,licencia_apoderados,guardian_price_clp,guardian_license_ends_at,trial_ends_at,contract_locked_at,next_billing_date')
-      .eq('id', academyId).single(),
-    supabase.from('syncademia_founder_slots').select('slot_no,academia_id,reserved_until,activated_at').order('slot_no'),
-  ]);
-  if (academyError) throw academyError;
-  if (slotError) throw slotError;
-  const now = Date.now();
-  const freeSlots = (slots || []).filter((slot) => !slot.academia_id || (!slot.activated_at && slot.reserved_until && new Date(slot.reserved_until).getTime() < now)).length;
-  const founderActive = academy.promotion_code === 'founder' && academy.founder_number && academy.promotion_ends_at && academy.promotion_ends_at >= today();
-  return { academy, founder: {
-    available: Boolean(founderActive || freeSlots > 0), existingFounder: Boolean(founderActive), remainingSlots: freeSlots,
-    totalSlots: FOUNDER_SLOTS, founderNumber: academy.founder_number || null, guaranteeEndsAt: academy.promotion_ends_at || null,
-  } };
-};
-
-router.get('/plans', authMiddleware, async (req, res) => {
-  try {
-    const state = await getPromotionState(req.user.academia_id);
-    const plans = Object.values(BILLING_PLANS).map((plan) => ({ ...publicPlanPricing(plan), grossClp: publicPlanPricing(plan).monthly.grossClp }));
-    const monthly = guardianAddonQuote('monthly');
-    const annual = guardianAddonQuote('annual');
-    const trialIncluded = isTrialPlan(state.academy);
-    res.json({ success: true, data: {
-      plans,
-      guardianAddon: {
-        name: 'Apoderados PRO', priceClp: GUARDIAN_ADDON_CLP, grossClp: monthly.chargedGrossClp,
-        included: false, trialIncluded: true, monthly, annual,
-        features: ['Portal familiar', 'Estado de cuenta y medios de pago', 'Chat y WhatsApp individual', 'Privacidad y solicitudes', 'Solicitud de nuevas disciplinas'],
-      },
-      currentGuardianLicense: {
-        active: guardianLicenseIsActive(state.academy), trialIncluded,
-        endsAt: trialIncluded ? state.academy.trial_ends_at || null : state.academy.guardian_license_ends_at || null,
-      },
-      vatRate: VAT_RATE,
-      founder: state.founder,
-      billingRules: { annualMonthsCharged: 10, annualMonthsIncluded: 12, founderDurationMonths: 12, discountsStackable: false },
-      currentSubscription: req.subscription || null,
-      contract: {
-        locked: Boolean(state.academy.contract_locked_at),
-        nextBillingDate: state.academy.next_billing_date || null,
-      },
-    } });
-  } catch (error) {
-    console.error('Error cargando planes:', error?.message || 'Error desconocido');
-    res.status(500).json({ error: 'No fue posible cargar los planes.' });
-  }
+router.get('/plans', authMiddleware, (req, res) => {
+  res.json({ success: true, data: {
+    ...catalog,
+    currentSubscription: req.subscription || null,
+    checkoutEnabled: checkoutEnabled() && Boolean(PLATFORM_ACCESS_TOKEN()),
+  } });
 });
 
 const legacyCheckoutDisabled = (_req, res) => res.status(410).json({

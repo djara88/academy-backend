@@ -3,8 +3,7 @@ const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireDirector } = require('../middleware/professorAccess');
-const { isTrialPlan } = require('../services/planCatalog');
-const { getBillingPlan, getBillingQuote, guardianAddonQuote, calculateGrossClp } = require('../services/billingCatalog');
+const { offer, monthlyQuote, checkoutEnabled, PRICE_CLP } = require('../services/deportivoOffer');
 const { PLATFORM_ACCESS_TOKEN, createPreference } = require('../services/mercadoPagoGateway');
 const {
   getAcademyContract,
@@ -18,9 +17,7 @@ const {
 
 const router = express.Router();
 router.use(authMiddleware, requireDirector);
-const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
-const clean = (value, max = 500) => String(value ?? '').trim().replace(/[\r\n|]+/g, ' ').slice(0, max);
 const hash = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const chargeIdempotencyKey = (...parts) => `charge:${hash(parts.join('|'))}`;
 
@@ -111,41 +108,8 @@ const createGatewayOrder = async ({ academyId, charge, title, amountClp, userId 
   }
 };
 
-const reserveFounder = async (charge) => {
-  const { data: slot, error } = await supabase.rpc('reservar_syncademia_founder_slot', { p_academia_id: charge.academia_id, p_charge_id: charge.id });
-  if (error) throw error;
-  const number = Number(slot || 0) || null;
-  if (!number) {
-    const slotError = new Error('Los 10 cupos de Precio Fundador ya fueron asignados.');
-    slotError.status = 409;
-    slotError.code = 'FOUNDER_SOLD_OUT';
-    throw slotError;
-  }
-  const { error: updateError } = await supabase.from('plataforma_cobros').update({ founder_slot: number }).eq('id', charge.id);
-  if (updateError) throw updateError;
-  return number;
-};
-
-const invalidatePreviousInitialCheckouts = async (academyId) => {
-  const { data: charges, error } = await supabase.from('plataforma_cobros').select('id')
-    .eq('academia_id', academyId).eq('estado', 'pendiente').in('charge_kind', ['manual', 'initial']).not('target_plan_code', 'is', null);
-  if (error) throw error;
-  const ids = (charges || []).map((row) => row.id);
-  if (!ids.length) return;
-  const now = new Date().toISOString();
-  const { error: orderError } = await supabase.from('payment_gateway_orders').update({ status: 'cancelled', updated_at: now })
-    .eq('scope', 'plataforma').in('plataforma_cobro_id', ids).in('status', ['created', 'pending']);
-  if (orderError) throw orderError;
-  const { error: founderError } = await supabase.from('syncademia_founder_slots').update({
-    academia_id: null,
-    charge_id: null,
-    reserved_until: null,
-    updated_at: now,
-  }).in('charge_id', ids).is('activated_at', null);
-  if (founderError) throw founderError;
-  const { error: chargeError } = await supabase.from('plataforma_cobros').update({ estado: 'anulado', updated_at: now }).in('id', ids);
-  if (chargeError) throw chargeError;
-};
+const requireIssuance = (_req, res, next) => checkoutEnabled() ? next() :
+  res.status(503).json({ code: 'ASSISTED_SALES', error: 'Contacta a Lestra para coordinar la contratación.' });
 
 router.get('/contract', async (req, res) => {
   try {
@@ -166,42 +130,13 @@ router.put('/billing-profile', async (req, res) => {
   }
 });
 
-router.post('/change-request', async (req, res) => {
-  try {
-    const academy = await getAcademyContract(req.user.academia_id);
-    if (!academy.contract_locked_at) return res.status(409).json({ error: 'Todavía no existe un contrato pagado que modificar.', code: 'CONTRACT_NOT_LOCKED' });
-    const plan = getBillingPlan(String(req.body?.plan_code || ''));
-    if (!plan) return res.status(400).json({ error: 'Selecciona un plan válido.' });
-    const cycle = req.body?.billing_cycle === 'annual' ? 'annual' : 'monthly';
-    const guardians = req.body?.guardian_license === true;
-    const unchanged = plan.code === academy.plan_codigo && cycle === (academy.billing_cycle === 'annual' ? 'annual' : 'monthly') && guardians === Boolean(academy.licencia_apoderados);
-    if (unchanged) return res.status(400).json({ error: 'La solicitud coincide con tu contrato actual.' });
-    const { data: existing, error: existingError } = await supabase.from('subscription_change_requests').select('id,status')
-      .eq('academia_id', academy.id).in('status', ['pending', 'approved']).limit(1).maybeSingle();
-    if (existingError) throw existingError;
-    if (existing) return res.status(409).json({ error: 'Ya existe una solicitud de cambio en revisión.', code: 'CHANGE_REQUEST_EXISTS' });
-    const { data, error } = await supabase.from('subscription_change_requests').insert({
-      academia_id: academy.id,
-      current_plan_code: academy.plan_codigo,
-      current_billing_cycle: academy.billing_cycle === 'annual' ? 'annual' : 'monthly',
-      current_guardian_license: Boolean(academy.licencia_apoderados),
-      requested_plan_code: plan.code,
-      requested_billing_cycle: cycle,
-      requested_guardian_license: guardians,
-      reason: clean(req.body?.reason, 1000) || null,
-      effective_from: academy.next_billing_date || null,
-      requested_by: req.user.id,
-    }).select('*').single();
-    if (error) throw error;
-    return res.status(201).json({ success: true, data });
-  } catch (error) {
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible solicitar el cambio de plan.', code: error?.code });
-  }
+router.post(['/change-request', '/guardian-addon'], (_req, res) => {
+  res.status(410).json({ error: 'El plan mensual incluye todos los módulos y el acceso de apoderados.' });
 });
 
-router.post('/plan', async (req, res) => {
+router.post('/plan', requireIssuance, async (req, res) => {
   let charge = null;
-  let founderSlot = null;
+
   try {
     const academy = await getAcademyContract(req.user.academia_id);
     if (academy.contract_locked_at) {
@@ -210,29 +145,21 @@ router.post('/plan', async (req, res) => {
         code: 'PLAN_CHANGE_APPROVAL_REQUIRED',
       });
     }
-    if (req.body?.billing_profile) await saveBillingProfile({ academyId: academy.id, userId: req.user.id, payload: req.body.billing_profile });
-    const profile = await requireBillingProfile(academy.id);
-    const plan = getBillingPlan(String(req.body?.plan_code || ''));
-    if (!plan) return res.status(400).json({ error: 'Selecciona un plan válido.' });
-    const billingCycle = req.body?.billing_cycle === 'annual' ? 'annual' : 'monthly';
-    const promotionCode = req.body?.promotion_code === 'founder' ? 'founder' : null;
-    const guardians = req.body?.guardian_license === true;
-    let quote;
-    try { quote = getBillingQuote({ planCode: plan.code, billingCycle, promotionCode, guardians }); }
-    catch (error) { return res.status(400).json({ error: error.message, code: error.code || 'INVALID_BILLING_OFFER' }); }
-    if (promotionCode === 'founder' && academy.founder_number && academy.promotion_ends_at && academy.promotion_ends_at < today()) {
-      return res.status(409).json({ error: 'Tu período de Precio Fundador de 12 meses ya terminó.', code: 'FOUNDER_EXPIRED' });
+    if (req.body?.plan_code !== offer.code || req.body?.billing_cycle !== 'monthly' || req.body?.promotion_code || req.body?.guardian_license !== true) {
+      return res.status(400).json({ error: 'Actualiza la página para contratar el plan mensual vigente.' });
     }
-
-    await invalidatePreviousInitialCheckouts(academy.id);
-    const label = promotionCode === 'founder' ? `${plan.name} · Precio Fundador` : billingCycle === 'annual' ? `${plan.name} · Anual (12 meses pagando 10)` : `${plan.name} · Mensual`;
-    const initialKey = chargeIdempotencyKey('initial', academy.id, plan.code, quote.billingCycle, quote.promotionCode || '', guardians ? 'guardians' : 'no-guardians', profile.documento_tipo);
+    if (req.body.billing_profile) await saveBillingProfile({ academyId: academy.id, userId: req.user.id, payload: req.body.billing_profile });
+    const profile = await requireBillingProfile(academy.id);
+    const quote = monthlyQuote;
+    const plan = offer;
+    const guardians = true;
+    const initialKey = chargeIdempotencyKey('deportivo-monthly-v1', academy.id);
     const reserved = await createOrReuseCharge({
       academyId: academy.id,
       idempotencyKey: initialKey,
       row: {
-        concepto: `Suscripción Lestra Deportivo · ${label}${guardians ? ' + Apoderados PRO' : ''}`,
-        subtotal_clp: calculateGrossClp({ priceClp: quote.baseChargedNetClp }),
+        concepto: 'Lestra Deportivo · Mensual',
+        subtotal_clp: PRICE_CLP,
         addon_clp: quote.guardianChargedGrossClp,
         target_plan_code: plan.code,
         target_guardian_license: guardians,
@@ -250,19 +177,19 @@ router.post('/plan', async (req, res) => {
     });
     charge = reserved.charge;
     charge.__created_now = reserved.created;
-    if (promotionCode === 'founder') founderSlot = await reserveFounder(charge);
-    const amount = Number(charge.total_clp || quote.chargedGrossClp);
+
+    const amount = Number(charge.total_clp);
+    if (amount !== PRICE_CLP) throw new Error('El cobro no coincide con el precio del plan.');
     const order = await createGatewayOrder({ academyId: academy.id, charge, title: charge.concepto, amountClp: amount, userId: req.user.id });
     await supabase.from('plataforma_cobros').update({ checkout_url: order.checkout_url, referencia: order.external_reference, updated_at: new Date().toISOString() }).eq('id', charge.id);
     return res.status(201).json({ success: true, data: {
       chargeId: charge.id, orderId: order.id, checkoutUrl: order.checkout_url, amountClp: amount,
       netAmountClp: quote.chargedNetClp, planName: plan.name, guardianLicense: guardians,
-      billingCycle: quote.billingCycle, promotionCode: quote.promotionCode, founderSlot,
+      billingCycle: quote.billingCycle, promotionCode: quote.promotionCode,
       discountClp: quote.discountGrossClp, documentType: profile.documento_tipo, manualVerification: false,
     } });
   } catch (error) {
     if (charge?.id) {
-      if (founderSlot) await supabase.from('syncademia_founder_slots').update({ academia_id: null, charge_id: null, reserved_until: null, updated_at: new Date().toISOString() }).eq('slot_no', founderSlot).eq('charge_id', charge.id).is('activated_at', null);
       if (charge.__created_now && !charge.checkout_url) await supabase.from('plataforma_cobros').delete().eq('id', charge.id).eq('estado', 'pendiente');
     }
     console.error('Error preparando suscripción Checkout Pro:', error?.message || error);
@@ -270,7 +197,7 @@ router.post('/plan', async (req, res) => {
   }
 });
 
-router.post('/renewal/checkout', async (req, res) => {
+router.post('/renewal/checkout', requireIssuance, async (req, res) => {
   try {
     const academy = await getAcademyContract(req.user.academia_id);
     if (!academy.contract_locked_at) return res.status(409).json({ error: 'No existe un contrato activo para renovar.', code: 'CONTRACT_NOT_LOCKED' });
@@ -278,6 +205,7 @@ router.post('/renewal/checkout', async (req, res) => {
     const charge = await ensureRenewalChargeForAcademy(academy);
     if (!charge) return res.status(409).json({ error: `Tu próxima renovación es el ${academy.next_billing_date || 'próximo ciclo'}. El pago se habilita 7 días antes.`, code: 'RENEWAL_NOT_DUE' });
     if (!['pendiente', 'vencido'].includes(charge.estado)) return res.status(409).json({ error: 'La renovación ya no está disponible.' });
+    if (Number(charge.total_clp) !== PRICE_CLP) return res.status(409).json({ error: 'Contacta a Lestra para revisar tu renovación anterior.' });
     const snapshot = billingSnapshot(profile);
     const { data: refreshed, error: refreshError } = await supabase.from('plataforma_cobros').update({
       billing_document_type: profile.documento_tipo,
@@ -291,46 +219,6 @@ router.post('/renewal/checkout', async (req, res) => {
   } catch (error) {
     console.error('Error preparando renovación Lestra:', error?.message || error);
     return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible preparar la renovación.', code: error?.code });
-  }
-});
-
-router.post('/guardian-addon', async (req, res) => {
-  let charge = null;
-  try {
-    const academyContract = await getAcademyContract(req.user.academia_id);
-    if (academyContract.contract_locked_at) {
-      return res.status(409).json({ error: 'Los cambios de complementos de un contrato activo deben ser autorizados por Lestra.', code: 'CONTRACT_CHANGE_APPROVAL_REQUIRED' });
-    }
-    const profile = await requireBillingProfile(req.user.academia_id);
-    const { data: academy, error: academyError } = await supabase.from('academias').select('id,plan,plan_codigo,subscription_status,licencia_apoderados,guardian_license_ends_at').eq('id', req.user.academia_id).single();
-    if (academyError) throw academyError;
-    if (isTrialPlan(academy)) return res.status(409).json({ error: 'Apoderados PRO ya está incluido durante tu prueba Full.', code: 'GUARDIAN_INCLUDED_IN_TRIAL' });
-    if (academy.subscription_status !== 'active') return res.status(409).json({ error: 'Activa primero un plan de Lestra Deportivo.', code: 'BASE_PLAN_REQUIRED' });
-    const cycle = req.body?.billing_cycle === 'annual' ? 'annual' : 'monthly';
-    const quote = guardianAddonQuote(cycle);
-    const addonKey = chargeIdempotencyKey('guardian-addon', req.user.academia_id, quote.billingCycle, profile.documento_tipo);
-    const reserved = await createOrReuseCharge({
-      academyId: req.user.academia_id,
-      idempotencyKey: addonKey,
-      row: {
-        concepto: `Complemento Lestra Deportivo · Apoderados PRO · ${cycle === 'annual' ? 'Anual (12 meses pagando 10)' : 'Mensual'}`,
-        subtotal_clp: 0, addon_clp: quote.chargedGrossClp, target_plan_code: null, target_guardian_license: true,
-        billing_cycle: quote.billingCycle, billing_period_months: quote.billingPeriodMonths, promotion_code: null,
-        discount_clp: quote.discountGrossClp, fecha_vencimiento: addDays(3), charge_kind: 'addon',
-        billing_document_type: profile.documento_tipo, billing_snapshot: billingSnapshot(profile),
-        notas: `Checkout Pro Mercado Pago. Documento solicitado: ${profile.documento_tipo}. Neto: ${quote.chargedNetClp.toLocaleString('es-CL')} CLP. Total con IVA: ${quote.chargedGrossClp.toLocaleString('es-CL')} CLP.`,
-        created_by: req.user.id,
-      },
-    });
-    charge = reserved.charge;
-    charge.__created_now = reserved.created;
-    const amount = Number(charge.total_clp || quote.chargedGrossClp);
-    const order = await createGatewayOrder({ academyId: req.user.academia_id, charge, title: charge.concepto, amountClp: amount, userId: req.user.id });
-    await supabase.from('plataforma_cobros').update({ checkout_url: order.checkout_url, referencia: order.external_reference, updated_at: new Date().toISOString() }).eq('id', charge.id);
-    return res.status(201).json({ success: true, data: { chargeId: charge.id, orderId: order.id, checkoutUrl: order.checkout_url, amountClp: amount, netAmountClp: quote.chargedNetClp, manualVerification: false } });
-  } catch (error) {
-    if (charge?.id && charge.__created_now && !charge.checkout_url) await supabase.from('plataforma_cobros').delete().eq('id', charge.id).eq('estado', 'pendiente');
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible preparar Apoderados PRO.', code: error?.code });
   }
 });
 

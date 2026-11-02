@@ -1,3 +1,4 @@
+const { offer } = require('./deportivoOffer');
 const PLAN_CODES = Object.freeze({
   FORMACION: 'formacion',
   COMPETENCIA: 'competencia',
@@ -122,7 +123,7 @@ const resolvePlanCode = (academy = {}) => {
 };
 
 const guardianLicenseIsActive = (academy = {}, today = new Date().toISOString().slice(0, 10)) => {
-  if (isTrialPlan(academy)) return true;
+  if (isTrialPlan(academy) || academy.plan === offer.name) return true;
   if (academy.licencia_apoderados !== true) return false;
   if (!academy.guardian_license_ends_at) return true;
   return String(academy.guardian_license_ends_at).slice(0, 10) >= today;
@@ -134,13 +135,14 @@ const getAcademyEntitlements = (academy = {}) => {
   const plan = getPlanDefinition(academy);
   const trial = isTrialPlan(academy);
   const trialPlan = PLAN_DEFINITIONS[PLAN_CODES.ALTO_RENDIMIENTO];
-  const features = new Set(trial ? trialPlan.features : plan.features);
+  const singlePlan = academy.plan === offer.name;
+  const features = new Set(singlePlan ? Object.values(FEATURES) : trial ? trialPlan.features : plan.features);
   const guardianActive = guardianLicenseIsActive(academy);
   if (guardianActive) features.add(FEATURES.GUARDIANS);
 
   const manualProfessorLimit = Number(academy.max_profesores);
   return {
-    plan: { code: plan.code, name: plan.name, audience: plan.audience, trial },
+    plan: { code: plan.code, name: singlePlan ? offer.name : plan.name, audience: plan.audience, trial },
     limits: {
       professors: trial
         ? trialPlan.professorLimit
@@ -153,11 +155,11 @@ const getAcademyEntitlements = (academy = {}) => {
     },
     addOns: {
       guardians: guardianActive,
-      guardiansIncludedByPlan: false,
+      guardiansIncludedByPlan: singlePlan,
       guardiansIncludedByTrial: trial,
       guardianLicenseEndsAt: trial ? academy.trial_ends_at || null : academy.guardian_license_ends_at || null,
     },
-    pricing: { planClp: plan.priceClp, guardiansClp: GUARDIAN_ADDON_CLP },
+    pricing: singlePlan ? { planClp: offer.priceClp, guardiansClp: 0 } : { planClp: plan.priceClp, guardiansClp: GUARDIAN_ADDON_CLP },
     features: [...features],
   };
 };

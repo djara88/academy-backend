@@ -6,8 +6,8 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const authIdentityMiddleware = require('../middleware/authIdentity');
 const { requireSuperadmin, requireOwnAcademyOrSuperadmin } = require('../middleware/authorization');
-const { PLAN_DEFINITIONS, getAcademyEntitlements, resolvePlanCode, getPlanProfessorLimit } = require('../services/planCatalog');
-const { BILLING_PLANS, GUARDIAN_ADDON_CLP } = require('../services/billingCatalog');
+const { getAcademyEntitlements } = require('../services/planCatalog');
+const { offer } = require('../services/deportivoOffer');
 const { getSubscriptionState } = require('../services/subscriptionAccess');
 const { fetchWithTimeout } = require('../services/httpClient');
 const { ensureMonthlyChargesForAcademy } = require('../services/monthlyBilling');
@@ -45,12 +45,6 @@ const logoUpload = (req, res, next) => upload.single('logo')(req, res, (error) =
   return res.status(400).json({ error: 'No fue posible procesar el logo enviado.' });
 });
 
-const PLAN_LABELS = {
-  formacion: 'Formación',
-  competencia: 'Competencia',
-  alto_rendimiento: 'Alto Rendimiento',
-};
-const cleanPlanCode = (value, fallback = 'formacion') => PLAN_DEFINITIONS[value] ? value : fallback;
 const trialWindow = () => {
   const start = new Date();
   return { start: start.toISOString(), end: new Date(start.getTime() + 15 * 24 * 60 * 60 * 1000).toISOString() };
@@ -352,18 +346,15 @@ router.post('/', authMiddleware, requireSuperadmin, logoUpload, async (req, res)
       logoUrl = publicUrlData.publicUrl;
     }
 
-    const planCode = cleanPlanCode(req.body.plan_codigo || resolvePlanCode({ plan: req.body.plan }));
-    const billingPlan = BILLING_PLANS[planCode];
-    const guardianLicense = req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true;
     const { data: nuevaAcademia, error: dbError } = await supabase
       .from('academias')
       .insert([{
         nombre, logo: logoUrl, direccion, telefono, correo_academia, nombre_director, director_email,
-        plan: PLAN_LABELS[planCode], plan_codigo: planCode,
-        max_profesores: getPlanProfessorLimit(planCode), max_jugadores: billingPlan.playerLimit || 100000,
-        licencia_apoderados: guardianLicense,
-        subscription_status: 'active', plan_price_clp: billingPlan.priceClp,
-        guardian_price_clp: guardianLicense ? GUARDIAN_ADDON_CLP : 0,
+        plan: offer.name, plan_codigo: offer.code,
+        max_profesores: offer.professorLimit, max_jugadores: offer.playerLimit || 100000,
+        licencia_apoderados: true,
+        subscription_status: 'active', plan_price_clp: offer.priceClp,
+        guardian_price_clp: 0,
         next_billing_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         estado: 'Activa', jugadores_count: 0,
       }])
@@ -391,21 +382,18 @@ router.put('/:id', authMiddleware, requireSuperadmin, logoUpload, async (req, re
     const { data: current, error: currentError } = await supabase.from('academias')
       .select('plan,plan_codigo,subscription_status').eq('id', id).single();
     if (currentError) throw currentError;
-    const planCode = cleanPlanCode(req.body.plan_codigo || resolvePlanCode({ plan: req.body.plan }), current.plan_codigo || 'formacion');
-    const billingPlan = BILLING_PLANS[planCode];
-    const guardianLicense = req.body.licencia_apoderados === 'true' || req.body.licencia_apoderados === true;
     const activateSubscription = req.body.activate_subscription === 'true';
     let updateData = { nombre, direccion, telefono, correo_academia, nombre_director, director_email, estado };
     // Una edición de datos institucionales nunca debe convertir silenciosamente
     // una prueba Full en un plan pagado. La activación requiere una acción explícita.
     if (activateSubscription || current.subscription_status !== 'trialing') {
       Object.assign(updateData, {
-        plan: PLAN_LABELS[planCode],
-        plan_codigo: planCode,
-        max_profesores: getPlanProfessorLimit(planCode), max_jugadores: billingPlan.playerLimit || 100000,
-        licencia_apoderados: guardianLicense,
-        plan_price_clp: billingPlan.priceClp,
-        guardian_price_clp: guardianLicense ? GUARDIAN_ADDON_CLP : 0,
+        plan: offer.name,
+        plan_codigo: offer.code,
+        max_profesores: offer.professorLimit, max_jugadores: offer.playerLimit || 100000,
+        licencia_apoderados: true,
+        plan_price_clp: offer.priceClp,
+        guardian_price_clp: 0,
       });
       updateData.subscription_status = req.body.subscription_status || 'active';
       updateData.blocked_at = null;
