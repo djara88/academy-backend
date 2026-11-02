@@ -1,3 +1,4 @@
+const { offer, monthlyQuote, PRICE_CLP } = require('./deportivoOffer');
 const supabase = require('../config/supabase');
 const { getBillingQuote, GUARDIAN_ADDON_CLP } = require('./billingCatalog');
 
@@ -50,7 +51,8 @@ const activateChargePlan = async (charge) => {
   const billingCycle = charge.billing_cycle === 'annual' ? 'annual' : 'monthly';
   const promotionCode = charge.promotion_code === 'founder' ? 'founder' : null;
   const targetGuardians = charge.target_guardian_license === true;
-  const quote = getBillingQuote({
+  const singlePlan = charge.target_plan_code === offer.code && Number(charge.total_clp) === PRICE_CLP && billingCycle === 'monthly' && !promotionCode && targetGuardians;
+  const quote = singlePlan ? monthlyQuote : getBillingQuote({
     planCode: charge.target_plan_code,
     billingCycle,
     promotionCode,
@@ -110,7 +112,7 @@ const activateChargePlan = async (charge) => {
     blocked_reason: null,
     next_billing_date: nextBillingDate,
     licencia_apoderados: targetGuardians,
-    guardian_price_clp: targetGuardians ? GUARDIAN_ADDON_CLP : 0,
+    guardian_price_clp: targetGuardians && !singlePlan ? GUARDIAN_ADDON_CLP : 0,
     guardian_license_ends_at: targetGuardians ? nextBillingDate : null,
   };
 

@@ -1,3 +1,4 @@
+const { offer, monthlyQuote } = require('./deportivoOffer');
 const supabase = require('../config/supabase');
 const { getBillingPlan, getBillingQuote, calculateGrossClp } = require('./billingCatalog');
 
@@ -151,8 +152,9 @@ const ensureRenewalChargeForAcademy = async (academyOrId, { force = false } = {}
   if (existingError) throw existingError;
   if (existing) return existing;
 
-  const target = await getRenewalTarget(academy);
-  const { plan, quote } = quoteForTarget(target);
+  const singlePlan = academy.plan === offer.name;
+  const target = singlePlan ? { guardians: true } : await getRenewalTarget(academy);
+  const { plan, quote } = singlePlan ? { plan: offer, quote: monthlyQuote } : quoteForTarget(target);
   const profile = await getBillingProfile(academy.id);
   const periodEndExclusive = addMonths(academy.next_billing_date, quote.billingPeriodMonths);
   const concept = `Renovación Lestra Deportivo · ${plan.name} · ${quote.billingCycle === 'annual' ? 'Anual (12 meses pagando 10)' : 'Mensual'}${target.guardians ? ' + Apoderados PRO' : ''}`;

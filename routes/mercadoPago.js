@@ -278,27 +278,8 @@ router.post('/academy/checkout/:token', async (req, res) => {
   }
 });
 
-router.post('/platform/checkout', authMiddleware, requireDirector, async (req, res) => {
-  try {
-    const chargeId = safe(req.body?.charge_id, 80);
-    const { data: charge, error } = await supabase.from('plataforma_cobros').select('*').eq('id', chargeId).eq('academia_id', req.user.academia_id).maybeSingle();
-    if (error) throw error;
-    if (!charge || !['pendiente', 'vencido'].includes(charge.estado)) return res.status(409).json({ error: 'El cobro de Lestra no está disponible.' });
-    const { data: academy, error: academyError } = await supabase.from('academias').select('contract_locked_at,contract_source_charge_id').eq('id', req.user.academia_id).single();
-    if (academyError) throw academyError;
-    if (academy.contract_locked_at && ['manual', 'initial'].includes(String(charge.charge_kind || 'manual')) && charge.target_plan_code) {
-      return res.status(409).json({ error: 'Ese checkout ya no pertenece al contrato vigente. Utiliza la renovación o solicita un cambio a Lestra.', code: 'STALE_CONTRACT_CHECKOUT' });
-    }
-    const token = PLATFORM_ACCESS_TOKEN();
-    if (!token) return res.status(503).json({ error: 'Lestra todavía no tiene Checkout Pro configurado.' });
-    const amount = money(charge.total_clp);
-    const order = await createOrder({ scope: 'plataforma', academyId: charge.academia_id, platformChargeId: charge.id, amountClp: amount, title: charge.concepto, createdBy: req.user.id, accessToken: token });
-    await supabase.from('plataforma_cobros').update({ checkout_url: order.checkout_url, referencia: order.external_reference, updated_at: new Date().toISOString() }).eq('id', charge.id);
-    return res.status(201).json({ success: true, data: { orderId: order.id, amountClp: order.amount_expected, checkoutUrl: order.checkout_url } });
-  } catch (error) {
-    console.error('Error creando checkout de Lestra:', error?.message || error);
-    return res.status(error?.status || 500).json({ error: error?.message || 'No fue posible preparar el pago de Lestra.' });
-  }
+router.post('/platform/checkout', authMiddleware, requireDirector, (_req, res) => {
+  return res.status(410).json({ error: 'Abre Suscripción para revisar y pagar el plan vigente.' });
 });
 
 router.get('/order/:id', async (req, res) => {
