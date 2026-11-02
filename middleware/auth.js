@@ -80,6 +80,9 @@ const authMiddleware = async (req, res, next) => {
           '/api/academias/mi-plan', '/api/subscriptions/plans', '/api/subscriptions/checkout',
           '/api/subscriptions/payment-status', '/api/cambiar-password', '/api/presence/heartbeat',
         ];
+        if (access.trial && usuario.rol === 'director') {
+          allowedWhileBlocked.push('/api/mercadopago/platform-subscription/contract', '/api/mercadopago/platform-subscription/plan');
+        }
         const path = req.originalUrl?.split('?')[0] || '';
         if (!allowedWhileBlocked.includes(path)) {
           return res.status(403).json({
