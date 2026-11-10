@@ -9,7 +9,7 @@ const router = express.Router();
 router.use(authMiddleware, requireTenantContext, requireDirector);
 
 const enrollmentColumns = [
-  'id', 'jugador_id', 'estado', 'es_principal', 'monto_matricula', 'monto_mensualidad',
+  'id', 'jugador_id', 'rama_id', 'sede_id', 'estado', 'es_principal', 'monto_matricula', 'monto_mensualidad',
   'jugadores(id,nombre)', 'ramas(id,nombre,disciplina)', 'sedes(id,nombre)',
 ].join(',');
 
@@ -32,6 +32,8 @@ router.get('/', async (req, res) => {
     const data = result.map((row) => ({
       id: row.id,
       jugador_id: row.jugador_id,
+      rama_id: row.rama_id,
+      sede_id: row.sede_id,
       alumno: row.jugadores?.nombre || 'Alumno',
       rama: row.ramas?.nombre || 'Rama deportiva',
       disciplina: row.ramas?.disciplina || '',
