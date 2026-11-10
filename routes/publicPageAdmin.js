@@ -27,7 +27,7 @@ const photoUpload = (req, res, next) => upload.single('photo')(req, res, (error)
   return res.status(400).json({ error: error.message || 'No fue posible procesar la foto.' });
 });
 
-const publicBaseUrl = () => String(process.env.FRONTEND_URL || 'https://lestra.app').replace(/\/$/, '');
+const publicBaseUrl = () => String(process.env.LESTRA_PUBLIC_ACADEMY_ORIGIN || 'https://deportivo.lestra.app').trim().replace(/\/+$/, '');
 const safeText = (value, max = 180) => String(value ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
 const normalizeSlug = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
