@@ -213,7 +213,7 @@ const drawDataRows = (doc, items, theme, options = {}) => {
     doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(6.8)
       .text(String(item.label || '').toUpperCase(), bx + 10, by + 8, { width: colWidth - 20, ellipsis: true, lineBreak: false });
     doc.fillColor(item.emphasis ? theme.accent : TEXT).font('Helvetica-Bold').fontSize(item.emphasis ? 12.5 : 9.7)
-      .text(cleanText(item.value, '-'), bx + 10, by + 22, { width: colWidth - 20, height: rowHeight - 26, ellipsis: true, lineBreak: false });
+      .text(cleanText(item.value, '-'), bx + 10, by + 22, { width: colWidth - 20, height: rowHeight - 26, ellipsis: true, lineBreak: options.multiline === true });
   });
   doc.y = baseY + rows * (rowHeight + 8);
 };
@@ -349,7 +349,7 @@ const generateMatriculaPdf = async ({ academia, jugador, tutor, folio, consentim
     { label: 'Horario', value: academia.horarios_entrenamiento },
     { label: 'Lugar', value: academia.ubicacion_entrenamiento || academia.direccion },
     { label: 'Contacto', value: academia.telefono || academia.director_email },
-  ], theme, { columns: 2, rowHeight: 42 });
+  ], theme, { columns: 2, rowHeight: 66, multiline: true });
   drawFooter(doc, academia, 1, 2);
 
   doc.addPage();

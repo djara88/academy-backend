@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { generateMatriculaPdf, generatePlayerReportPdf, selectEnrollmentTerms } = require('../services/premiumPdf');
+const { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');
+const { mergeAcademyTraining } = require('../services/enrollmentTrainingSchedule');
 
 const academia = {
   nombre: 'Academia Demo Elite',
@@ -82,4 +84,32 @@ test('rechaza como términos un informe técnico guardado por error', () => {
     terminos_condiciones: 'Condiciones válidas para la matrícula y convivencia de la academia.',
   });
   assert.equal(result, 'Condiciones válidas para la matrícula y convivencia de la academia.');
+});
+
+
+test('matrícula firmada mantiene dos páginas con horarios de sede y días múltiples', async () => {
+  const academyWithSchedule = mergeAcademyTraining({
+    ...academia, dias_entrenamiento: '', horarios_entrenamiento: '', ubicacion_entrenamiento: '',
+  }, {
+    nombre: 'Sede Quilicura', direccion: 'La Coruña 501',
+    horarios_config: [
+      { dias: 'MARTES', inicio: '18:30', fin: '21:00' },
+      { dias: 'SABADO', inicio: '10:00', fin: '12:00' },
+    ],
+  });
+  const buffer = await generateSignedEnrollmentPdf({
+    academia: academyWithSchedule,
+    jugador,
+    tutor,
+    folio: 'MAT-2026-000002',
+    terms: 'Condiciones de matrícula de la academia.',
+    consentimientos: [
+      { tipo: 'aviso_privacidad', estado: 'aceptado' },
+      { tipo: 'datos_salud', estado: 'rechazado' },
+    ],
+    firma: { nombre: 'Apoderado Demostración', documento: '11.111.111-1', fecha: '2026-11-10T17:00:00Z', evidence_sha256: 'abc123' },
+  });
+  assert.equal(academyWithSchedule.dias_entrenamiento, 'MARTES · SABADO');
+  assert.equal(academyWithSchedule.horarios_entrenamiento, 'MARTES: 18:30–21:00 | SABADO: 10:00–12:00');
+  assertPdf(buffer, 2);
 });

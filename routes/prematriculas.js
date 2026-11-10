@@ -8,6 +8,7 @@ const { PRIVACY_VERSION, getConsentCatalog } = require('../services/privacyConse
 const { materializeEnrollment, cleanupMaterializedEnrollment } = require('../services/enrollmentService');
 const { selectEnrollmentTerms } = require('../services/premiumPdf');
 const { generateSignedEnrollmentPdf } = require('../services/signedEnrollmentPdf');
+const { academyForEnrollmentPdf } = require('../services/enrollmentTrainingSchedule');
 const { fetchWithTimeout } = require('../services/httpClient');
 const { findRutConflict, assertRutAvailable } = require('../services/rutGuard');
 
@@ -532,8 +533,9 @@ router.post('/public/:token/firmar', async (req, res) => {
     const tutor = tutorResult.data;
 
     const folio = `MAT-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    const academiaDocumento = await academyForEnrollmentPdf(supabase, academia, materialized.jugador);
     const pdfBuffer = await generateSignedEnrollmentPdf({
-      academia,
+      academia: academiaDocumento,
       jugador: materialized.jugador,
       tutor,
       folio,
