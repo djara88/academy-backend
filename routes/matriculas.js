@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { requireTenantContext } = require('../middleware/tenantContext');
 const { generateMatriculaPdf } = require('../services/premiumPdf');
+const { academyForEnrollmentPdf } = require('../services/enrollmentTrainingSchedule');
 const { fetchWithTimeout } = require('../services/httpClient');
 
 const escapeHtml = (value) => String(value ?? '')
@@ -85,8 +86,9 @@ router.post('/generar-documento', authMiddleware, requireTenantContext, async (r
     }
 
     const folio = `MAT-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+    const academiaDocumento = await academyForEnrollmentPdf(supabase, academia, jugador);
     const pdfBuffer = await generateMatriculaPdf({
-      academia,
+      academia: academiaDocumento,
       jugador,
       tutor,
       folio,
