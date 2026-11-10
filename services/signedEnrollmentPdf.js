@@ -156,7 +156,7 @@ const generateSignedEnrollmentPdf = async ({ academia, jugador, tutor, folio, te
     { label: 'Horario', value: academia.horarios_entrenamiento },
     { label: 'Lugar', value: academia.ubicacion_entrenamiento || academia.direccion },
     { label: 'Contacto academia', value: academia.telefono || academia.director_email },
-  ], theme, 2, 42);
+  ], theme, 2, 66);
   footer(doc, academia, 1);
 
   doc.addPage();
