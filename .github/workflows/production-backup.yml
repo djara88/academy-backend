@@ -1,0 +1,115 @@
+name: Production Backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: syncademia-production-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validar secretos requeridos
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SUPABASE_DB_URL SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY BACKUP_PASSPHRASE; do
+            if [ -z "${!name:-}" ]; then
+              echo "Falta el secreto obligatorio: $name"
+              exit 1
+            fi
+          done
+
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci --omit=dev
+
+      - name: Instalar Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Crear backup lógico
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p backup/database backup/storage backup/meta
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backup/database/roles.sql --role-only
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backup/database/schema.sql
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backup/database/data.sql --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backup/database/history_schema.sql --schema supabase_migrations
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backup/database/history_data.sql --use-copy --data-only --schema supabase_migrations
+
+      - name: Exportar objetos de Storage
+        env:
+          BACKUP_STORAGE_DIR: backup/storage
+        run: node scripts/backup/export-storage.js
+
+      - name: Crear manifiesto de recuperación
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "backup_created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "commit=${GITHUB_SHA}"
+            echo "workflow_run=${GITHUB_RUN_ID}"
+            echo "node=$(node --version)"
+            echo "supabase_cli=$(supabase --version)"
+          } > backup/meta/manifest.txt
+          grep -Rho "process\.env\.[A-Z0-9_]*" --include='*.js' . \
+            | sed 's/process\.env\.//' \
+            | sort -u > backup/meta/required-env-names.txt || true
+          (
+            cd backup
+            find . -type f ! -path './meta/SHA256SUMS' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > meta/SHA256SUMS
+          )
+
+      - name: Empaquetar y cifrar
+        shell: bash
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          archive="syncademia-production-${stamp}.tar.gz"
+          tar -czf "$archive" backup
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+            -in "$archive" \
+            -out "${archive}.enc" \
+            -pass env:BACKUP_PASSPHRASE
+          sha256sum "${archive}.enc" > "${archive}.enc.sha256"
+          rm -rf backup "$archive"
+
+      - name: Guardar backup cifrado
+        uses: actions/upload-artifact@v4
+        with:
+          name: syncademia-production-backup-${{ github.run_id }}
+          path: |
+            syncademia-production-*.tar.gz.enc
+            syncademia-production-*.tar.gz.enc.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
